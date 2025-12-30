@@ -227,7 +227,47 @@ User config values override defaults at the top level. When a new field is added
 | **Timeout** | 1000ms after last keystroke | Short enough to not obstruct; resets on repeated adjustments |
 | **Animation** | None (MVP) | Simplicity; animations deferred to future release |
 
-### 7. Error Handling: Graceful Degradation
+### 7. Dimming Overlay Implementation
+
+**Method:** GDI window with `SetLayeredWindowAttributes`
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Rendering** | GDI (`SetLayeredWindowAttributes`) | Simplest implementation for solid black rectangle; sufficient for MVP |
+| **Window flags** | `WS_EX_LAYERED \| WS_EX_TRANSPARENT \| WS_EX_TOOLWINDOW` | Click-through, no taskbar entry |
+| **Z-order** | `HWND_TOPMOST` | Stays above all normal windows |
+| **Multi-monitor** | One overlay window per monitor | Independent opacity control per display |
+
+**Platform Abstraction Trait:**
+
+```rust
+pub trait DimmingOverlay {
+    fn set_opacity(&mut self, opacity: f32) -> Result<()>;  // 0.0 = invisible, 1.0 = fully black
+    fn show(&mut self) -> Result<()>;
+    fn hide(&mut self) -> Result<()>;
+}
+```
+
+This trait enables future Linux implementations (X11/Wayland) without changing core logic.
+
+**Coverage by Scenario:**
+
+| Scenario | Overlay Works? | Notes |
+|----------|----------------|-------|
+| Desktop / taskbar | ✅ Yes | `HWND_TOPMOST` covers all system UI |
+| Borderless windowed games | ✅ Yes | Rendered through compositor |
+| Fullscreen exclusive games | ❌ No | Game bypasses DWM; writes directly to framebuffer |
+
+**Known Limitation:** Fullscreen exclusive mode games bypass the Windows compositor entirely. The overlay cannot dim these applications. Users must either:
+- Use the monitor's DDC minimum brightness (1%)
+- Switch the game to borderless windowed mode
+
+This is acceptable because:
+- DDC/CI hardware brightness (1-100%) works in all scenarios including fullscreen exclusive
+- Overlay is only used for the "bonus" sub-0% dimming feature
+- Most modern games default to borderless windowed mode
+
+### 8. Error Handling: Graceful Degradation
 
 ```rust
 // If DDC fails, fall back to overlay
