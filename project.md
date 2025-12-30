@@ -25,7 +25,9 @@ Rust — chosen for cross-platform portability, low resource usage, and DDC/CI l
 - Visual feedback on brightness changes
 
 ## Hotkeys
-TBD — configurable brightness up/down keys
+- **Primary**: `Ctrl+Shift+Up` / `Ctrl+Shift+Down` (reliable cross-keyboard default)
+- **Secondary**: Dedicated brightness keys (`VK_BRIGHTNESS_UP/DOWN`) registered opportunistically
+- Fully configurable via `config.json`
 
 ## Future
 - Linux support (X11/Wayland)

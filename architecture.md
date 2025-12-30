@@ -133,8 +133,44 @@ Hotkeys affect the monitor containing the mouse cursor:
 - Intuitive, matches user expectations from volume controls
 - No configuration required
 
-### 3. Hotkey Registration: Win32 RegisterHotKey
+### 3. Hotkey Strategy: Hybrid Registration
 
+**Primary Default:** `Ctrl+Shift+Up` / `Ctrl+Shift+Down`
+- Reliable across all keyboard types
+- Unlikely to conflict with common applications
+- Two-modifier combo signals "system-level" action
+
+**Secondary (Opportunistic):** Dedicated brightness keys
+- `VK_BRIGHTNESS_UP` (`0xE8`) / `VK_BRIGHTNESS_DOWN` (`0xE9`)
+- Attempted at startup; silently ignored if registration fails
+- Provides native feel on keyboards that emit these codes
+
+**Why not brightness keys as primary?**
+
+| Challenge | Impact |
+|-----------|--------|
+| Laptop firmware interception | ACPI/EC handles keys before Windows; no event reaches us |
+| Desktop keyboard support | Most lack dedicated brightness keys |
+| Inconsistent HID translation | Some keyboards send Consumer Control codes Windows doesn't map to VK codes |
+| `RegisterHotKey` compatibility | Uncertain support for special VK codes |
+
+**Implementation:**
+
+```rust
+// Register primary hotkeys (fail = fatal error)
+hotkey_manager.register(BRIGHTNESS_UP_ID, MOD_CTRL | MOD_SHIFT, VK_UP)?;
+hotkey_manager.register(BRIGHTNESS_DOWN_ID, MOD_CTRL | MOD_SHIFT, VK_DOWN)?;
+
+// Attempt secondary hotkeys (fail = log and continue)
+if let Err(e) = hotkey_manager.register(BRIGHTNESS_UP_ALT_ID, 0, VK_BRIGHTNESS_UP) {
+    log::debug!("VK_BRIGHTNESS_UP not available: {}", e);
+}
+if let Err(e) = hotkey_manager.register(BRIGHTNESS_DOWN_ALT_ID, 0, VK_BRIGHTNESS_DOWN) {
+    log::debug!("VK_BRIGHTNESS_DOWN not available: {}", e);
+}
+```
+
+**Technical Details:**
 - Dedicated listener thread calls `RegisterHotKey()` API
 - Receives `WM_HOTKEY` messages in thread message loop
 - **Avoid** `SetWindowsHookEx()` (kernel-mode, antivirus concerns)
