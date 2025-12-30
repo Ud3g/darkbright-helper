@@ -261,12 +261,43 @@ Example log output for invalid config:
 | Aspect | Decision | Rationale |
 |--------|----------|-----------|
 | **Position** | Bottom-center | Familiar (matches Windows volume OSD); users expect system feedback here |
-| **Content** | Progress bar + percentage | Complete information at a glance without clutter |
 | **Style** | Semi-transparent minimal | Clean, unobtrusive; visibility on any background |
 | **Opacity** | Configurable (`osd.opacity`, default 0.8) | User preference; avoids hardcoded magic numbers |
 | **Timeout** | 1000ms after last keystroke | Short enough to not obstruct; resets on repeated adjustments |
 | **Animation** | None (MVP) | Simplicity; animations deferred to future release |
 | **Error state** | Red-tinted bar + message | Clear feedback when DDC fails; see below |
+
+**Two-Bar Layout:**
+
+The OSD displays one or two bars depending on overlay state:
+
+| State | Display |
+|-------|---------|
+| Hardware brightness only (overlay inactive) | Single bar with 🔆 icon |
+| Hardware at 0%, overlay active | Two bars: 🔆 at 0% + 🕶 showing overlay level |
+
+```
+Hardware brightness at 50%, overlay inactive:
+┌────────────────────────────────────┐
+│  🔆 ████████████░░░░░░░░░░  50%   │
+└────────────────────────────────────┘
+
+Hardware at 0%, overlay at 60%:
+┌────────────────────────────────────┐
+│  🔆 ░░░░░░░░░░░░░░░░░░░░░░   0%   │
+│  🕶 ████████████████░░░░░░  60%   │
+└────────────────────────────────────┘
+```
+
+**Symbols:**
+- 🔆 (U+1F506 High Brightness) — hardware/DDC brightness
+- 🕶 (U+1F576 Sunglasses) — dimming overlay
+
+**Behavior:**
+1. Brightness down: hardware decreases until 0%
+2. At hardware 0%, continued presses increase overlay opacity (second bar appears)
+3. Brightness up: overlay decreases until 0% (second bar disappears), then hardware increases
+4. Full hardware resolution (0-100%) is preserved
 
 **Error Indicator:**
 
@@ -286,6 +317,7 @@ When DDC communication fails after all retries:
 | **Window flags** | `WS_EX_LAYERED \| WS_EX_TRANSPARENT \| WS_EX_TOOLWINDOW` | Click-through, no taskbar entry |
 | **Z-order** | `HWND_TOPMOST` | Stays above all normal windows |
 | **Multi-monitor** | One overlay window per monitor | Independent opacity control per display |
+| **Opacity range** | 0-100% (gradual) | Full range adjustable via continued hotkey presses below hardware 0% |
 
 **Platform Abstraction Trait:**
 
@@ -298,6 +330,20 @@ pub trait DimmingOverlay {
 ```
 
 This trait enables future Linux implementations (X11/Wayland) without changing core logic.
+
+**Brightness ↔ Overlay Mapping:**
+
+Hardware brightness and overlay are separate, controlled sequentially:
+
+```
+User presses "brightness down" repeatedly:
+  100% hw → 95% hw → ... → 5% hw → 0% hw → 0% hw + 5% overlay → ... → 0% hw + 100% overlay
+
+User presses "brightness up" repeatedly:
+  0% hw + 100% overlay → 0% hw + 95% overlay → ... → 0% hw + 0% overlay → 5% hw → ... → 100% hw
+```
+
+This preserves full 0-100% hardware resolution while allowing additional dimming via overlay.
 
 **Coverage by Scenario:**
 
