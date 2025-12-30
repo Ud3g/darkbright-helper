@@ -105,6 +105,9 @@ enum BrightnessMessage {
 
 The controller decides which method to use based on requested brightness level.
 
+**Mapping Algorithm: Linear**
+Logical brightness (0-100%) maps 1:1 to hardware values. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means exactly 50% backlight power.
+
 ### 2. Multi-Monitor: Mouse Position
 
 Hotkeys affect the monitor containing the mouse cursor:
