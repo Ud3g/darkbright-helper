@@ -190,6 +190,9 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   "osd": {
     "timeout_ms": 1000,
     "opacity": 0.8
+  },
+  "brightness": {
+    "step_percent": 5
   }
 }
 ```
@@ -200,7 +203,20 @@ User config values override defaults at the top level. When a new field is added
 - Human-readable for debugging
 - Portable to Linux
 
-### 5. OSD Design
+### 5. Brightness Step Size
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Default** | 5% per keypress | Fine-grained control; 20 steps across full range |
+| **Configurable** | `brightness.step_percent` in config | Users can increase for faster adjustment (e.g., 10%) |
+| **Valid range** | 1-50% | Prevents unusable extremes |
+
+**Behavior:**
+- Each hotkey press adjusts brightness by `step_percent`
+- Clamped to 0-100% bounds
+- Repeated rapid presses accumulate (no debouncing — user intent is clear)
+
+### 6. OSD Design
 
 | Aspect | Decision | Rationale |
 |--------|----------|-----------|
@@ -211,7 +227,7 @@ User config values override defaults at the top level. When a new field is added
 | **Timeout** | 1000ms after last keystroke | Short enough to not obstruct; resets on repeated adjustments |
 | **Animation** | None (MVP) | Simplicity; animations deferred to future release |
 
-### 6. Error Handling: Graceful Degradation
+### 7. Error Handling: Graceful Degradation
 
 ```rust
 // If DDC fails, fall back to overlay
