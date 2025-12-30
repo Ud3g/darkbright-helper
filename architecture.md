@@ -220,6 +220,26 @@ Examples:
 **Merge Strategy: Shallow Replace**
 User config values override defaults at the top level. When a new field is added to defaults, existing user configs will miss that field until manually updated. This is acceptable for MVP and simplifies implementation.
 
+**Invalid Config Handling: Error and Use Default**
+
+When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
+- Log an error describing the invalid value and which default is being used
+- Use the default value for that field
+- Continue startup normally
+
+| Field | Valid Range | Default |
+|-------|-------------|---------|
+| `hotkeys.*` | Valid hotkey string (see format above) | `Ctrl+Shift+Up` / `Down` |
+| `osd.timeout_ms` | 100 - 10000 | 1000 |
+| `osd.opacity` | 0.1 - 1.0 | 0.8 |
+| `brightness.step_percent` | 1 - 50 | 5 |
+
+Example log output for invalid config:
+```
+[ERROR] Invalid config: brightness.step_percent=999 exceeds maximum 50, using default 5
+[ERROR] Invalid config: osd.timeout_ms=-5 below minimum 100, using default 1000
+```
+
 - Human-readable for debugging
 - Portable to Linux
 
