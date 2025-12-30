@@ -29,3 +29,4 @@ TBD — configurable brightness up/down keys
 
 ## Future
 - Linux support (X11/Wayland)
+- OSD animations (fade in/out transitions)

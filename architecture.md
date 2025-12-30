@@ -152,7 +152,8 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   },
   "monitors": {},
   "osd": {
-    "timeout_ms": 2000
+    "timeout_ms": 1000,
+    "opacity": 0.8
   }
 }
 ```
@@ -163,7 +164,18 @@ User config values override defaults at the top level. When a new field is added
 - Human-readable for debugging
 - Portable to Linux
 
-### 5. Error Handling: Graceful Degradation
+### 5. OSD Design
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Position** | Bottom-center | Familiar (matches Windows volume OSD); users expect system feedback here |
+| **Content** | Progress bar + percentage | Complete information at a glance without clutter |
+| **Style** | Semi-transparent minimal | Clean, unobtrusive; visibility on any background |
+| **Opacity** | Configurable (`osd.opacity`, default 0.8) | User preference; avoids hardcoded magic numbers |
+| **Timeout** | 1000ms after last keystroke | Short enough to not obstruct; resets on repeated adjustments |
+| **Animation** | None (MVP) | Simplicity; animations deferred to future release |
+
+### 6. Error Handling: Graceful Degradation
 
 ```rust
 // If DDC fails, fall back to overlay
