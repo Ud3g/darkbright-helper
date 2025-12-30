@@ -3,8 +3,8 @@
 ## Tech Stack
 
 ### Language & Toolchain
-- Rust 2021 edition
-- MSRV: Latest stable (1.75+)
+- Rust 2024 edition
+- MSRV: 1.85+ (2024 edition requirement)
 
 ### Dependencies
 

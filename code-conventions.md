@@ -18,7 +18,7 @@ cargo test
 ### rustfmt.toml
 
 ```toml
-edition = "2021"
+edition = "2024"
 max_width = 100
 hard_tabs = false
 tab_spaces = 4

@@ -4,7 +4,7 @@
 A hotkey-driven brightness adjustment tool for Windows (with future Linux support).
 
 ## Language
-Rust (2021 edition) — chosen for cross-platform portability, low resource usage, and native Windows API integration (`windows` crate).
+Rust (2024 edition) — chosen for cross-platform portability, low resource usage, and native Windows API integration (`windows` crate).
 
 ## Features
 
