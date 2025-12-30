@@ -38,22 +38,7 @@ pedantic = "warn"
 
 ## 2. Project Structure
 
-Suggested layout (will evolve as project grows):
-
-```
-brightness-control/
-├── Cargo.toml
-├── src/
-│   ├── main.rs           # Entry point
-│   ├── lib.rs            # Library root
-│   ├── error.rs          # Centralized error types
-│   ├── hardware/         # DDC/CI and monitor control
-│   ├── overlay/          # Fullscreen overlay and OSD
-│   ├── hotkeys/          # Hotkey registration
-│   └── config/           # Settings and persistence
-├── tests/
-└── examples/
-```
+See `architecture.md` for the specific directory structure.
 
 **Principles:**
 - One responsibility per module
