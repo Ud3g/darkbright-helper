@@ -199,6 +199,24 @@ Location: `%APPDATA%\BrightnessControl\config.json`
 
 **`monitors` Field:** Reserved for future per-monitor settings (e.g., min/max limits, custom step sizes, DDC disable). Empty `{}` for MVP. Schema will be defined based on real-world user feedback after v1.0.
 
+**Hotkey String Format:**
+
+Hotkeys are specified as `+`-delimited strings, parsed case-insensitively.
+
+| Component | Examples |
+|-----------|----------|
+| **Modifiers** | `Ctrl`, `Alt`, `Shift`, `Win` |
+| **Arrows** | `Up`, `Down`, `Left`, `Right` |
+| **Function keys** | `F1` - `F12` |
+| **Navigation** | `PageUp`, `PageDown`, `Home`, `End`, `Insert`, `Delete` |
+| **Common** | `Space`, `Tab`, `Enter`, `Escape`, `Backspace` |
+| **Symbols** | `Plus` (for `+`), `Minus` (for `-`) |
+
+Examples:
+- `Ctrl+Shift+Up` — primary brightness up
+- `alt+f1` — case doesn't matter
+- `Ctrl+Plus` — Ctrl and the `+` key
+
 **Merge Strategy: Shallow Replace**
 User config values override defaults at the top level. When a new field is added to defaults, existing user configs will miss that field until manually updated. This is acceptable for MVP and simplifies implementation.
 
