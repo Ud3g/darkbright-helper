@@ -39,3 +39,15 @@
 
 # debug information files
 *.dwo
+
+# Python venv and other python stuff
+venv/
+__pycache__/
+*.pyc
+*.pyo
+__pycache__
+**/__pycache__/
+
+# PII
+personal/
+.aider*
