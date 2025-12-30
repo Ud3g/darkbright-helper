@@ -267,7 +267,34 @@ This is acceptable because:
 - Overlay is only used for the "bonus" sub-0% dimming feature
 - Most modern games default to borderless windowed mode
 
-### 8. Error Handling: Graceful Degradation
+### 8. Logging Strategy
+
+**Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior)
+
+| Level | Events Logged |
+|-------|---------------|
+| **Error** | All failures including recoverable (DDC errors, config parse failures, overlay creation failed) |
+| **Warn** | Fallback triggers, performance issues, deprecated config fields, monitor disconnected |
+| **Info** | Startup/shutdown, config loaded, monitors detected, hotkeys registered |
+| **Debug** | Each brightness change, hotkey received, OSD show/hide, DDC command sent |
+| **Trace** | DDC raw I²C bytes, window messages, config file contents |
+
+**Default Level:** `Info` for release builds, `Debug` for debug builds.
+
+**Examples:**
+```
+[INFO ] BrightnessControl started, version 1.0.0
+[INFO ] Loaded config from C:\Users\...\AppData\Roaming\BrightnessControl\config.json
+[INFO ] Detected 2 monitors: ["DELL U2722D (SN:ABC123)", "LG 27UK850 (SN:XYZ789)"]
+[INFO ] Registered hotkeys: Ctrl+Shift+Up, Ctrl+Shift+Down
+[DEBUG] Hotkey received: brightness_up on monitor DELL U2722D
+[DEBUG] DDC write: VCP 0x10 = 55 (was 50)
+[WARN ] DDC retry 1/3 failed: I2C timeout
+[DEBUG] DDC retry 2/3 succeeded
+[ERROR] DDC failed after 3 retries: monitor LG 27UK850 not responding
+```
+
+### 9. Error Handling: Graceful Degradation
 
 ```rust
 // If DDC fails, fall back to overlay
