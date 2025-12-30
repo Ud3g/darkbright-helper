@@ -108,7 +108,24 @@ The controller decides which method to use based on requested brightness level.
 **Mapping Algorithm: Linear**
 Logical brightness (0-100%) maps 1:1 to hardware values. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means exactly 50% backlight power.
 
-### 2. Multi-Monitor: Mouse Position
+### 2. Monitor Identification: EDID-Based
+
+Monitors are identified by their EDID data (Manufacturer Name, Model Name, and Serial Number) for cross-platform compatibility:
+
+```rust
+pub struct MonitorId {
+    pub manufacturer: String,  // 3-character PnP ID
+    pub model_name: String,
+    pub serial_number: Option<String>,
+}
+```
+
+**Rationale:**
+- Both Windows and Linux expose identical EDID data, allowing shared parsing logic
+- Config files are portable across platforms
+- For identical monitors without serials, position (topology) is used as a secondary disambiguator
+
+### 3. Multi-Monitor: Mouse Position
 
 Hotkeys affect the monitor containing the mouse cursor:
 - `GetCursorPos()` → `MonitorFromPoint()`
