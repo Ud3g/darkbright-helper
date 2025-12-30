@@ -100,10 +100,11 @@ enum BrightnessMessage {
 
 | Brightness Range | Method | Rationale |
 |------------------|--------|-----------|
-| Above hardware minimum | DDC/CI (VCP 0x10) | Native, power-efficient |
-| Below hardware minimum | Black overlay with opacity | Enables sub-minimum dimming |
+| 1-100% | DDC/CI (VCP 0x10) | Native, power-efficient |
+| 0% | Black overlay with opacity | Full dimming when hardware minimum is insufficient |
 
-The controller decides which method to use based on requested brightness level.
+**Crossover Threshold: 0%**
+The overlay is only used at 0% brightness. For all values > 0%, DDC/CI is used exclusively. This maximizes hardware control and minimizes GPU usage. Monitors with a high minimum brightness (e.g., DDC only goes down to 20%) will remain at that minimum level when set to 1-20%.
 
 **Mapping Algorithm: Linear**
 Logical brightness (0-100%) maps 1:1 to hardware values. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means exactly 50% backlight power.
@@ -156,7 +157,9 @@ Location: `%APPDATA%\BrightnessControl\config.json`
 }
 ```
 
-- Defaults provided; user config merges on top
+**Merge Strategy: Shallow Replace**
+User config values override defaults at the top level. When a new field is added to defaults, existing user configs will miss that field until manually updated. This is acceptable for MVP and simplifies implementation.
+
 - Human-readable for debugging
 - Portable to Linux
 
