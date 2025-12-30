@@ -294,7 +294,59 @@ This is acceptable because:
 [ERROR] DDC failed after 3 retries: monitor LG 27UK850 not responding
 ```
 
-### 9. Error Handling: Graceful Degradation
+### 9. DDC/CI Retry Strategy
+
+**Approach:** Optimistic update with cached values and fixed retry
+
+**Flow:**
+```
+[0ms]   Keypress received
+        → Calculate new value: cached_brightness ± step_percent
+        → Show OSD immediately with new value (optimistic)
+        → Begin DDC write attempt in background
+
+[~10ms] DDC attempt 1
+        → Success: update cache, done
+        → Failure: wait 10ms, retry
+
+[~20ms] DDC attempt 2 (if needed)
+        → Success: update cache, done
+        → Failure: wait 10ms, retry
+
+[~30ms] DDC attempt 3 (if needed)
+        → Success: update cache, done
+        → Failure: show error indicator in OSD, revert cache to last confirmed value
+```
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Update style** | Optimistic | Instant perceived responsiveness; smooth rapid adjustments |
+| **Retry count** | 3 attempts | Covers most transient I²C bus hiccups |
+| **Retry delay** | 10ms between attempts | Short enough to stay imperceptible (~30ms total) |
+| **Cache** | Last confirmed DDC value per monitor | Enables instant OSD; refreshed on startup and every 60s |
+| **Failure feedback** | Brief error indicator in OSD | User knows something went wrong without modal popups |
+| **Failure recovery** | Revert displayed value to last confirmed | OSD shows accurate state after error |
+
+**Why optimistic over conservative:**
+- 30ms delay per keypress feels sluggish when adjusting
+- Holding key down for rapid adjustment would be painfully slow waiting for DDC round-trips
+- "Jump back" on failure is rare and accompanied by clear error indicator
+
+**Cache Management:**
+```rust
+struct MonitorState {
+    cached_brightness: u8,      // Last confirmed DDC value
+    pending_brightness: Option<u8>,  // Optimistic value awaiting confirmation
+    last_refresh: Instant,
+}
+```
+
+- Cache populated on startup via DDC read
+- Background refresh every 60 seconds (handles external changes)
+- On DDC success: `cached_brightness = pending_brightness`
+- On DDC failure: `pending_brightness` discarded, OSD reverts to `cached_brightness`
+
+### 10. Error Handling: Graceful Degradation
 
 ```rust
 // If DDC fails, fall back to overlay
