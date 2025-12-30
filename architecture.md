@@ -226,6 +226,15 @@ User config values override defaults at the top level. When a new field is added
 | **Opacity** | Configurable (`osd.opacity`, default 0.8) | User preference; avoids hardcoded magic numbers |
 | **Timeout** | 1000ms after last keystroke | Short enough to not obstruct; resets on repeated adjustments |
 | **Animation** | None (MVP) | Simplicity; animations deferred to future release |
+| **Error state** | Red-tinted bar + message | Clear feedback when DDC fails; see below |
+
+**Error Indicator:**
+
+When DDC communication fails after all retries:
+- Progress bar changes to red/error tint
+- Message displayed: "Failed to adjust brightness"
+- Percentage reverts to last confirmed value
+- OSD timeout remains unchanged (1000ms)
 
 ### 7. Dimming Overlay Implementation
 
