@@ -4,7 +4,7 @@
 A hotkey-driven brightness adjustment tool for Windows (with future Linux support).
 
 ## Language
-Rust — chosen for cross-platform portability, low resource usage, and DDC/CI library support (`ddc-hi` crate).
+Rust — chosen for cross-platform portability, low resource usage, and native Windows API integration (`windows` crate).
 
 ## Features
 

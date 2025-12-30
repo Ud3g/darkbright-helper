@@ -441,18 +441,14 @@ struct MonitorState {
 - On DDC success: `cached_brightness = pending_brightness`
 - On DDC failure: `pending_brightness` discarded, OSD reverts to `cached_brightness`
 
-### 10. Error Handling: Graceful Degradation
+### 10. Error Handling: Strict
 
-```rust
-// If DDC fails, fall back to overlay
-match ddc_set_brightness(monitor, value) {
-    Ok(_) => { /* hardware brightness set */ }
-    Err(e) => {
-        log::warn!("DDC failed: {}, using overlay", e);
-        overlay.set_dimming(value)?;
-    }
-}
-```
+If DDC communication fails after retries, the application does **not** fall back to software overlay dimming for values > 0%.
+
+**Rationale:**
+- Prevents loss of contrast ratio (software dimming washes out blacks)
+- Avoids state desynchronization (user thinks brightness is 50%, backlight is actually 100%)
+- Ensures the user is aware of hardware communication failures via the OSD error indicator
 
 ---
 
