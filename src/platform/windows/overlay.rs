@@ -3,15 +3,15 @@
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, GetStockObject, BLACK_BRUSH, HBRUSH, HMONITOR, MONITORINFO,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowPos, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, HWND_TOPMOST, SWP_NOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowPos,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::error::{BrightnessError, Result};
@@ -156,6 +156,28 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
             SWP_NOACTIVATE,
         )
         .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0 as u32))?;
+    }
+
+    Ok(())
+}
+
+/// Sets the opacity of the overlay window.
+///
+/// # Arguments
+///
+/// * `hwnd` - The window handle.
+/// * `opacity` - Opacity value from 0.0 (invisible) to 1.0 (fully opaque).
+pub fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
+    // Clamp opacity to 0.0 - 1.0
+    let opacity = opacity.clamp(0.0, 1.0);
+
+    // Convert to 0-255
+    let alpha = (opacity * 255.0).round() as u8;
+
+    unsafe {
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| {
+            BrightnessError::windows_api("SetLayeredWindowAttributes", e.code().0 as u32)
+        })?;
     }
 
     Ok(())
