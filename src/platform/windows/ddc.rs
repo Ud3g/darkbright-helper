@@ -3,6 +3,7 @@
 //! This module handles the low-level communication with monitors using the
 //! Windows Monitor Configuration API.
 
+use windows::core::PSTR;
 use windows::Win32::Devices::Display::{
     CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
     GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
@@ -140,9 +141,9 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     let mut length = 0;
 
     unsafe {
-        GetCapabilitiesStringLength(monitor.handle(), &mut length).map_err(|e| {
-            BrightnessError::windows_api("GetCapabilitiesStringLength", e.code().0 as u32)
-        })?;
+        if !GetCapabilitiesStringLength(monitor.handle(), &mut length).as_bool() {
+            return Err(last_error_as_brightness_error("GetCapabilitiesStringLength"));
+        }
     }
 
     if length == 0 {
@@ -153,12 +154,17 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     let mut buffer = vec![0u8; length as usize];
 
     unsafe {
-        CapabilitiesRequestAndCapabilitiesReply(monitor.handle(), &mut buffer).map_err(|e| {
-            BrightnessError::windows_api(
+        if !CapabilitiesRequestAndCapabilitiesReply(
+            monitor.handle(),
+            PSTR(buffer.as_mut_ptr()),
+            length,
+        )
+        .as_bool()
+        {
+            return Err(last_error_as_brightness_error(
                 "CapabilitiesRequestAndCapabilitiesReply",
-                e.code().0 as u32,
-            )
-        })?;
+            ));
+        }
     }
 
     // Convert to String, stripping the null terminator and any garbage
