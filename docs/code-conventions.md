@@ -88,6 +88,18 @@ impl Drop for MonitorHandle {
 
 Put raw Win32 bindings in dedicated modules (e.g., `platform/windows/ffi.rs`).
 
+### Windows Crate (v0.52+) Specifics
+
+We use the `windows` crate which generates idiomatic Rust bindings. Follow these rules:
+
+1.  **Result over BOOL**: Newer bindings return `windows::core::Result<()>` or `Result<T>` instead of `BOOL`. Use `?` operator instead of
+checking `.as_bool()`.
+2.  **Slices over Pointers**: APIs taking arrays now often accept slices (`&[T]`) instead of `pointer` + `length`.
+3.  **Missing Debug**: Many generated FFI structs (like `PHYSICAL_MONITOR`) do **not** implement `Debug`.
+    *   *Do not* derive `Debug` on structs containing them.
+    *   Implement `std::fmt::Debug` manually.
+    *   **Caution**: Packed structs require copying fields to local variables before referencing them in `debug_struct`.
+
 ---
 
 ## 4. Documentation
