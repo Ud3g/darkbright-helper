@@ -4,11 +4,14 @@ use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, GetStockObject, BLACK_BRUSH, HBRUSH, HMONITOR, MONITORINFO,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetWindowPos, CS_HREDRAW, CS_VREDRAW,
+    CW_USEDEFAULT, HWND_TOPMOST, SWP_NOACTIVATE, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::error::{BrightnessError, Result};
@@ -122,4 +125,41 @@ pub fn create_overlay_window() -> Result<SafeHwnd> {
         // Wrap in SafeHwnd for automatic cleanup
         Ok(SafeHwnd::new_owned(hwnd))
     }
+}
+
+/// Positions the overlay window to cover the specified monitor.
+///
+/// This function moves and resizes the window to match the monitor's bounds
+/// and ensures it is topmost.
+pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
+    let mut mi = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+
+    unsafe {
+        if !GetMonitorInfoW(hmonitor, &mut mi).as_bool() {
+            return Err(last_error_as_brightness_error("GetMonitorInfoW"));
+        }
+
+        let rect = mi.rcMonitor;
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+
+        if !SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            rect.left,
+            rect.top,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        )
+        .as_bool()
+        {
+            return Err(last_error_as_brightness_error("SetWindowPos"));
+        }
+    }
+
+    Ok(())
 }
