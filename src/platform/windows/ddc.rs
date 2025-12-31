@@ -10,7 +10,7 @@ use windows::Win32::Devices::Display::{
 use windows::Win32::Foundation::{BOOL, HANDLE, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
 
-use crate::error::Result;
+use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
 
 /// Enumerates all active display monitors.
@@ -59,10 +59,17 @@ unsafe extern "system" fn monitor_enum_proc(
 /// RAII wrapper for a physical monitor handle.
 ///
 /// Ensures that `DestroyPhysicalMonitors` is called when the handle goes out of scope.
-#[derive(Debug)]
 pub struct PhysicalMonitor {
     // The raw Windows structure containing the handle and description.
     inner: PHYSICAL_MONITOR,
+}
+
+impl std::fmt::Debug for PhysicalMonitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhysicalMonitor")
+            .field("handle", &self.inner.hPhysicalMonitor)
+            .finish()
+    }
 }
 
 impl PhysicalMonitor {
@@ -75,9 +82,8 @@ impl PhysicalMonitor {
 impl Drop for PhysicalMonitor {
     fn drop(&mut self) {
         unsafe {
-            // DestroyPhysicalMonitors takes an array, but passing a pointer to a single
-            // struct with count 1 works for cleaning up individual handles.
-            let _ = DestroyPhysicalMonitors(1, &self.inner);
+            // DestroyPhysicalMonitors takes a slice in windows-rs 0.52+
+            let _ = DestroyPhysicalMonitors(std::slice::from_ref(&self.inner));
         }
     }
 }
@@ -94,11 +100,12 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
     let mut count = 0;
 
     unsafe {
-        if !GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, &mut count).as_bool() {
-            return Err(last_error_as_brightness_error(
+        GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, &mut count).map_err(|e| {
+            BrightnessError::windows_api(
                 "GetNumberOfPhysicalMonitorsFromHMONITOR",
-            ));
-        }
+                e.code().0 as u32,
+            )
+        })?;
     }
 
     if count == 0 {
@@ -108,13 +115,9 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
     let mut physical_monitors = vec![PHYSICAL_MONITOR::default(); count as usize];
 
     unsafe {
-        if !GetPhysicalMonitorsFromHMONITOR(hmonitor, count, physical_monitors.as_mut_ptr())
-            .as_bool()
-        {
-            return Err(last_error_as_brightness_error(
-                "GetPhysicalMonitorsFromHMONITOR",
-            ));
-        }
+        GetPhysicalMonitorsFromHMONITOR(hmonitor, &mut physical_monitors).map_err(|e| {
+            BrightnessError::windows_api("GetPhysicalMonitorsFromHMONITOR", e.code().0 as u32)
+        })?;
     }
 
     // Wrap them in RAII structs
