@@ -3,13 +3,26 @@
 //! This module handles the low-level communication with monitors using the
 //! Windows Monitor Configuration API.
 
-use windows::Win32::Devices::Display::{
-    CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
-    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
+use windows::core::PCWSTR;
+use windows::Win32::Devices::DeviceAndDriverInstallation::{
+    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+    SetupDiGetDeviceInstanceIdW, SetupDiOpenDevRegKey, DICS_FLAG_GLOBAL, DIGCF_PRESENT,
+    DIGCF_PROFILE, DIREG_DEV, GUID_DEVCLASS_MONITOR, HDEVINFO, SP_DEVINFO_DATA,
 };
-use windows::Win32::Foundation::{BOOL, HANDLE, LPARAM, RECT};
-use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
+use windows::Win32::Devices::Display::{
+    CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, EnumDisplayDevicesW,
+    GetCapabilitiesStringLength, GetNumberOfPhysicalMonitorsFromHMONITOR,
+    GetPhysicalMonitorsFromHMONITOR, DISPLAY_DEVICEW, PHYSICAL_MONITOR,
+};
+use windows::Win32::Foundation::{
+    BOOL, ERROR_SUCCESS, HANDLE, HWND, LPARAM, RECT, WIN32_ERROR,
+};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
+};
+use windows::Win32::System::Registry::{RegCloseKey, RegQueryValueExW, HKEY, KEY_READ};
 
+use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
 
@@ -178,4 +191,241 @@ mod tests {
         let result = enumerate_monitors();
         assert!(result.is_ok());
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EDID & Monitor ID Implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Retrieves the MonitorId for a given HMONITOR by reading and parsing the EDID.
+pub fn get_monitor_id(hmonitor: HMONITOR) -> Result<MonitorId> {
+    let edid = get_edid_from_hmonitor(hmonitor)?;
+    parse_edid(&edid).ok_or_else(|| {
+        BrightnessError::ddc_communication("Unknown", "Failed to parse EDID or EDID is invalid")
+    })
+}
+
+/// Reads the EDID binary data for a given HMONITOR using SetupAPI.
+fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
+    // 1. Get Monitor Device Name (e.g. \\.\DISPLAY1)
+    let mut mi = MONITORINFOEXW::default();
+    mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+    unsafe {
+        if GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _).as_bool() == false {
+            return Err(last_error_as_brightness_error("GetMonitorInfoW"));
+        }
+    }
+
+    // 2. Get Monitor Device ID (Instance ID)
+    let mut dd = DISPLAY_DEVICEW::default();
+    dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+
+    // We need to call EnumDisplayDevices with the device name from MonitorInfo
+    unsafe {
+        if EnumDisplayDevicesW(PCWSTR(mi.szDevice.as_ptr()), 0, &mut dd, 0).as_bool() == false {
+            return Err(last_error_as_brightness_error("EnumDisplayDevicesW"));
+        }
+    }
+
+    // The DeviceID in DISPLAY_DEVICEW is actually the Instance ID for monitors
+    let target_instance_id = String::from_utf16_lossy(&dd.DeviceID)
+        .trim_matches(char::from(0))
+        .to_string();
+
+    if target_instance_id.is_empty() {
+        return Err(BrightnessError::ddc_communication(
+            "Unknown",
+            "Could not determine monitor instance ID",
+        ));
+    }
+
+    // 3. Find the device in SetupAPI and read EDID
+    find_edid_by_instance_id(&target_instance_id)
+}
+
+/// Searches for a monitor with the matching Instance ID in the SetupAPI device list
+/// and reads its EDID from the registry.
+fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
+    let hdevinfo = unsafe {
+        SetupDiGetClassDevsW(
+            Some(&GUID_DEVCLASS_MONITOR),
+            None,
+            HWND::default(),
+            DIGCF_PRESENT | DIGCF_PROFILE,
+        )
+    }?;
+
+    if hdevinfo.0 == -1 {
+        return Err(last_error_as_brightness_error("SetupDiGetClassDevsW"));
+    }
+
+    // RAII for HDEVINFO
+    struct SafeDevInfo(HDEVINFO);
+    impl Drop for SafeDevInfo {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = SetupDiDestroyDeviceInfoList(self.0);
+            }
+        }
+    }
+    let _safe_devinfo = SafeDevInfo(hdevinfo);
+
+    let mut index = 0;
+    let mut devinfo_data = SP_DEVINFO_DATA::default();
+    devinfo_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+
+    while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &mut devinfo_data).as_bool() } {
+        index += 1;
+
+        // Get Instance ID
+        let mut buffer = [0u16; 256];
+        let mut required_size = 0;
+        unsafe {
+            if SetupDiGetDeviceInstanceIdW(
+                hdevinfo,
+                &devinfo_data,
+                Some(&mut buffer),
+                Some(&mut required_size),
+            )
+            .as_bool()
+            {
+                let instance_id = String::from_utf16_lossy(&buffer[..required_size as usize - 1]); // -1 for null
+
+                if instance_id.eq_ignore_ascii_case(target_instance_id) {
+                    // Found it! Read EDID from registry.
+                    return read_edid_from_registry(hdevinfo, &devinfo_data);
+                }
+            }
+        }
+    }
+
+    Err(BrightnessError::ddc_communication(
+        "Unknown",
+        "Monitor EDID not found in registry",
+    ))
+}
+
+/// Reads the "EDID" value from the device's registry key.
+fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -> Result<Vec<u8>> {
+    let hkey = unsafe {
+        SetupDiOpenDevRegKey(
+            hdevinfo,
+            devinfo_data,
+            DICS_FLAG_GLOBAL,
+            0,
+            DIREG_DEV,
+            KEY_READ,
+        )
+    };
+
+    if hkey.0 == 0 || hkey.0 == -1 {
+        return Err(last_error_as_brightness_error("SetupDiOpenDevRegKey"));
+    }
+
+    // RAII for HKEY
+    struct SafeHKey(HKEY);
+    impl Drop for SafeHKey {
+        fn drop(&mut self) {
+            unsafe {
+                let _ = RegCloseKey(self.0);
+            }
+        }
+    }
+    let _safe_hkey = SafeHKey(hkey);
+
+    // Read "EDID" value
+    let value_name = windows::core::w!("EDID");
+    let mut data_type = 0;
+    let mut data_len = 0;
+
+    unsafe {
+        // First call to get size
+        let _ = RegQueryValueExW(
+            hkey,
+            value_name,
+            None,
+            Some(&mut data_type),
+            None,
+            Some(&mut data_len),
+        );
+
+        if data_len == 0 {
+            return Err(BrightnessError::ddc_communication(
+                "Unknown",
+                "EDID registry value empty",
+            ));
+        }
+
+        let mut buffer = vec![0u8; data_len as usize];
+        let result = RegQueryValueExW(
+            hkey,
+            value_name,
+            None,
+            Some(&mut data_type),
+            Some(buffer.as_mut_ptr()),
+            Some(&mut data_len),
+        );
+
+        if result == ERROR_SUCCESS {
+            Ok(buffer)
+        } else {
+            Err(BrightnessError::windows_api(
+                "RegQueryValueExW",
+                result.0,
+            ))
+        }
+    }
+}
+
+/// Parses basic information from EDID binary data.
+fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
+    if edid.len() < 128 {
+        return None;
+    }
+
+    // Manufacturer ID (bytes 8-9)
+    // Encoded as 5 bits per character (A=1, Z=26)
+    let mfg_id = u16::from_be_bytes([edid[8], edid[9]]);
+    let char1 = ((mfg_id >> 10) & 0x1F) as u8 + b'A' - 1;
+    let char2 = ((mfg_id >> 5) & 0x1F) as u8 + b'A' - 1;
+    let char3 = (mfg_id & 0x1F) as u8 + b'A' - 1;
+    let manufacturer = String::from_utf8_lossy(&[char1, char2, char3]).to_string();
+
+    // Model Name and Serial Number from Descriptors (bytes 54-125)
+    let mut model_name = String::new();
+    let mut serial_number = None;
+
+    for i in 0..4 {
+        let offset = 54 + i * 18;
+        if offset + 18 > edid.len() {
+            break;
+        }
+        let desc = &edid[offset..offset + 18];
+
+        // Check for string descriptors (Flag: 00 00 00 xx 00)
+        if desc[0] == 0 && desc[1] == 0 && desc[2] == 0 && desc[4] == 0 {
+            let tag = desc[3];
+            if tag == 0xFC {
+                // Model Name
+                model_name = parse_descriptor_string(&desc[5..]);
+            } else if tag == 0xFF {
+                // Serial Number
+                serial_number = Some(parse_descriptor_string(&desc[5..]));
+            }
+        }
+    }
+
+    if model_name.is_empty() {
+        model_name = "Generic Monitor".to_string();
+    }
+
+    Some(MonitorId::new(manufacturer, model_name, serial_number))
+}
+
+/// Helper to parse a string from an EDID descriptor block.
+/// Strings are terminated by 0x0A (newline) or end of block.
+fn parse_descriptor_string(bytes: &[u8]) -> String {
+    let len = bytes.iter().position(|&b| b == 0x0A).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..len]).trim().to_string()
 }
