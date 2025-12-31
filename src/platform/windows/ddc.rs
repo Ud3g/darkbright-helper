@@ -23,6 +23,9 @@ use windows::Win32::System::Registry::{
     RegCloseKey, RegQueryValueExW, HKEY, KEY_READ, REG_VALUE_TYPE,
 };
 
+use std::thread;
+use std::time::Duration;
+
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -182,6 +185,23 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     Ok(s)
 }
 
+/// Retries a DDC operation up to 3 times with 10ms delay between attempts.
+fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
+    let mut attempts = 0;
+    loop {
+        match op() {
+            Ok(val) => return Ok(val),
+            Err(e) => {
+                attempts += 1;
+                if attempts >= 3 {
+                    return Err(e);
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+}
+
 /// Retrieves the current value and maximum value of a VCP feature.
 ///
 /// # Arguments
@@ -197,25 +217,27 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
 ///
 /// Returns a `WindowsApi` error if the VCP feature cannot be read.
 pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, u32)> {
-    let mut current_value = 0;
-    let mut max_value = 0;
+    retry_ddc_op(|| {
+        let mut current_value = 0;
+        let mut max_value = 0;
 
-    unsafe {
-        if GetVCPFeatureAndVCPFeatureReply(
-            monitor.handle(),
-            vcp_code,
-            None,
-            &mut current_value,
-            Some(&mut max_value as *mut _),
-        ) != 0
-        {
-            Ok((current_value, max_value))
-        } else {
-            Err(last_error_as_brightness_error(
-                "GetVCPFeatureAndVCPFeatureReply",
-            ))
+        unsafe {
+            if GetVCPFeatureAndVCPFeatureReply(
+                monitor.handle(),
+                vcp_code,
+                None,
+                &mut current_value,
+                Some(&mut max_value as *mut _),
+            ) != 0
+            {
+                Ok((current_value, max_value))
+            } else {
+                Err(last_error_as_brightness_error(
+                    "GetVCPFeatureAndVCPFeatureReply",
+                ))
+            }
         }
-    }
+    })
 }
 
 /// Sets the value of a VCP feature.
@@ -230,13 +252,15 @@ pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, 
 ///
 /// Returns a `WindowsApi` error if the VCP feature cannot be set.
 pub fn set_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8, value: u32) -> Result<()> {
-    unsafe {
-        if SetVCPFeature(monitor.handle(), vcp_code, value) != 0 {
-            Ok(())
-        } else {
-            Err(last_error_as_brightness_error("SetVCPFeature"))
+    retry_ddc_op(|| {
+        unsafe {
+            if SetVCPFeature(monitor.handle(), vcp_code, value) != 0 {
+                Ok(())
+            } else {
+                Err(last_error_as_brightness_error("SetVCPFeature"))
+            }
         }
-    }
+    })
 }
 
 #[cfg(test)]
