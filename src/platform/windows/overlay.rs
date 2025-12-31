@@ -146,7 +146,7 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
 
-        if !SetWindowPos(
+        SetWindowPos(
             hwnd,
             HWND_TOPMOST,
             rect.left,
@@ -155,10 +155,7 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
             height,
             SWP_NOACTIVATE,
         )
-        .as_bool()
-        {
-            return Err(last_error_as_brightness_error("SetWindowPos"));
-        }
+        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0 as u32))?;
     }
 
     Ok(())
