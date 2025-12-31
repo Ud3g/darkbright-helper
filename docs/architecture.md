@@ -400,15 +400,15 @@ This is acceptable because:
         → Show OSD immediately with new value (optimistic)
         → Begin DDC write attempt in background
 
-[~10ms] DDC attempt 1
+[~40ms] DDC attempt 1
         → Success: update cache, done
-        → Failure: wait 10ms, retry
+        → Failure: wait 40ms, retry
 
-[~20ms] DDC attempt 2 (if needed)
+[~80ms] DDC attempt 2 (if needed)
         → Success: update cache, done
-        → Failure: wait 10ms, retry
+        → Failure: wait 40ms, retry
 
-[~30ms] DDC attempt 3 (if needed)
+[~120ms] DDC attempt 3 (if needed)
         → Success: update cache, done
         → Failure: show error indicator in OSD, revert cache to last confirmed value
 ```
@@ -417,7 +417,7 @@ This is acceptable because:
 |--------|----------|-----------|
 | **Update style** | Optimistic | Instant perceived responsiveness; smooth rapid adjustments |
 | **Retry count** | 3 attempts | Covers most transient I²C bus hiccups |
-| **Retry delay** | 10ms between attempts | Short enough to stay imperceptible (~30ms total) |
+| **Retry delay** | 40ms between attempts | Safe default for slower monitor controllers |
 | **Cache** | Last confirmed DDC value per monitor | Enables instant OSD; refreshed on startup and every 60s |
 | **Failure feedback** | Brief error indicator in OSD | User knows something went wrong without modal popups |
 | **Failure recovery** | Revert displayed value to last confirmed | OSD shows accurate state after error |

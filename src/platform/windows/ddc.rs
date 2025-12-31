@@ -269,6 +269,59 @@ pub fn set_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8, value: u32) -> R
     })
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// DdcMonitor Struct
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// High-level wrapper for a physical monitor with DDC/CI capabilities.
+///
+/// Combines the physical handle, monitor ID, and brightness caching.
+#[derive(Debug)]
+pub struct DdcMonitor {
+    handle: PhysicalMonitor,
+    id: MonitorId,
+    cached_brightness: Option<u32>,
+}
+
+impl DdcMonitor {
+    /// Creates a new `DdcMonitor` instance.
+    pub fn new(handle: PhysicalMonitor, id: MonitorId) -> Self {
+        Self {
+            handle,
+            id,
+            cached_brightness: None,
+        }
+    }
+
+    /// Returns the monitor's unique identifier.
+    pub fn id(&self) -> &MonitorId {
+        &self.id
+    }
+
+    /// Returns the cached brightness value, if available.
+    pub fn cached_brightness(&self) -> Option<u32> {
+        self.cached_brightness
+    }
+
+    /// Reads the current brightness from the monitor via DDC/CI.
+    ///
+    /// Updates the cached brightness value on success.
+    pub fn get_brightness(&mut self) -> Result<u32> {
+        let (current, _) = get_vcp_feature(&self.handle, 0x10)?;
+        self.cached_brightness = Some(current);
+        Ok(current)
+    }
+
+    /// Sets the brightness of the monitor via DDC/CI.
+    ///
+    /// Updates the cached brightness value on success.
+    pub fn set_brightness(&mut self, value: u32) -> Result<()> {
+        set_vcp_feature(&self.handle, 0x10, value)?;
+        self.cached_brightness = Some(value);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
