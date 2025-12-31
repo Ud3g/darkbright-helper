@@ -30,6 +30,12 @@ use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
 
+/// Number of retries for DDC operations.
+const DDC_RETRIES: u32 = 3;
+/// Delay between retries in milliseconds.
+/// 40ms is chosen as a safe default for slower monitor controllers.
+const DDC_RETRY_DELAY_MS: u64 = 40;
+
 /// Enumerates all active display monitors.
 ///
 /// Returns a vector of `HMONITOR` handles for all currently active monitors.
@@ -185,7 +191,7 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     Ok(s)
 }
 
-/// Retries a DDC operation up to 3 times with 10ms delay between attempts.
+/// Retries a DDC operation up to `DDC_RETRIES` times with `DDC_RETRY_DELAY_MS` delay.
 fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
     let mut attempts = 0;
     loop {
@@ -193,10 +199,10 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
             Ok(val) => return Ok(val),
             Err(e) => {
                 attempts += 1;
-                if attempts >= 3 {
+                if attempts >= DDC_RETRIES {
                     return Err(e);
                 }
-                thread::sleep(Duration::from_millis(10));
+                thread::sleep(Duration::from_millis(DDC_RETRY_DELAY_MS));
             }
         }
     }
