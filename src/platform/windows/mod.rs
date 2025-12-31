@@ -6,7 +6,7 @@
 //! - Dimming overlay windows
 //! - On-screen display (OSD)
 
-use windows::Win32::Foundation::{GetLastError, HANDLE, HWND, WIN32_ERROR};
+use windows::Win32::Foundation::{HANDLE, HWND};
 use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
 use crate::error::{BrightnessError, Result};
@@ -20,19 +20,15 @@ pub mod overlay;
 // Error Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Returns the last Windows error code.
-///
-/// This is a safe wrapper around `GetLastError()`.
-#[inline]
-pub fn get_last_error() -> WIN32_ERROR {
-    // SAFETY: GetLastError has no preconditions and is always safe to call.
-    unsafe { GetLastError() }
-}
-
 /// Returns the last Windows error code as a u32.
+///
+/// This uses `std::io::Error::last_os_error()` which internally calls
+/// the Windows `GetLastError()` API.
 #[inline]
 pub fn get_last_error_code() -> u32 {
-    get_last_error().0
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(0) as u32
 }
 
 /// Converts the last Windows error into a `BrightnessError::WindowsApi`.
@@ -88,10 +84,10 @@ impl SafeHwnd {
         self.hwnd
     }
 
-    /// Returns true if this handle is valid (non-null).
+    /// Returns true if this handle is valid (non-zero).
     #[inline]
     pub fn is_valid(&self) -> bool {
-        !self.hwnd.0.is_null()
+        self.hwnd.0 != 0
     }
 
     /// Consumes the wrapper and returns the raw handle without destroying it.
@@ -140,10 +136,10 @@ impl SafeHandle {
         self.handle
     }
 
-    /// Returns true if this handle is valid (non-null and not INVALID_HANDLE_VALUE).
+    /// Returns true if this handle is valid (non-zero and not INVALID_HANDLE_VALUE).
     #[inline]
     pub fn is_valid(&self) -> bool {
-        !self.handle.0.is_null() && self.handle.0 as isize != -1
+        self.handle.0 != 0 && self.handle.0 != -1
     }
 
     /// Consumes the wrapper and returns the raw handle without closing it.
@@ -199,7 +195,6 @@ mod tests {
     #[test]
     fn test_get_last_error_returns_value() {
         // Just verify it doesn't panic
-        let _ = get_last_error();
         let _ = get_last_error_code();
     }
 
@@ -218,7 +213,7 @@ mod tests {
 
     #[test]
     fn test_into_raw_prevents_drop() {
-        let hwnd = HWND(std::ptr::null_mut());
+        let hwnd = HWND(0);
         let safe = SafeHwnd::new_borrowed(hwnd);
         let raw = safe.into_raw();
         assert_eq!(raw, hwnd);
