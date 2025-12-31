@@ -55,7 +55,7 @@ impl std::fmt::Display for ParsedHotkey {
         // Find key name from VK code
         let key_name = VK_TO_NAME
             .iter()
-            .find(|(_, &vk)| vk == self.vk_code)
+            .find(|(_, vk)| *vk == self.vk_code)
             .map(|(name, _)| *name)
             .unwrap_or("Unknown");
 
