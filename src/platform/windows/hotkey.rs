@@ -17,8 +17,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, CW_USEDEFAULT, HMENU,
-    HWND_MESSAGE, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, RegisterClassW,
+    TranslateMessage, CW_USEDEFAULT, HMENU, HWND_MESSAGE, MSG, WNDCLASSW, WS_EX_TOOLWINDOW,
+    WS_POPUP,
 };
 
 use crate::error::{BrightnessError, Result};
@@ -141,6 +142,23 @@ impl HotkeyManager {
         }
         self.registered_ids.retain(|&x| x != id);
         Ok(())
+    }
+
+    /// Runs the message loop to process hotkey events.
+    ///
+    /// This method blocks until the message loop is terminated (e.g. by WM_QUIT).
+    pub fn run_message_loop(&self) {
+        let mut msg = MSG::default();
+        unsafe {
+            // GetMessageW returns:
+            // > 0: Message retrieved
+            // 0: WM_QUIT received
+            // -1: Error
+            while GetMessageW(&mut msg, HWND::default(), 0, 0).0 > 0 {
+                let _ = TranslateMessage(&msg);
+                let _ = DispatchMessageW(&msg);
+            }
+        }
     }
 }
 
