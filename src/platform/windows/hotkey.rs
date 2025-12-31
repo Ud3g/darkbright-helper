@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use windows::Win32::Foundation::HWND;
+use windows::core::w;
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey, UnregisterHotKey,
     VIRTUAL_KEY, VK_BACK, VK_DELETE,
@@ -14,8 +16,13 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR,
     VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
 };
+use windows::Win32::UI::WindowsAndMessaging::{
+    CreateWindowExW, DefWindowProcW, DestroyWindow, RegisterClassW, CW_USEDEFAULT, HMENU,
+    HWND_MESSAGE, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+};
 
 use crate::error::{BrightnessError, Result};
+use crate::platform::windows::last_error_as_brightness_error;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -37,6 +44,16 @@ pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Window procedure for the hotkey message window.
+unsafe extern "system" fn wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
 /// Manages global hotkey registration and handling.
 pub struct HotkeyManager {
     /// Handle to the invisible message window that receives WM_HOTKEY messages.
@@ -48,8 +65,43 @@ pub struct HotkeyManager {
 impl HotkeyManager {
     /// Creates a new HotkeyManager.
     pub fn new() -> Result<Self> {
+        let hinstance = unsafe { GetModuleHandleW(None).unwrap() };
+        let class_name = w!("DarkBrightHotkeyWindow");
+
+        let wnd_class = WNDCLASSW {
+            lpfnWndProc: Some(wnd_proc),
+            hInstance: hinstance.into(),
+            lpszClassName: class_name,
+            ..Default::default()
+        };
+
+        unsafe {
+            RegisterClassW(&wnd_class);
+        }
+
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WS_EX_TOOLWINDOW,
+                class_name,
+                w!("DarkBrightHotkey"),
+                WS_POPUP,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                HWND_MESSAGE,
+                HMENU::default(),
+                hinstance,
+                None,
+            )
+        };
+
+        if hwnd.0 == 0 {
+            return Err(last_error_as_brightness_error("CreateWindowExW"));
+        }
+
         Ok(Self {
-            hwnd: HWND::default(),
+            hwnd,
             registered_ids: Vec::new(),
         })
     }
@@ -97,6 +149,11 @@ impl Drop for HotkeyManager {
         for &id in &self.registered_ids {
             unsafe {
                 let _ = UnregisterHotKey(self.hwnd, id);
+            }
+        }
+        if self.hwnd.0 != 0 {
+            unsafe {
+                let _ = DestroyWindow(self.hwnd);
             }
         }
     }
