@@ -16,6 +16,22 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use crate::error::{BrightnessError, Result};
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Hotkey ID for the primary brightness up command.
+pub const BRIGHTNESS_UP_ID: i32 = 1;
+
+/// Hotkey ID for the primary brightness down command.
+pub const BRIGHTNESS_DOWN_ID: i32 = 2;
+
+/// Hotkey ID for the secondary (dedicated key) brightness up command.
+pub const BRIGHTNESS_UP_ALT_ID: i32 = 3;
+
+/// Hotkey ID for the secondary (dedicated key) brightness down command.
+pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
