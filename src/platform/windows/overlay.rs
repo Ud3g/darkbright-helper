@@ -16,6 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::error::{BrightnessError, Result};
+use crate::platform::DimmingOverlay;
 use super::{last_error_as_brightness_error, SafeHwnd};
 
 /// The class name for the overlay window.
@@ -160,6 +161,58 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
     }
 
     Ok(())
+}
+
+/// A Windows implementation of the dimming overlay.
+pub struct WindowsOverlay {
+    hwnd: SafeHwnd,
+    opacity: f32,
+    visible: bool,
+}
+
+impl WindowsOverlay {
+    /// Creates a new overlay window for the specified monitor.
+    pub fn new(hmonitor: HMONITOR) -> Result<Self> {
+        let hwnd = create_overlay_window()?;
+        position_window_fullscreen(hwnd.as_raw(), hmonitor)?;
+
+        // Initialize as transparent
+        set_window_opacity(hwnd.as_raw(), 0.0)?;
+
+        Ok(Self {
+            hwnd,
+            opacity: 0.0,
+            visible: false,
+        })
+    }
+}
+
+impl DimmingOverlay for WindowsOverlay {
+    fn set_opacity(&mut self, opacity: f32) -> Result<()> {
+        set_window_opacity(self.hwnd.as_raw(), opacity)?;
+        self.opacity = opacity;
+        Ok(())
+    }
+
+    fn show(&mut self) -> Result<()> {
+        show_window(self.hwnd.as_raw())?;
+        self.visible = true;
+        Ok(())
+    }
+
+    fn hide(&mut self) -> Result<()> {
+        hide_window(self.hwnd.as_raw())?;
+        self.visible = false;
+        Ok(())
+    }
+
+    fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    fn opacity(&self) -> f32 {
+        self.opacity
+    }
 }
 
 /// Shows the overlay window.
