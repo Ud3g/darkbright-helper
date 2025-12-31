@@ -3,7 +3,6 @@
 //! This module handles the low-level communication with monitors using the
 //! Windows Monitor Configuration API.
 
-use windows::core::PSTR;
 use windows::Win32::Devices::Display::{
     CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
     GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
@@ -141,7 +140,7 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     let mut length = 0;
 
     unsafe {
-        if !GetCapabilitiesStringLength(monitor.handle(), &mut length).as_bool() {
+        if GetCapabilitiesStringLength(monitor.handle(), &mut length) == 0 {
             return Err(last_error_as_brightness_error("GetCapabilitiesStringLength"));
         }
     }
@@ -154,13 +153,7 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     let mut buffer = vec![0u8; length as usize];
 
     unsafe {
-        if !CapabilitiesRequestAndCapabilitiesReply(
-            monitor.handle(),
-            PSTR(buffer.as_mut_ptr()),
-            length,
-        )
-        .as_bool()
-        {
+        if CapabilitiesRequestAndCapabilitiesReply(monitor.handle(), &mut buffer) == 0 {
             return Err(last_error_as_brightness_error(
                 "CapabilitiesRequestAndCapabilitiesReply",
             ));
