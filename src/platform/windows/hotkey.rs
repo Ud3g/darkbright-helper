@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY, VK_BACK, VK_DELETE,
     VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6,
@@ -34,6 +35,14 @@ pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Manages global hotkey registration and handling.
+pub struct HotkeyManager {
+    /// Handle to the invisible message window that receives WM_HOTKEY messages.
+    hwnd: HWND,
+    /// List of currently registered hotkey IDs.
+    registered_ids: Vec<i32>,
+}
 
 /// A parsed hotkey consisting of modifiers and a virtual key code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
