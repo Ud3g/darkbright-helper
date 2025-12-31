@@ -4,8 +4,8 @@
 //! Windows Monitor Configuration API.
 
 use windows::Win32::Devices::Display::{
-    DestroyPhysicalMonitors, GetNumberOfPhysicalMonitorsFromHMONITOR,
-    GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
+    CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
+    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
 };
 use windows::Win32::Foundation::{BOOL, HANDLE, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
@@ -126,6 +126,47 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
         .into_iter()
         .map(|inner| PhysicalMonitor { inner })
         .collect())
+}
+
+/// Retrieves the DDC/CI capabilities string from a physical monitor.
+///
+/// The capabilities string is an ASCII string containing information about the
+/// monitor's supported VCP codes, model name, and other features.
+///
+/// # Errors
+///
+/// Returns a `WindowsApi` error if the capabilities cannot be read.
+pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
+    let mut length = 0;
+
+    unsafe {
+        GetCapabilitiesStringLength(monitor.handle(), &mut length).map_err(|e| {
+            BrightnessError::windows_api("GetCapabilitiesStringLength", e.code().0 as u32)
+        })?;
+    }
+
+    if length == 0 {
+        return Ok(String::new());
+    }
+
+    // The length includes the null terminator.
+    let mut buffer = vec![0u8; length as usize];
+
+    unsafe {
+        CapabilitiesRequestAndCapabilitiesReply(monitor.handle(), &mut buffer).map_err(|e| {
+            BrightnessError::windows_api(
+                "CapabilitiesRequestAndCapabilitiesReply",
+                e.code().0 as u32,
+            )
+        })?;
+    }
+
+    // Convert to String, stripping the null terminator and any garbage
+    let s = String::from_utf8_lossy(&buffer)
+        .trim_matches(char::from(0))
+        .to_string();
+
+    Ok(s)
 }
 
 #[cfg(test)]
