@@ -207,8 +207,7 @@ pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, 
             None,
             &mut current_value,
             Some(&mut max_value as *mut _),
-        )
-        .as_bool()
+        ) != 0
         {
             Ok((current_value, max_value))
         } else {
@@ -232,7 +231,7 @@ pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, 
 /// Returns a `WindowsApi` error if the VCP feature cannot be set.
 pub fn set_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8, value: u32) -> Result<()> {
     unsafe {
-        if SetVCPFeature(monitor.handle(), vcp_code, value).as_bool() {
+        if SetVCPFeature(monitor.handle(), vcp_code, value) != 0 {
             Ok(())
         } else {
             Err(last_error_as_brightness_error("SetVCPFeature"))
