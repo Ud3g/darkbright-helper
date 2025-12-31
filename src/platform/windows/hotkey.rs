@@ -8,8 +8,8 @@ use std::sync::LazyLock;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey, VIRTUAL_KEY,
-    VK_BACK, VK_DELETE,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey, UnregisterHotKey,
+    VIRTUAL_KEY, VK_BACK, VK_DELETE,
     VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6,
     VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR,
     VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
@@ -78,6 +78,27 @@ impl HotkeyManager {
         }
         self.registered_ids.push(id);
         Ok(())
+    }
+
+    /// Unregisters a hotkey.
+    pub fn unregister_hotkey(&mut self, id: i32) -> Result<()> {
+        unsafe {
+            UnregisterHotKey(self.hwnd, id).map_err(|e| {
+                BrightnessError::windows_api("UnregisterHotKey", e.code().0 as u32)
+            })?;
+        }
+        self.registered_ids.retain(|&x| x != id);
+        Ok(())
+    }
+}
+
+impl Drop for HotkeyManager {
+    fn drop(&mut self) {
+        for &id in &self.registered_ids {
+            unsafe {
+                let _ = UnregisterHotKey(self.hwnd, id);
+            }
+        }
     }
 }
 
