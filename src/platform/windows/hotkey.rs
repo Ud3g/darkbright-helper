@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::sync::mpsc::Sender;
 
 use windows::core::w;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
@@ -18,10 +19,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW, RegisterClassW,
-    TranslateMessage, CW_USEDEFAULT, HMENU, HWND_MESSAGE, MSG, WNDCLASSW, WS_EX_TOOLWINDOW,
-    WS_POPUP,
+    TranslateMessage, CW_USEDEFAULT, HMENU, HWND_MESSAGE, MSG, WM_HOTKEY, WNDCLASSW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 
+use crate::core::state::BrightnessMessage;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
 
@@ -61,11 +63,15 @@ pub struct HotkeyManager {
     hwnd: HWND,
     /// List of currently registered hotkey IDs.
     registered_ids: Vec<i32>,
+    /// Channel sender to transmit brightness adjustment events to the main thread.
+    sender: Sender<BrightnessMessage>,
+    /// Brightness step percentage (1-50).
+    step_percent: i8,
 }
 
 impl HotkeyManager {
     /// Creates a new HotkeyManager.
-    pub fn new() -> Result<Self> {
+    pub fn new(sender: Sender<BrightnessMessage>, step_percent: u8) -> Result<Self> {
         let hinstance = unsafe { GetModuleHandleW(None).unwrap() };
         let class_name = w!("DarkBrightHotkeyWindow");
 
@@ -104,6 +110,8 @@ impl HotkeyManager {
         Ok(Self {
             hwnd,
             registered_ids: Vec::new(),
+            sender,
+            step_percent: step_percent as i8,
         })
     }
 
@@ -155,6 +163,22 @@ impl HotkeyManager {
             // 0: WM_QUIT received
             // -1: Error
             while GetMessageW(&mut msg, HWND::default(), 0, 0).0 > 0 {
+                if msg.message == WM_HOTKEY {
+                    let id = msg.wParam.0 as i32;
+                    let delta = match id {
+                        BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => self.step_percent,
+                        BRIGHTNESS_DOWN_ID | BRIGHTNESS_DOWN_ALT_ID => -self.step_percent,
+                        _ => 0,
+                    };
+
+                    if delta != 0 {
+                        let _ = self.sender.send(BrightnessMessage::Adjust {
+                            monitor_id: None, // None = monitor under cursor
+                            delta,
+                        });
+                    }
+                }
+
                 let _ = TranslateMessage(&msg);
                 let _ = DispatchMessageW(&msg);
             }
