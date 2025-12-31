@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, BLACK_BRUSH, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -30,7 +30,7 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    DefWindowProcW(hwnd, msg, wparam, lparam)
+    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Registers the window class for the overlay window if not already registered.
@@ -61,10 +61,7 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
                 };
 
                 if RegisterClassExW(&wnd_class) == 0 {
-                    return Err(BrightnessError::windows_api(
-                        "RegisterClassExW",
-                        windows::Win32::Foundation::GetLastError().0,
-                    ));
+                    return Err(last_error_as_brightness_error("RegisterClassExW"));
                 }
             }
             Ok(())
