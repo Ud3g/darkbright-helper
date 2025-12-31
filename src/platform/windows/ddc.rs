@@ -10,17 +10,17 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     DIGCF_PROFILE, DIREG_DEV, GUID_DEVCLASS_MONITOR, HDEVINFO, SP_DEVINFO_DATA,
 };
 use windows::Win32::Devices::Display::{
-    CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, EnumDisplayDevicesW,
-    GetCapabilitiesStringLength, GetNumberOfPhysicalMonitorsFromHMONITOR,
-    GetPhysicalMonitorsFromHMONITOR, DISPLAY_DEVICEW, PHYSICAL_MONITOR,
+    CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
+    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
 };
-use windows::Win32::Foundation::{
-    BOOL, ERROR_SUCCESS, HANDLE, HWND, LPARAM, RECT, WIN32_ERROR,
-};
+use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
+    EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
+    DISPLAY_DEVICEW,
 };
-use windows::Win32::System::Registry::{RegCloseKey, RegQueryValueExW, HKEY, KEY_READ};
+use windows::Win32::System::Registry::{
+    RegCloseKey, RegQueryValueExW, HKEY, KEY_READ, REG_VALUE_TYPE,
+};
 
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
@@ -254,11 +254,8 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
             HWND::default(),
             DIGCF_PRESENT | DIGCF_PROFILE,
         )
-    }?;
-
-    if hdevinfo.0 == -1 {
-        return Err(last_error_as_brightness_error("SetupDiGetClassDevsW"));
     }
+    .map_err(|e| BrightnessError::windows_api("SetupDiGetClassDevsW", e.code().0 as u32))?;
 
     // RAII for HDEVINFO
     struct SafeDevInfo(HDEVINFO);
@@ -275,7 +272,8 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
     let mut devinfo_data = SP_DEVINFO_DATA::default();
     devinfo_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
 
-    while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &mut devinfo_data).as_bool() } {
+    // SetupDiEnumDeviceInfo returns Result<()> in windows 0.52+
+    while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &mut devinfo_data).is_ok() } {
         index += 1;
 
         // Get Instance ID
@@ -288,7 +286,7 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
                 Some(&mut buffer),
                 Some(&mut required_size),
             )
-            .as_bool()
+            .is_ok()
             {
                 let instance_id = String::from_utf16_lossy(&buffer[..required_size as usize - 1]); // -1 for null
 
@@ -315,13 +313,10 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             DICS_FLAG_GLOBAL,
             0,
             DIREG_DEV,
-            KEY_READ,
+            KEY_READ.0,
         )
-    };
-
-    if hkey.0 == 0 || hkey.0 == -1 {
-        return Err(last_error_as_brightness_error("SetupDiOpenDevRegKey"));
     }
+    .map_err(|e| BrightnessError::windows_api("SetupDiOpenDevRegKey", e.code().0 as u32))?;
 
     // RAII for HKEY
     struct SafeHKey(HKEY);
@@ -336,7 +331,7 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
 
     // Read "EDID" value
     let value_name = windows::core::w!("EDID");
-    let mut data_type = 0;
+    let mut data_type = REG_VALUE_TYPE::default();
     let mut data_len = 0;
 
     unsafe {
@@ -367,13 +362,13 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             Some(&mut data_len),
         );
 
-        if result == ERROR_SUCCESS {
-            Ok(buffer)
-        } else {
+        if let Err(e) = result {
             Err(BrightnessError::windows_api(
                 "RegQueryValueExW",
-                result.0,
+                e.code().0 as u32,
             ))
+        } else {
+            Ok(buffer)
         }
     }
 }
