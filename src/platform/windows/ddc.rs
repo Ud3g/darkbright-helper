@@ -66,8 +66,9 @@ pub struct PhysicalMonitor {
 
 impl std::fmt::Debug for PhysicalMonitor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let handle = self.inner.hPhysicalMonitor;
         f.debug_struct("PhysicalMonitor")
-            .field("handle", &self.inner.hPhysicalMonitor)
+            .field("handle", &handle)
             .finish()
     }
 }
