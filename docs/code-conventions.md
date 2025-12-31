@@ -68,6 +68,19 @@ pub fn register_hotkey(&mut self, id: i32, modifiers: u32, key: u32) -> Result<(
 }
 ```
 
+### Unsafe Blocks in Unsafe Functions (Rust 2024)
+
+In Rust 2024, `unsafe fn` does not imply an `unsafe` block for its body. You must explicitly wrap unsafe operations in `unsafe { ... }` even inside an `unsafe fn`.
+
+```rust
+// Correct
+unsafe fn my_unsafe_fn() {
+    unsafe {
+        ffi_call();
+    }
+}
+```
+
 ### Wrap handles in RAII types
 
 Windows handles should be wrapped in structs that implement `Drop`:
