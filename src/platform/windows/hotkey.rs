@@ -16,7 +16,6 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 use crate::error::{BrightnessError, Result};
-use crate::platform::windows::last_error_as_brightness_error;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -73,9 +72,9 @@ impl HotkeyManager {
         vk: VIRTUAL_KEY,
     ) -> Result<()> {
         unsafe {
-            if RegisterHotKey(self.hwnd, id, modifiers, vk.0 as u32).as_bool() == false {
-                return Err(last_error_as_brightness_error("RegisterHotKey"));
-            }
+            RegisterHotKey(self.hwnd, id, modifiers, vk.0 as u32).map_err(|e| {
+                BrightnessError::windows_api("RegisterHotKey", e.code().0 as u32)
+            })?;
         }
         self.registered_ids.push(id);
         Ok(())
