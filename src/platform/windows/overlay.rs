@@ -67,7 +67,7 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
             Ok(())
         })
         .as_ref()
-        .map_err(|e| {
+        .map_err(|_| {
             // Clone the error since we can't move out of the OnceLock reference
             // BrightnessError doesn't implement Clone, so we reconstruct a generic one here
             // or rely on the fact that if it failed once, it fails always.
