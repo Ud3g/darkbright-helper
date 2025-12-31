@@ -8,13 +8,15 @@ use std::sync::LazyLock;
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY, VK_BACK, VK_DELETE,
+    HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey, VIRTUAL_KEY,
+    VK_BACK, VK_DELETE,
     VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F10, VK_F11, VK_F12, VK_F2, VK_F3, VK_F4, VK_F5, VK_F6,
     VK_F7, VK_F8, VK_F9, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT, VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR,
     VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
 };
 
 use crate::error::{BrightnessError, Result};
+use crate::platform::windows::last_error_as_brightness_error;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -42,6 +44,42 @@ pub struct HotkeyManager {
     hwnd: HWND,
     /// List of currently registered hotkey IDs.
     registered_ids: Vec<i32>,
+}
+
+impl HotkeyManager {
+    /// Creates a new HotkeyManager.
+    pub fn new() -> Result<Self> {
+        Ok(Self {
+            hwnd: HWND::default(),
+            registered_ids: Vec::new(),
+        })
+    }
+
+    /// Registers a global hotkey.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique identifier for the hotkey.
+    /// * `modifiers` - Modifier keys (Ctrl, Alt, Shift, Win).
+    /// * `vk` - Virtual key code.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WindowsApi` error if registration fails.
+    pub fn register_hotkey(
+        &mut self,
+        id: i32,
+        modifiers: HOT_KEY_MODIFIERS,
+        vk: VIRTUAL_KEY,
+    ) -> Result<()> {
+        unsafe {
+            if RegisterHotKey(self.hwnd, id, modifiers, vk.0 as u32).as_bool() == false {
+                return Err(last_error_as_brightness_error("RegisterHotKey"));
+            }
+        }
+        self.registered_ids.push(id);
+        Ok(())
+    }
 }
 
 /// A parsed hotkey consisting of modifiers and a virtual key code.
