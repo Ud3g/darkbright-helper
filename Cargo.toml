@@ -28,6 +28,9 @@ env_logger = "0.11"
 # Synchronization
 parking_lot = "0.12"
 
+# Directory paths
+dirs-next = "2.0"
+
 # Linter Configuration (from code-conventions.md)
 [lints.clippy]
 all = "warn"
