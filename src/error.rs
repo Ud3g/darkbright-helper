@@ -73,3 +73,65 @@ pub enum BrightnessError {
     #[error("Failed to receive message: channel closed")]
     ChannelRecv,
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper Methods for Error Construction
+// ─────────────────────────────────────────────────────────────────────────────
+
+impl BrightnessError {
+    /// Creates a new DDC communication error.
+    pub fn ddc_communication(monitor: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::DdcCommunication {
+            monitor: monitor.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Creates a new hotkey registration error.
+    pub fn hotkey_registration(hotkey: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::HotkeyRegistration {
+            hotkey: hotkey.into(),
+            message: message.into(),
+        }
+    }
+
+    /// Creates a new Windows API error with the given function name and error code.
+    pub fn windows_api(function: impl Into<String>, error_code: u32) -> Self {
+        Self::WindowsApi {
+            function: function.into(),
+            error_code,
+        }
+    }
+
+    /// Creates a new config read error.
+    pub fn config_read(path: impl Into<String>, source: std::io::Error) -> Self {
+        Self::ConfigRead {
+            path: path.into(),
+            source,
+        }
+    }
+
+    /// Creates a new config write error.
+    pub fn config_write(path: impl Into<String>, source: std::io::Error) -> Self {
+        Self::ConfigWrite {
+            path: path.into(),
+            source,
+        }
+    }
+
+    /// Creates a new config parse error.
+    pub fn config_parse(path: impl Into<String>, source: serde_json::Error) -> Self {
+        Self::ConfigParse {
+            path: path.into(),
+            source,
+        }
+    }
+
+    /// Creates a new invalid config error.
+    pub fn config_invalid(field: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::ConfigInvalid {
+            field: field.into(),
+            message: message.into(),
+        }
+    }
+}
