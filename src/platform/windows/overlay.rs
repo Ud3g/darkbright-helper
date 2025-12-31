@@ -1,5 +1,6 @@
 //! Implementation of the dimming overlay window for Windows.
 
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
@@ -15,6 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TRANSPARENT, WS_POPUP,
 };
 
+use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 use crate::platform::DimmingOverlay;
 use super::{last_error_as_brightness_error, SafeHwnd};
@@ -251,4 +253,65 @@ pub fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Manages overlay windows for multiple monitors.
+pub struct OverlayManager {
+    overlays: HashMap<MonitorId, WindowsOverlay>,
+}
+
+impl Default for OverlayManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OverlayManager {
+    /// Creates a new overlay manager.
+    pub fn new() -> Self {
+        Self {
+            overlays: HashMap::new(),
+        }
+    }
+
+    /// Updates the overlay for a specific monitor.
+    ///
+    /// # Arguments
+    ///
+    /// * `monitor_id` - The unique identifier of the monitor.
+    /// * `hmonitor` - The Windows monitor handle (used for positioning).
+    /// * `opacity` - The desired opacity (0-100).
+    pub fn update(
+        &mut self,
+        monitor_id: &MonitorId,
+        hmonitor: HMONITOR,
+        opacity: u8,
+    ) -> Result<()> {
+        // If opacity is 0, we just need to hide it if it exists.
+        if opacity == 0 {
+            if let Some(overlay) = self.overlays.get_mut(monitor_id) {
+                overlay.hide()?;
+            }
+            return Ok(());
+        }
+
+        // Create overlay if it doesn't exist
+        if !self.overlays.contains_key(monitor_id) {
+            let overlay = WindowsOverlay::new(hmonitor)?;
+            self.overlays.insert(monitor_id.clone(), overlay);
+        }
+
+        let overlay = self.overlays.get_mut(monitor_id).expect("Just inserted");
+
+        // Ensure correct position (topology might have changed)
+        position_window_fullscreen(overlay.hwnd.as_raw(), hmonitor)?;
+
+        // Update opacity and visibility
+        overlay.set_opacity(opacity as f32 / 100.0)?;
+        if !overlay.is_visible() {
+            overlay.show()?;
+        }
+
+        Ok(())
+    }
 }
