@@ -42,5 +42,5 @@ pub use core::brightness::{calculate_adjustment, BrightnessAdjustment};
 pub use core::config::Config;
 pub use core::state::{BrightnessMessage, MonitorId, MonitorState};
 
-// Platform traits (to be uncommented as modules are implemented)
-// pub use platform::DimmingOverlay;
+// Platform traits
+pub use platform::DimmingOverlay;
