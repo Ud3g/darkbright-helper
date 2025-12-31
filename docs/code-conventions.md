@@ -92,8 +92,7 @@ Put raw Win32 bindings in dedicated modules (e.g., `platform/windows/ffi.rs`).
 
 We use the `windows` crate which generates idiomatic Rust bindings. Follow these rules:
 
-1.  **Result over BOOL**: Newer bindings return `windows::core::Result<()>` or `Result<T>` instead of `BOOL`. Use `?` operator instead of
-checking `.as_bool()`.
+1.  **Result over BOOL**: Newer bindings return `windows::core::Result<()>` or `Result<T>` instead of `BOOL`. Use `?` operator (with `.map_err` to convert to `BrightnessError`) instead of checking `.as_bool()`.
 2.  **Slices over Pointers**: APIs taking arrays now often accept slices (`&[T]`) instead of `pointer` + `length`.
 3.  **Missing Debug**: Many generated FFI structs (like `PHYSICAL_MONITOR`) do **not** implement `Debug`.
     *   *Do not* derive `Debug` on structs containing them.
