@@ -10,8 +10,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowPos,
-    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, WNDCLASSEXW,
-    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    ShowWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE,
+    SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::error::{BrightnessError, Result};
@@ -158,6 +159,22 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
         .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0 as u32))?;
     }
 
+    Ok(())
+}
+
+/// Shows the overlay window.
+pub fn show_window(hwnd: HWND) -> Result<()> {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOW);
+    }
+    Ok(())
+}
+
+/// Hides the overlay window.
+pub fn hide_window(hwnd: HWND) -> Result<()> {
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_HIDE);
+    }
     Ok(())
 }
 
