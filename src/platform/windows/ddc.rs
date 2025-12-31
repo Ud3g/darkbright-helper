@@ -11,7 +11,8 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
 };
 use windows::Win32::Devices::Display::{
     CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
-    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR, PHYSICAL_MONITOR,
+    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR,
+    GetVCPFeatureAndVCPFeatureReply, SetVCPFeature, PHYSICAL_MONITOR,
 };
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -179,6 +180,64 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
         .to_string();
 
     Ok(s)
+}
+
+/// Retrieves the current value and maximum value of a VCP feature.
+///
+/// # Arguments
+///
+/// * `monitor` - The physical monitor handle.
+/// * `vcp_code` - The VCP code to query (e.g., 0x10 for brightness).
+///
+/// # Returns
+///
+/// Returns a tuple containing `(current_value, maximum_value)`.
+///
+/// # Errors
+///
+/// Returns a `WindowsApi` error if the VCP feature cannot be read.
+pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, u32)> {
+    let mut current_value = 0;
+    let mut max_value = 0;
+
+    unsafe {
+        if GetVCPFeatureAndVCPFeatureReply(
+            monitor.handle(),
+            vcp_code,
+            None,
+            &mut current_value,
+            Some(&mut max_value as *mut _),
+        )
+        .as_bool()
+        {
+            Ok((current_value, max_value))
+        } else {
+            Err(last_error_as_brightness_error(
+                "GetVCPFeatureAndVCPFeatureReply",
+            ))
+        }
+    }
+}
+
+/// Sets the value of a VCP feature.
+///
+/// # Arguments
+///
+/// * `monitor` - The physical monitor handle.
+/// * `vcp_code` - The VCP code to set (e.g., 0x10 for brightness).
+/// * `value` - The new value to set.
+///
+/// # Errors
+///
+/// Returns a `WindowsApi` error if the VCP feature cannot be set.
+pub fn set_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8, value: u32) -> Result<()> {
+    unsafe {
+        if SetVCPFeature(monitor.handle(), vcp_code, value).as_bool() {
+            Ok(())
+        } else {
+            Err(last_error_as_brightness_error("SetVCPFeature"))
+        }
+    }
 }
 
 #[cfg(test)]
