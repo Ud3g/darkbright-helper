@@ -45,7 +45,9 @@ unsafe extern "system" fn monitor_enum_proc(
     _rect: *mut RECT,
     lparam: LPARAM,
 ) -> BOOL {
-    let monitors = &mut *(lparam.0 as *mut Vec<HMONITOR>);
+    // SAFETY: The caller ensures lparam is a valid pointer to Vec<HMONITOR>
+    // and the vector outlives this callback.
+    let monitors = unsafe { &mut *(lparam.0 as *mut Vec<HMONITOR>) };
     monitors.push(hmonitor);
     BOOL::from(true)
 }
