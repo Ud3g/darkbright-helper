@@ -241,11 +241,10 @@ impl Config {
                 .map_err(|e| BrightnessError::config_write(&path_str, e))?;
         }
 
-        let contents = serde_json::to_string_pretty(self)
-            .expect("Config serialization should never fail");
+        let contents =
+            serde_json::to_string_pretty(self).expect("Config serialization should never fail");
 
-        std::fs::write(path, contents)
-            .map_err(|e| BrightnessError::config_write(&path_str, e))
+        std::fs::write(path, contents).map_err(|e| BrightnessError::config_write(&path_str, e))
     }
 
     /// Validates configuration values and replaces invalid ones with defaults.
