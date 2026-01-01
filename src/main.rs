@@ -49,6 +49,7 @@ struct BrightnessController {
     /// The on-screen display for showing changes.
     osd: OsdWindow,
     /// The loaded configuration.
+    #[allow(dead_code)]
     config: Config,
     /// Cache for mapping Windows handles to monitor IDs (performance optimization).
     id_cache: HashMap<isize, MonitorId>,

@@ -404,6 +404,8 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
         .trim_matches(char::from(0))
         .to_string();
 
+    log::debug!("Looking for EDID for Instance ID: '{}'", target_instance_id);
+
     if target_instance_id.is_empty() {
         return Err(BrightnessError::ddc_communication(
             "Unknown",
@@ -469,6 +471,8 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
             .is_ok()
             {
                 let instance_id = String::from_utf16_lossy(&buffer[..required_size as usize - 1]); // -1 for null
+
+                log::trace!("Checking device: '{}'", instance_id);
 
                 if instance_id.eq_ignore_ascii_case(target_instance_id) {
                     // Found it! Read EDID from registry.
