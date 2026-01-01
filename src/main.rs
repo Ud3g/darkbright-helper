@@ -380,4 +380,14 @@ fn main() {
             }
         }
     }
+
+    // Phase 6, Step 48: Cleanup
+    unsafe {
+        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), FALSE);
+    }
+
+    // Explicitly drop controller to ensure windows are destroyed before exit
+    drop(controller);
+
+    log::info!("Brightness Control Tool Stopped.");
 }
