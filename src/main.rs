@@ -227,5 +227,16 @@ impl BrightnessController {
 }
 
 fn main() {
-    println!("Brightness Control Tool Starting...");
+    // Phase 6, Step 41: Initialize logging
+    // Default to "info" in release and "debug" in debug builds if RUST_LOG is not set.
+    let default_level = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "info"
+    };
+
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
+        .init();
+
+    log::info!("Brightness Control Tool Starting...");
 }
