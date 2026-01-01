@@ -269,4 +269,56 @@ fn main() {
     if let Err(e) = controller.handle_refresh() {
         log::error!("Initial monitor enumeration failed: {}", e);
     }
+
+    // Phase 6, Step 44: Register hotkeys
+    let (tx, _rx) = mpsc::channel();
+
+    let mut hotkey_manager = match HotkeyManager::new(tx, config.brightness.step_percent) {
+        Ok(hm) => hm,
+        Err(e) => {
+            log::error!("Failed to initialize HotkeyManager: {}", e);
+            return;
+        }
+    };
+
+    // Register primary hotkeys from config
+    match parse_hotkey(&config.hotkeys.brightness_up) {
+        Ok(p) => {
+            if let Err(e) = hotkey_manager.register_hotkey(BRIGHTNESS_UP_ID, p.modifiers, p.vk_code)
+            {
+                log::error!("Failed to register primary brightness up hotkey: {}", e);
+            }
+        }
+        Err(e) => log::error!("Invalid brightness_up hotkey in config: {}", e),
+    }
+
+    match parse_hotkey(&config.hotkeys.brightness_down) {
+        Ok(p) => {
+            if let Err(e) =
+                hotkey_manager.register_hotkey(BRIGHTNESS_DOWN_ID, p.modifiers, p.vk_code)
+            {
+                log::error!("Failed to register primary brightness down hotkey: {}", e);
+            }
+        }
+        Err(e) => log::error!("Invalid brightness_down hotkey in config: {}", e),
+    }
+
+    // Register secondary (opportunistic) hotkeys
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        HOT_KEY_MODIFIERS, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP,
+    };
+
+    if let Err(e) =
+        hotkey_manager.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
+    {
+        log::debug!("Secondary brightness up hotkey not registered: {}", e);
+    }
+
+    if let Err(e) = hotkey_manager.register_hotkey(
+        BRIGHTNESS_DOWN_ALT_ID,
+        HOT_KEY_MODIFIERS(0),
+        VK_BRIGHTNESS_DOWN,
+    ) {
+        log::debug!("Secondary brightness down hotkey not registered: {}", e);
+    }
 }
