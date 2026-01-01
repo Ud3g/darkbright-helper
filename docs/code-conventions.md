@@ -111,6 +111,14 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
     *   *Do not* derive `Debug` on structs containing them.
     *   Implement `std::fmt::Debug` manually.
     *   **Caution**: Packed structs require copying fields to local variables before referencing them in `debug_struct`.
+4.  **Raw Pointers**: Use `&raw const` and `&raw mut` instead of casting references (`&mut x as *mut _`).
+    ```rust
+    // Good
+    Function(&raw mut my_struct);
+
+    // Avoid (triggers clippy::borrow_as_ptr)
+    Function(&mut my_struct as *mut _);
+    ```
 
 ---
 
