@@ -3,16 +3,18 @@
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, GetStockObject, GRAY_BRUSH, HBRUSH, HMONITOR, MONITORINFO,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, GetMonitorInfoW, SelectObject, HBRUSH, HDC, HGDIOBJ,
+    HMONITOR, MONITORINFO, PAINTSTRUCT, SRCCOPY,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE,
-    SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, GetClientRect, InvalidateRect, RegisterClassExW,
+    SetLayeredWindowAttributes, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+    HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WM_PAINT, WNDCLASSEXW,
+    WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::core::state::MonitorState;
@@ -29,18 +31,90 @@ const OSD_HEIGHT: i32 = 80;
 /// Margin from the bottom of the monitor in pixels.
 const OSD_BOTTOM_MARGIN: i32 = 100;
 
+/// OSD background color (dark gray, semi-transparent look).
+const OSD_BACKGROUND_COLOR: u32 = 0x00303030; // RGB: 48, 48, 48
+
+/// Padding inside the OSD window.
+const OSD_PADDING: i32 = 10;
+/// Height of the progress bar.
+const BAR_HEIGHT: i32 = 20;
+/// Spacing between bars (when two bars are shown).
+const BAR_SPACING: i32 = 8;
+
 /// Ensures the window class is registered exactly once.
 static REGISTER_CLASS_ONCE: OnceLock<Result<()>> = OnceLock::new();
 
 /// Window procedure for the OSD window.
+///
+/// Handles `WM_PAINT` for custom rendering of the brightness indicator.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
-    // In Phase 4 werden wir hier WM_PAINT für das Rendering implementieren.
-    unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    unsafe {
+        match msg {
+            WM_PAINT => {
+                let mut ps = PAINTSTRUCT::default();
+                let hdc = BeginPaint(hwnd, &mut ps);
+
+                if hdc.0 != 0 {
+                    paint_osd(hwnd, hdc);
+                    EndPaint(hwnd, &ps);
+                }
+
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// Paints the OSD content using double-buffering.
+///
+/// # Safety
+///
+/// Must be called from within a `BeginPaint`/`EndPaint` block.
+unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetClientRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+
+        let width = rect.right - rect.left;
+        let height = rect.bottom - rect.top;
+
+        // Create memory DC for double-buffering
+        let mem_dc = CreateCompatibleDC(hdc);
+        if mem_dc.0 == 0 {
+            return;
+        }
+
+        let mem_bitmap = CreateCompatibleBitmap(hdc, width, height);
+        if mem_bitmap.0 == 0 {
+            DeleteDC(mem_dc);
+            return;
+        }
+
+        let old_bitmap = SelectObject(mem_dc, mem_bitmap);
+
+        // Fill background
+        let bg_brush = CreateSolidBrush(COLORREF(OSD_BACKGROUND_COLOR));
+        FillRect(mem_dc, &rect, bg_brush);
+        DeleteObject(bg_brush);
+
+        // TODO: Draw progress bar(s) and text (Steps #28-30)
+
+        // Copy to screen
+        let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
+
+        // Cleanup
+        SelectObject(mem_dc, old_bitmap);
+        DeleteObject(mem_bitmap);
+        DeleteDC(mem_dc);
+    }
 }
 
 /// Registers the window class for the OSD window if not already registered.
@@ -53,7 +127,7 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
                 })?;
 
                 // Ein grauer Brush als Standardhintergrund.
-                let background_brush = HBRUSH(GetStockObject(GRAY_BRUSH).0);
+                let background_brush = CreateSolidBrush(COLORREF(OSD_BACKGROUND_COLOR));
 
                 let wnd_class = WNDCLASSEXW {
                     cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
@@ -132,7 +206,6 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
 
         let rect = mi.rcMonitor;
         let monitor_width = rect.right - rect.left;
-        let _monitor_height = rect.bottom - rect.top;
 
         // Calculate center-x and bottom-y position
         let x = rect.left + (monitor_width - OSD_WIDTH) / 2;
@@ -201,7 +274,15 @@ impl OsdWindow {
 
     /// Triggers a redraw of the OSD.
     pub fn update(&mut self, _state: &MonitorState) -> Result<()> {
-        // In späteren Schritten wird hier InvalidateRect aufgerufen
+        unsafe {
+            // Invalidate the entire window to trigger WM_PAINT
+            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+        }
         Ok(())
+    }
+
+    /// Returns the raw window handle.
+    pub fn hwnd(&self) -> HWND {
+        self.hwnd.as_raw()
     }
 }
