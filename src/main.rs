@@ -304,9 +304,11 @@ fn main() {
     }
 
     // Register secondary (opportunistic) hotkeys
-    use windows::Win32::UI::Input::KeyboardAndMouse::{
-        HOT_KEY_MODIFIERS, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP,
-    };
+    use windows::Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, VIRTUAL_KEY};
+
+    // Standard Windows Virtual Key codes for brightness
+    const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
+    const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 
     if let Err(e) =
         hotkey_manager.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)

@@ -15,6 +15,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_F6, VK_F7, VK_F8, VK_F9, VK_F10, VK_F11, VK_F12, VK_HOME, VK_INSERT, VK_LEFT, VK_NEXT,
     VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
 };
+
+// Standard Windows Virtual Key codes for brightness (not always in windows crate)
+const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
+const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     HMENU, HWND_MESSAGE, MSG, RegisterClassW, TranslateMessage, WM_HOTKEY, WNDCLASSW,
