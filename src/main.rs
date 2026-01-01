@@ -9,7 +9,7 @@ use darkbright_helper::platform::windows::ddc::{
 };
 use darkbright_helper::platform::windows::hotkey::{
     BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
-    HotkeyManager, parse_hotkey,
+    HotkeyManager, parse_hotkey, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP,
 };
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
@@ -258,7 +258,7 @@ fn main() {
     };
 
     // Phase 6, Step 43: Enumerate monitors and initialize state
-    let mut controller = match BrightnessController::new(config) {
+    let mut controller = match BrightnessController::new(config.clone()) {
         Ok(c) => c,
         Err(e) => {
             log::error!("Failed to initialize BrightnessController: {}", e);
@@ -304,11 +304,7 @@ fn main() {
     }
 
     // Register secondary (opportunistic) hotkeys
-    use windows::Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, VIRTUAL_KEY};
-
-    // Standard Windows Virtual Key codes for brightness
-    const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
-    const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
+    use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
 
     if let Err(e) =
         hotkey_manager.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
