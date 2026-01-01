@@ -168,7 +168,6 @@ pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
 /// (Step #33)
 pub struct OsdWindow {
     hwnd: SafeHwnd,
-    opacity: f32,
 }
 
 impl OsdWindow {
@@ -177,7 +176,7 @@ impl OsdWindow {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
 
-        Ok(Self { hwnd, opacity })
+        Ok(Self { hwnd })
     }
 
     /// Shows the OSD for a specific monitor with the given state.
