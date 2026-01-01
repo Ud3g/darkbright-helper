@@ -146,10 +146,12 @@ const COLOR: u32 = 0x00FF_FFFF;
 Minimize `as` casting.
 - Use `u32::from(val)` for lossless conversions (`clippy::cast_lossless`).
 - Use `try_from` for potential truncation.
-- Use `.cast_unsigned()` or `.cast_signed()` for sign changes if intentional.
+- Use `.cast_unsigned()` or `.cast_signed()` for sign changes (e.g., `HRESULT` to `u32`).
+- For `f32` to integer, ensure the value is clamped/rounded before casting.
 
 ### Purity
 Annotate pure functions (constructors, getters, calculations) with `#[must_use]` to ensure their results aren't accidentally discarded.
+- **Exception**: Do not annotate functions returning `Result` (redundant).
 
 ---
 
