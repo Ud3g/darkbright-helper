@@ -5,8 +5,8 @@
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     DICS_FLAG_GLOBAL, DIGCF_PRESENT, DIGCF_PROFILE, DIREG_DEV, GUID_DEVCLASS_MONITOR, HDEVINFO,
-    SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
-    SetupDiGetDeviceInstanceIdW, SetupDiOpenDevRegKey,
+    SP_DEVINFO_DATA, SPDRP_DRIVER, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo,
+    SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey,
 };
 use windows::Win32::Devices::Display::{
     CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
@@ -399,22 +399,34 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
         }
     }
 
-    // The DeviceID in DISPLAY_DEVICEW is actually the Instance ID for monitors
-    let target_instance_id = String::from_utf16_lossy(&dd.DeviceID)
+    // The DeviceKey in DISPLAY_DEVICEW contains the registry path to the driver key
+    // Format: \Registry\Machine\System\CurrentControlSet\Control\Class\{GUID}\XXXX
+    let device_key = String::from_utf16_lossy(&dd.DeviceKey)
         .trim_matches(char::from(0))
         .to_string();
 
-    log::debug!("Looking for EDID for Instance ID: '{}'", target_instance_id);
+    // Extract the driver key part: {GUID}\XXXX
+    let target_driver_key = if let Some(start) = device_key.find('{') {
+        device_key[start..].to_string()
+    } else {
+        log::warn!("DeviceKey does not contain GUID: '{}'", device_key);
+        // Fallback: try using DeviceID as before, though it likely fails
+        String::from_utf16_lossy(&dd.DeviceID)
+            .trim_matches(char::from(0))
+            .to_string()
+    };
 
-    if target_instance_id.is_empty() {
+    log::debug!("Looking for EDID for Driver Key: '{}'", target_driver_key);
+
+    if target_driver_key.is_empty() {
         return Err(BrightnessError::ddc_communication(
             "Unknown",
-            "Could not determine monitor instance ID",
+            "Could not determine monitor driver key",
         ));
     }
 
     // 3. Find the device in SetupAPI and read EDID
-    find_edid_by_instance_id(&target_instance_id)
+    find_edid_by_driver_key(&target_driver_key)
 }
 
 /// RAII for `HDEVINFO`
@@ -427,13 +439,13 @@ impl Drop for SafeDevInfo {
     }
 }
 
-/// Searches for a monitor with the matching Instance ID in the `SetupAPI` device list
+/// Searches for a monitor with the matching Driver Key in the `SetupAPI` device list
 /// and reads its EDID from the registry.
 ///
 /// # Errors
 ///
 /// Returns an error if the monitor cannot be found in `SetupAPI`.
-fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
+fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
     let hdevinfo = unsafe {
         SetupDiGetClassDevsW(
             Some(&GUID_DEVCLASS_MONITOR),
@@ -458,25 +470,36 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
     while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &raw mut devinfo_data).is_ok() } {
         index += 1;
 
-        // Get Instance ID
-        let mut buffer = [0u16; 256];
+        // Get Driver Key (SPDRP_DRIVER)
+        let mut buffer = [0u8; 512];
         let mut required_size = 0;
+        let mut property_type = 0;
+
         unsafe {
-            if SetupDiGetDeviceInstanceIdW(
+            if SetupDiGetDeviceRegistryPropertyW(
                 hdevinfo,
                 &raw const devinfo_data,
+                SPDRP_DRIVER,
+                Some(&raw mut property_type),
                 Some(&mut buffer),
                 Some(&raw mut required_size),
             )
             .is_ok()
             {
-                let instance_id = String::from_utf16_lossy(&buffer[..required_size as usize - 1]); // -1 for null
+                // Buffer contains WCHAR string
+                let len = required_size as usize / 2;
+                if len > 0 {
+                    // Convert u8 buffer to u16 slice
+                    let u16_slice = std::slice::from_raw_parts(buffer.as_ptr().cast::<u16>(), len);
+                    // Trim null terminator
+                    let driver_key = String::from_utf16_lossy(&u16_slice[..len.saturating_sub(1)]);
 
-                log::trace!("Checking device: '{}'", instance_id);
+                    log::trace!("Checking device driver key: '{}'", driver_key);
 
-                if instance_id.eq_ignore_ascii_case(target_instance_id) {
-                    // Found it! Read EDID from registry.
-                    return read_edid_from_registry(hdevinfo, &devinfo_data);
+                    if driver_key.eq_ignore_ascii_case(target_driver_key) {
+                        // Found it! Read EDID from registry.
+                        return read_edid_from_registry(hdevinfo, &devinfo_data);
+                    }
                 }
             }
         }
