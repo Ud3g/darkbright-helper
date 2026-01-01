@@ -42,7 +42,13 @@ unsafe extern "system" fn wnd_proc(
 
 /// Registers the window class for the overlay window if not already registered.
 ///
-/// Returns the class name on success.
+/// # Returns
+///
+/// Returns the class name `PCWSTR` on success.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
 pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
     // Initialize the registration once.
     REGISTER_CLASS_ONCE
@@ -57,17 +63,17 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
                 let black_brush = HBRUSH(GetStockObject(BLACK_BRUSH).0);
 
                 let wnd_class = WNDCLASSEXW {
-                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    cbSize: u32::try_from(std::mem::size_of::<WNDCLASSEXW>()).unwrap_or(0),
                     style: CS_HREDRAW | CS_VREDRAW,
                     lpfnWndProc: Some(wnd_proc),
                     hInstance: hinstance.into(),
-                    hCursor: Default::default(), // No cursor needed, or default arrow
+                    hCursor: windows::Win32::UI::WindowsAndMessaging::HCURSOR::default(),
                     hbrBackground: black_brush,
                     lpszClassName: OVERLAY_CLASS_NAME,
                     ..Default::default()
                 };
 
-                if RegisterClassExW(&wnd_class) == 0 {
+                if RegisterClassExW(&raw const wnd_class) == 0 {
                     return Err(last_error_as_brightness_error("RegisterClassExW"));
                 }
             }
@@ -75,9 +81,9 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
         })
         .as_ref()
         .map_err(|_| {
-            // Clone the error since we can't move out of the OnceLock reference
-            // BrightnessError doesn't implement Clone, so we reconstruct a generic one here
-            // or rely on the fact that if it failed once, it fails always.
+            // Since we cannot move out of the OnceLock reference and BrightnessError
+            // does not implement Clone, we reconstruct a representative error.
+            // If initialization failed once, it will continue to fail.
             BrightnessError::windows_api("ensure_overlay_class_registered", 0)
         })?;
 
@@ -94,6 +100,11 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
 /// - Popup (no border/caption)
 ///
 /// The window is initially hidden and has 0 size.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `CreateWindowExW` or class registration fails.
+#[must_use]
 pub fn create_overlay_window() -> Result<SafeHwnd> {
     let class_name = ensure_overlay_class_registered()?;
 
@@ -135,14 +146,18 @@ pub fn create_overlay_window() -> Result<SafeHwnd> {
 ///
 /// This function moves and resizes the window to match the monitor's bounds
 /// and ensures it is topmost.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
 pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
     let mut mi = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
         ..Default::default()
     };
 
     unsafe {
-        if !GetMonitorInfoW(hmonitor, &mut mi).as_bool() {
+        if !GetMonitorInfoW(hmonitor, &raw mut mi).as_bool() {
             return Err(last_error_as_brightness_error("GetMonitorInfoW"));
         }
 
@@ -174,6 +189,11 @@ pub struct WindowsOverlay {
 
 impl WindowsOverlay {
     /// Creates a new overlay window for the specified monitor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window creation, positioning, or opacity setting fails.
+    #[must_use]
     pub fn new(hmonitor: HMONITOR) -> Result<Self> {
         let hwnd = create_overlay_window()?;
         position_window_fullscreen(hwnd.as_raw(), hmonitor)?;
@@ -218,6 +238,10 @@ impl DimmingOverlay for WindowsOverlay {
 }
 
 /// Shows the overlay window.
+///
+/// # Errors
+///
+/// This method is currently infallible but returns `Result` for consistency.
 pub fn show_window(hwnd: HWND) -> Result<()> {
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -226,6 +250,10 @@ pub fn show_window(hwnd: HWND) -> Result<()> {
 }
 
 /// Hides the overlay window.
+///
+/// # Errors
+///
+/// This method is currently infallible but returns `Result` for consistency.
 pub fn hide_window(hwnd: HWND) -> Result<()> {
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
@@ -239,11 +267,16 @@ pub fn hide_window(hwnd: HWND) -> Result<()> {
 ///
 /// * `hwnd` - The window handle.
 /// * `opacity` - Opacity value from 0.0 (invisible) to 1.0 (fully opaque).
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
 pub fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     // Clamp opacity to 0.0 - 1.0
     let opacity = opacity.clamp(0.0, 1.0);
 
-    // Convert to 0-255
+    // Convert to 0-255 safely
+    #[allow(clippy::cast_possible_truncation)]
     let alpha = (opacity * 255.0).round() as u8;
 
     unsafe {
@@ -281,6 +314,14 @@ impl OverlayManager {
     /// * `monitor_id` - The unique identifier of the monitor.
     /// * `hmonitor` - The Windows monitor handle (used for positioning).
     /// * `opacity` - The desired opacity (0-100).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window creation, positioning, or opacity setting fails.
+    ///
+    /// # Panics
+    ///
+    /// This method may panic if the internal state is inconsistent during insertion or retrieval.
     pub fn update(
         &mut self,
         monitor_id: &MonitorId,
