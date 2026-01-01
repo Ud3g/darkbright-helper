@@ -3,23 +3,23 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, GetStockObject, BLACK_BRUSH, HBRUSH, HMONITOR, MONITORINFO,
+    BLACK_BRUSH, GetMonitorInfoW, GetStockObject, HBRUSH, HMONITOR, MONITORINFO,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, RegisterClassExW, SetLayeredWindowAttributes, SetWindowPos,
-    ShowWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE,
-    SW_HIDE, SW_SHOW, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, HWND_TOPMOST,
+    LWA_ALPHA, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SetLayeredWindowAttributes,
+    SetWindowPos, ShowWindow, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
     WS_EX_TRANSPARENT, WS_POPUP,
 };
+use windows::core::{PCWSTR, w};
 
+use super::{SafeHwnd, last_error_as_brightness_error};
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 use crate::platform::DimmingOverlay;
-use super::{last_error_as_brightness_error, SafeHwnd};
 
 /// The class name for the overlay window.
 const OVERLAY_CLASS_NAME: PCWSTR = w!("DarkBrightOverlayClass");
@@ -119,7 +119,7 @@ pub fn create_overlay_window() -> Result<SafeHwnd> {
             None,          // Parent
             None,          // Menu
             GetModuleHandleW(None).unwrap_or_default(),
-            None,          // lpParam
+            None, // lpParam
         );
 
         if hwnd.0 == 0 {
