@@ -21,21 +21,21 @@ pub mod overlay;
 // Monitor Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Gibt das Handle des Monitors zurück, über dem sich der Mauszeiger aktuell befindet.
+/// Returns the handle of the monitor under the current mouse cursor position.
 ///
-/// Verwendet `GetCursorPos` und `MonitorFromPoint`. Falls die Mausposition nicht
-/// ermittelt werden kann, wird der primäre Monitor (oder der am nächsten gelegene) zurückgegeben.
+/// Uses `GetCursorPos` and `MonitorFromPoint`. If the cursor position cannot
+/// be determined, returns the primary monitor (or the nearest one).
 ///
 /// # Errors
 ///
-/// Gibt einen Fehler zurück, wenn die Windows-API fehlschlägt.
+/// Returns an error if the Windows API call fails.
 pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
     let mut cursor_pos = POINT::default();
     unsafe {
         GetCursorPos(&mut cursor_pos).to_brightness_result("GetCursorPos")?;
 
-        // MONITOR_DEFAULTTONEAREST stellt sicher, dass wir immer ein Handle erhalten,
-        // auch wenn der Punkt außerhalb aller Monitore liegt.
+        // MONITOR_DEFAULTTONEAREST ensures we always get a handle,
+        // even if the point is outside all monitors.
         let hmonitor = MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST);
         if hmonitor.0 == 0 {
             return Err(BrightnessError::windows_api("MonitorFromPoint", 0));

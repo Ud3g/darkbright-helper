@@ -11,31 +11,31 @@ use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::{BrightnessError, Result};
 
-/// Haupt-Controller für die Helligkeitssteuerung.
+/// Main controller for brightness management.
 ///
-/// Diese Struktur verwaltet die erkannten Monitore, deren Zustände,
-/// die Dimming-Overlays sowie das On-Screen Display (OSD).
-pub struct BrightnessController {
-    /// Liste der erkannten DDC/CI-Monitore.
-    pub monitors: Vec<DdcMonitor>,
-    /// Aktueller Zustand (Helligkeit, Overlay) pro Monitor.
-    pub states: HashMap<MonitorId, MonitorState>,
-    /// Verwalter für die Dimming-Overlay-Fenster.
-    pub overlay_manager: OverlayManager,
-    /// Das On-Screen Display zur Anzeige von Änderungen.
-    pub osd: OsdWindow,
-    /// Die geladene Konfiguration.
-    pub config: Config,
-    /// Cache für die Zuordnung von Windows-Handles zu Monitor-IDs (Performance).
+/// This struct manages the detected monitors, their states,
+/// the dimming overlays, and the on-screen display (OSD).
+struct BrightnessController {
+    /// List of detected DDC/CI monitors.
+    monitors: Vec<DdcMonitor>,
+    /// Current state (brightness, overlay) per monitor.
+    states: HashMap<MonitorId, MonitorState>,
+    /// Manager for the dimming overlay windows.
+    overlay_manager: OverlayManager,
+    /// The on-screen display for showing changes.
+    osd: OsdWindow,
+    /// The loaded configuration.
+    config: Config,
+    /// Cache for mapping Windows handles to monitor IDs (performance optimization).
     id_cache: HashMap<isize, MonitorId>,
 }
 
 impl BrightnessController {
-    /// Erstellt eine neue Instanz des `BrightnessController`.
+    /// Creates a new `BrightnessController` instance.
     ///
-    /// Initialisiert das OSD mit den Werten aus der Konfiguration.
-    /// Die Monitore und Zustände werden in Phase 6 beim Anwendungsstart ermittelt.
-    pub fn new(config: Config) -> Result<Self> {
+    /// Initializes the OSD with values from the configuration.
+    /// Monitors and states are populated during application startup (Phase 6).
+    fn new(config: Config) -> Result<Self> {
         let osd = OsdWindow::new(config.osd.opacity, config.osd.timeout_ms)?;
 
         Ok(Self {
@@ -48,15 +48,15 @@ impl BrightnessController {
         })
     }
 
-    /// Verarbeitet eine Nachricht zur Helligkeitssteuerung.
+    /// Processes a brightness control message.
     ///
-    /// Gibt `Ok(true)` zurück, wenn die Anwendung weiterlaufen soll,
-    /// oder `Ok(false)`, wenn ein Herunterfahren angefordert wurde.
+    /// Returns `Ok(true)` if the application should continue running,
+    /// or `Ok(false)` if shutdown was requested.
     ///
     /// # Errors
     ///
-    /// Gibt einen Fehler zurück, wenn die Verarbeitung der Nachricht fehlschlägt.
-    pub fn handle_message(&mut self, message: BrightnessMessage) -> Result<bool> {
+    /// Returns an error if message processing fails.
+    fn handle_message(&mut self, message: BrightnessMessage) -> Result<bool> {
         match message {
             BrightnessMessage::Adjust { monitor_id, delta } => {
                 self.handle_adjust(monitor_id, delta)?;
@@ -74,17 +74,17 @@ impl BrightnessController {
         Ok(true)
     }
 
-    /// Wendet eine relative Helligkeitsänderung an.
+    /// Applies a relative brightness adjustment.
     ///
-    /// Ermittelt den Zielmonitor (Mausposition), berechnet die neuen Werte,
-    /// zeigt das OSD sofort an und führt dann das DDC-Update durch.
+    /// Determines the target monitor (mouse position), calculates new values,
+    /// shows the OSD immediately, and then performs the DDC update.
     fn handle_adjust(&mut self, monitor_id: Option<MonitorId>, delta: i8) -> Result<()> {
-        // 1. Ziel-Monitor und Handle ermitteln (Schritt #34)
-        // Wir benötigen das HMONITOR Handle für die OSD- und Overlay-Positionierung.
+        // 1. Determine target monitor and handle
+        // We need the HMONITOR handle for OSD and overlay positioning.
         let hmonitor = get_monitor_under_cursor()?;
 
-        // Wenn keine ID übergeben wurde, identifizieren wir den Monitor unter dem Cursor.
-        // Wir verwenden einen Cache, um langsame Registry-Zugriffe (EDID) zu vermeiden.
+        // If no ID was provided, identify the monitor under the cursor.
+        // We use a cache to avoid slow registry accesses (EDID lookup).
         let target_id = match monitor_id {
             Some(id) => id,
             None => {
@@ -98,7 +98,7 @@ impl BrightnessController {
             }
         };
 
-        // 2. Zustand und Monitor-Objekt finden
+        // 2. Find state and monitor object
         let state = self.states.get_mut(&target_id).ok_or_else(|| {
             BrightnessError::MonitorNotFound(target_id.to_string())
         })?;
@@ -107,49 +107,49 @@ impl BrightnessController {
             BrightnessError::MonitorNotFound(target_id.to_string())
         })?;
 
-        // 3. Neue Helligkeit berechnen (Schritt #37)
+        // 3. Calculate new brightness
         let adjustment = calculate_adjustment(
             state.effective_brightness(),
             state.overlay_opacity,
             delta
         );
 
-        // 4. Optimistisches Update (Schritt #38)
+        // 4. Optimistic update
         state.set_pending(adjustment.hardware_brightness);
         let old_overlay = state.overlay_opacity;
         state.overlay_opacity = adjustment.overlay_opacity;
 
-        // Overlay aktualisieren (Software-Ebene ist sofort wirksam)
+        // Update overlay (software layer is immediately effective)
         if state.overlay_opacity != old_overlay {
             self.overlay_manager.update(&target_id, hmonitor, state.overlay_opacity)?;
         }
 
-        // OSD anzeigen oder aktualisieren
+        // Show or update OSD
         if self.osd.is_visible() {
             self.osd.update(state)?;
         } else {
             self.osd.show(hmonitor, state)?;
         }
 
-        // 5. Hardware-Update via DDC (Blocking im Controller-Thread)
+        // 5. Hardware update via DDC (blocking in controller thread)
         log::debug!("Setting DDC brightness for {}: {}%", target_id, adjustment.hardware_brightness);
         
         match monitor.set_brightness(adjustment.hardware_brightness as u32) {
             Ok(_) => {
                 state.confirm_brightness();
-                // OSD zur Bestätigung aktualisieren (entfernt ggf. Error-Färbung)
+                // Update OSD to confirm (removes error coloring if present)
                 self.osd.update(state)?;
             }
             Err(e) => {
-                log::error!("DDC-Fehler für {}: {}", target_id, e);
-                // 6. Fehler-Rollback (Schritt #39)
+                log::error!("DDC error for {}: {}", target_id, e);
+                // 6. Error rollback
                 state.revert_pending();
                 state.overlay_opacity = old_overlay;
                 
-                // Overlay auf alten Wert zurücksetzen
+                // Revert overlay to old value
                 let _ = self.overlay_manager.update(&target_id, hmonitor, old_overlay);
                 
-                // OSD auf Fehlerzustand setzen
+                // Set OSD to error state
                 self.osd.update_error(state)?;
                 return Err(e);
             }
@@ -158,39 +158,48 @@ impl BrightnessController {
         Ok(())
     }
 
-    /// Setzt einen absoluten Helligkeitswert für einen Monitor.
+    /// Sets an absolute brightness value for a monitor.
+    ///
+    /// # Arguments
+    ///
+    /// * `monitor_id` - Target monitor (None = monitor under cursor).
+    /// * `value` - Target brightness (0-100).
     fn handle_set_absolute(&mut self, _monitor_id: Option<MonitorId>, _value: u8) -> Result<()> {
-        // Platzhalter für zukünftige Erweiterungen (z.B. feste Helligkeit via CLI-Befehl)
+        // Placeholder for future extensions (e.g., fixed brightness via CLI command)
         Ok(())
     }
 
-    /// Aktualisiert die Liste der Monitore und liest deren Zustände neu ein.
+    /// Refreshes the monitor list and re-reads their states.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if monitor enumeration or DDC communication fails.
     fn handle_refresh(&mut self) -> Result<()> {
         log::info!("Refreshing monitor list and brightness levels...");
 
-        // 1. Physische Monitore neu enumerieren
+        // 1. Re-enumerate physical monitors
         let hmonitors = enumerate_monitors()?;
         let mut new_monitors = Vec::new();
 
-        // Den ID-Cache leeren, da sich Handles geändert haben könnten
+        // Clear ID cache since handles may have changed
         self.id_cache.clear();
 
         for hmonitor in hmonitors {
-            // MonitorId ermitteln (und cachen)
+            // Determine MonitorId (and cache it)
             let monitor_id = get_monitor_id(hmonitor)?;
             self.id_cache.insert(hmonitor.0, monitor_id.clone());
 
-            // Physische Handles für DDC/CI
+            // Physical handles for DDC/CI
             let physicals = get_physical_monitors(hmonitor)?;
 
             for p_mon in physicals {
                 let mut ddc_mon = DdcMonitor::new(p_mon, monitor_id.clone());
 
-                // Aktuelle Helligkeit via DDC lesen
+                // Read current brightness via DDC
                 match ddc_mon.get_brightness() {
                     Ok(val) => {
                         let val_u8 = val as u8;
-                        // Zustand aktualisieren oder neu anlegen
+                        // Update or create state
                         self.states
                             .entry(monitor_id.clone())
                             .and_modify(|s| s.update_from_ddc(val_u8))
@@ -199,7 +208,7 @@ impl BrightnessController {
                         new_monitors.push(ddc_mon);
                     }
                     Err(e) => log::warn!(
-                        "Helligkeit konnte für {} nicht gelesen werden: {}",
+                        "Could not read brightness for {}: {}",
                         monitor_id,
                         e
                     ),
