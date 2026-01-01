@@ -396,6 +396,10 @@ fn update_osd_state(state: &MonitorState, is_error: bool) {
 }
 
 /// Registers the window class for the OSD window if not already registered.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
 pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
     REGISTER_CLASS_ONCE
         .get_or_init(|| {
@@ -439,6 +443,11 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
 /// - Transparent (click-through)
 /// - Tool window (no taskbar)
 /// - Topmost
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if window class registration or
+/// `CreateWindowExW` fails.
 pub fn create_osd_window() -> Result<SafeHwnd> {
     let class_name = ensure_osd_class_registered()?;
 
@@ -453,7 +462,7 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
             style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
-            0, // Größe wird in Schritt 26 berechnet
+            0, // Size will be set by position_osd_window()
             0,
             None,
             None,
@@ -470,7 +479,15 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
 }
 
 /// Positions the OSD window at the bottom-center of the specified monitor.
-/// (Step #26)
+///
+/// # Arguments
+///
+/// * `hwnd` - The OSD window handle.
+/// * `hmonitor` - The monitor to position the OSD on.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
 pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
     let mut mi = MONITORINFO {
         cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -505,6 +522,15 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
 }
 
 /// Sets the overall opacity of the OSD window.
+///
+/// # Arguments
+///
+/// * `hwnd` - The OSD window handle.
+/// * `opacity` - Opacity value from 0.0 (invisible) to 1.0 (fully opaque).
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
 pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     unsafe {
@@ -516,7 +542,9 @@ pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
 }
 
 /// Manages the On-Screen Display (OSD) window.
-/// (Step #33)
+///
+/// Provides methods to show, hide, and update the brightness indicator
+/// with automatic timeout-based hiding.
 pub struct OsdWindow {
     hwnd: SafeHwnd,
     timeout_ms: u32,
@@ -524,6 +552,15 @@ pub struct OsdWindow {
 
 impl OsdWindow {
     /// Creates a new OsdWindow.
+    ///
+    /// # Arguments
+    ///
+    /// * `opacity` - Window opacity from 0.0 to 1.0.
+    /// * `timeout_ms` - Auto-hide timeout in milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window creation or opacity setting fails.
     pub fn new(opacity: f32, timeout_ms: u32) -> Result<Self> {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
@@ -532,6 +569,15 @@ impl OsdWindow {
     }
 
     /// Shows the OSD for a specific monitor with the given state.
+    ///
+    /// # Arguments
+    ///
+    /// * `hmonitor` - The monitor to display the OSD on.
+    /// * `state` - The current monitor brightness state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window positioning fails.
     pub fn show(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
         position_osd_window(self.hwnd.as_raw(), hmonitor)?;
         update_osd_state(state, false);
@@ -545,7 +591,16 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Shows the OSD with an error indicator.
+    /// Shows the OSD with an error indicator (red progress bar).
+    ///
+    /// # Arguments
+    ///
+    /// * `hmonitor` - The monitor to display the OSD on.
+    /// * `state` - The current monitor brightness state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window positioning fails.
     pub fn show_error(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
         position_osd_window(self.hwnd.as_raw(), hmonitor)?;
         update_osd_state(state, true);
@@ -559,8 +614,8 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Hides the OSD window.
-    pub fn hide(&mut self) -> Result<()> {
+    /// Hides the OSD window immediately.
+    pub fn hide(&self) -> Result<()> {
         unsafe {
             let _ = ShowWindow(self.hwnd.as_raw(), SW_HIDE);
         }
@@ -568,6 +623,12 @@ impl OsdWindow {
     }
 
     /// Triggers a redraw of the OSD with updated state.
+    ///
+    /// Also resets the auto-hide timer.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current monitor brightness state.
     pub fn update(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, false);
         unsafe {
@@ -578,7 +639,13 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Triggers a redraw of the OSD with error state.
+    /// Triggers a redraw of the OSD with error state (red progress bar).
+    ///
+    /// Also resets the auto-hide timer.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current monitor brightness state.
     pub fn update_error(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, true);
         unsafe {
@@ -595,7 +662,7 @@ impl OsdWindow {
         }
     }
 
-    /// Returns true if the OSD window is currently visible.
+    /// Returns `true` if the OSD window is currently visible.
     pub fn is_visible(&self) -> bool {
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
@@ -603,7 +670,7 @@ impl OsdWindow {
         }
     }
 
-    /// Returns the raw window handle.
+    /// Returns the raw window handle for advanced operations.
     pub fn hwnd(&self) -> HWND {
         self.hwnd.as_raw()
     }
