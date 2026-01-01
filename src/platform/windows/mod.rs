@@ -6,8 +6,9 @@
 //! - Dimming overlay windows
 //! - On-screen display (OSD)
 
-use windows::Win32::Foundation::{HANDLE, HWND};
-use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+use windows::Win32::Foundation::{HANDLE, HWND, POINT};
+use windows::Win32::Graphics::Gdi::{MonitorFromPoint, HMONITOR, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetCursorPos};
 
 use crate::error::{BrightnessError, Result};
 
@@ -15,6 +16,36 @@ pub mod ddc;
 pub mod hotkey;
 pub mod osd;
 pub mod overlay;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Monitor Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Gibt das Handle des Monitors zurück, über dem sich der Mauszeiger aktuell befindet.
+///
+/// Verwendet `GetCursorPos` und `MonitorFromPoint`. Falls die Mausposition nicht
+/// ermittelt werden kann, wird der primäre Monitor (oder der am nächsten gelegene) zurückgegeben.
+///
+/// # Errors
+///
+/// Gibt einen Fehler zurück, wenn die Windows-API fehlschlägt.
+pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
+    let mut cursor_pos = POINT::default();
+    unsafe {
+        if !GetCursorPos(&mut cursor_pos).as_bool() {
+            return Err(last_error_as_brightness_error("GetCursorPos"));
+        }
+
+        // MONITOR_DEFAULTTONEAREST stellt sicher, dass wir immer ein Handle erhalten,
+        // auch wenn der Punkt außerhalb aller Monitore liegt.
+        let hmonitor = MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST);
+        if hmonitor.0 == 0 {
+            return Err(BrightnessError::windows_api("MonitorFromPoint", 0));
+        }
+
+        Ok(hmonitor)
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Error Helpers
