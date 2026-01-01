@@ -1,10 +1,15 @@
 use std::collections::HashMap;
+use std::sync::mpsc;
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{BrightnessMessage, MonitorId, MonitorState};
 use darkbright_helper::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
+};
+use darkbright_helper::platform::windows::hotkey::{
+    BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
+    HotkeyManager, parse_hotkey,
 };
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
