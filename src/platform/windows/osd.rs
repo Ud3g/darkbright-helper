@@ -3,7 +3,7 @@
 use std::sync::OnceLock;
 
 use windows::core::{w, PCWSTR};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, GetStockObject, GRAY_BRUSH, HBRUSH, HMONITOR, MONITORINFO,
 };
@@ -157,7 +157,7 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
 pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     unsafe {
-        SetLayeredWindowAttributes(hwnd, Default::default(), alpha, LWA_ALPHA).map_err(|e| {
+        SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| {
             BrightnessError::windows_api("SetLayeredWindowAttributes", e.code().0 as u32)
         })?;
     }
