@@ -55,7 +55,7 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
         .get_or_init(|| {
             unsafe {
                 let hinstance = GetModuleHandleW(None).map_err(|e| {
-                    BrightnessError::windows_api("GetModuleHandleW", e.code().0 as u32)
+                    BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
                 })?;
 
                 // Use the stock BLACK_BRUSH for the background.
@@ -104,7 +104,6 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `CreateWindowExW` or class registration fails.
-#[must_use]
 pub fn create_overlay_window() -> Result<SafeHwnd> {
     let class_name = ensure_overlay_class_registered()?;
 
@@ -174,7 +173,7 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
             height,
             SWP_NOACTIVATE,
         )
-        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0 as u32))?;
+        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned()))?;
     }
 
     Ok(())
@@ -193,7 +192,6 @@ impl WindowsOverlay {
     /// # Errors
     ///
     /// Returns an error if window creation, positioning, or opacity setting fails.
-    #[must_use]
     pub fn new(hmonitor: HMONITOR) -> Result<Self> {
         let hwnd = create_overlay_window()?;
         position_window_fullscreen(hwnd.as_raw(), hmonitor)?;
@@ -276,12 +274,12 @@ pub fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
 
     // Convert to 0-255 safely
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity * 255.0).round() as u8;
 
     unsafe {
         SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| {
-            BrightnessError::windows_api("SetLayeredWindowAttributes", e.code().0 as u32)
+            BrightnessError::windows_api("SetLayeredWindowAttributes", e.code().0.cast_unsigned())
         })?;
     }
 
@@ -301,6 +299,7 @@ impl Default for OverlayManager {
 
 impl OverlayManager {
     /// Creates a new overlay manager.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             overlays: HashMap::new(),
@@ -348,7 +347,7 @@ impl OverlayManager {
         position_window_fullscreen(overlay.hwnd.as_raw(), hmonitor)?;
 
         // Update opacity and visibility
-        overlay.set_opacity(opacity as f32 / 100.0)?;
+        overlay.set_opacity(f32::from(opacity) / 100.0)?;
         if !overlay.is_visible() {
             overlay.show()?;
         }
