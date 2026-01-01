@@ -77,8 +77,9 @@ pub fn last_error_as_brightness_error(function: impl Into<String>) -> Brightness
     BrightnessError::windows_api(function, get_last_error_code())
 }
 
-/// Checks if the last Windows error indicates success (ERROR_SUCCESS = 0).
+/// Checks if the last Windows error indicates success (`ERROR_SUCCESS` = 0).
 #[inline]
+#[must_use]
 pub fn last_error_is_success() -> bool {
     get_last_error_code() == 0
 }
@@ -180,7 +181,7 @@ impl SafeHandle {
         self.handle
     }
 
-    /// Returns true if this handle is valid (non-zero and not INVALID_HANDLE_VALUE).
+    /// Returns true if this handle is valid (non-zero and not `INVALID_HANDLE_VALUE`).
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
@@ -230,7 +231,7 @@ pub trait WindowsResultExt<T> {
 
 impl<T> WindowsResultExt<T> for windows::core::Result<T> {
     fn to_brightness_result(self, function: &str) -> Result<T> {
-        self.map_err(|e| BrightnessError::windows_api(function, e.code().0 as u32))
+        self.map_err(|e| BrightnessError::windows_api(function, e.code().0.cast_unsigned()))
     }
 }
 

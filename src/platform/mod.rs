@@ -21,7 +21,7 @@ pub mod windows;
 /// # Platform Implementations
 ///
 /// - **Windows**: GDI layered window with `SetLayeredWindowAttributes`
-/// - **Linux** (future): X11 XComposite or Wayland layer-shell
+/// - **Linux** (future): X11 `XComposite` or Wayland layer-shell
 pub trait DimmingOverlay {
     /// Sets the overlay opacity.
     ///
