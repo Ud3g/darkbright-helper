@@ -81,8 +81,9 @@ impl HotkeyManager {
     /// Panics if the current process module handle cannot be retrieved.
     pub fn new(sender: Sender<BrightnessMessage>, step_percent: u8) -> Result<Self> {
         let hinstance = unsafe {
-            GetModuleHandleW(None)
-                .map_err(|e| BrightnessError::windows_api("GetModuleHandleW", e.code().0 as u32))?
+            GetModuleHandleW(None).map_err(|e| {
+                BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
+            })?
         };
         let class_name = w!("DarkBrightHotkeyWindow");
 
@@ -94,7 +95,7 @@ impl HotkeyManager {
         };
 
         unsafe {
-            RegisterClassW(&wnd_class);
+            RegisterClassW(&raw const wnd_class);
         }
 
         let hwnd = unsafe {
@@ -122,7 +123,7 @@ impl HotkeyManager {
             hwnd,
             registered_ids: Vec::new(),
             sender,
-            step_percent: step_percent as i8,
+            step_percent: step_percent.cast_signed(),
         })
     }
 
@@ -144,8 +145,9 @@ impl HotkeyManager {
         vk: VIRTUAL_KEY,
     ) -> Result<()> {
         unsafe {
-            RegisterHotKey(self.hwnd, id, modifiers, u32::from(vk.0))
-                .map_err(|e| BrightnessError::windows_api("RegisterHotKey", e.code().0 as u32))?;
+            RegisterHotKey(self.hwnd, id, modifiers, u32::from(vk.0)).map_err(|e| {
+                BrightnessError::windows_api("RegisterHotKey", e.code().0.cast_unsigned())
+            })?;
         }
         self.registered_ids.push(id);
         Ok(())
@@ -158,8 +160,9 @@ impl HotkeyManager {
     /// Returns `BrightnessError::WindowsApi` if unregistration fails.
     pub fn unregister_hotkey(&mut self, id: i32) -> Result<()> {
         unsafe {
-            UnregisterHotKey(self.hwnd, id)
-                .map_err(|e| BrightnessError::windows_api("UnregisterHotKey", e.code().0 as u32))?;
+            UnregisterHotKey(self.hwnd, id).map_err(|e| {
+                BrightnessError::windows_api("UnregisterHotKey", e.code().0.cast_unsigned())
+            })?;
         }
         self.registered_ids.retain(|&x| x != id);
         Ok(())
@@ -175,9 +178,11 @@ impl HotkeyManager {
             // > 0: Message retrieved
             // 0: WM_QUIT received
             // -1: Error
-            while GetMessageW(&mut msg, HWND::default(), 0, 0).0 > 0 {
+            while GetMessageW(&raw mut msg, HWND::default(), 0, 0).0 > 0 {
                 if msg.message == WM_HOTKEY {
-                    // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey
+                    // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey.
+                    // Cast is safe as we only register small positive IDs (1-4).
+                    #[allow(clippy::cast_possible_truncation)]
                     let id = msg.wParam.0 as i32;
                     let delta = match id {
                         BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => self.step_percent,
@@ -193,8 +198,8 @@ impl HotkeyManager {
                     }
                 }
 
-                let _ = TranslateMessage(&msg);
-                let _ = DispatchMessageW(&msg);
+                let _ = TranslateMessage(&raw const msg);
+                let _ = DispatchMessageW(&raw const msg);
             }
         }
     }
@@ -253,8 +258,7 @@ impl std::fmt::Display for ParsedHotkey {
         let key_name = VK_TO_NAME
             .iter()
             .find(|(_, vk)| *vk == self.vk_code)
-            .map(|(name, _)| *name)
-            .unwrap_or("Unknown");
+            .map_or("Unknown", |(name, _)| *name);
 
         parts.push(key_name);
         write!(f, "{}", parts.join("+"))
@@ -416,7 +420,6 @@ static VK_TO_NAME: LazyLock<Vec<(&'static str, VIRTUAL_KEY)>> = LazyLock::new(||
 /// - The string is empty or contains only modifiers.
 /// - An unknown key name is encountered.
 /// - No valid key (only modifiers) is specified.
-#[must_use]
 pub fn parse_hotkey(s: &str) -> Result<ParsedHotkey> {
     let s = s.trim();
 
