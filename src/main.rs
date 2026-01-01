@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{BrightnessMessage, MonitorId, MonitorState};
-use darkbright_helper::platform::windows::ddc::{get_monitor_id, DdcMonitor};
+use darkbright_helper::platform::windows::ddc::{
+    enumerate_monitors, get_monitor_id, get_physical_monitors, DdcMonitor,
+};
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
@@ -24,6 +26,8 @@ pub struct BrightnessController {
     pub osd: OsdWindow,
     /// Die geladene Konfiguration.
     pub config: Config,
+    /// Cache für die Zuordnung von Windows-Handles zu Monitor-IDs (Performance).
+    id_cache: HashMap<isize, MonitorId>,
 }
 
 impl BrightnessController {
@@ -40,6 +44,7 @@ impl BrightnessController {
             overlay_manager: OverlayManager::default(),
             osd,
             config,
+            id_cache: HashMap::new(),
         })
     }
 
@@ -79,9 +84,18 @@ impl BrightnessController {
         let hmonitor = get_monitor_under_cursor()?;
 
         // Wenn keine ID übergeben wurde, identifizieren wir den Monitor unter dem Cursor.
+        // Wir verwenden einen Cache, um langsame Registry-Zugriffe (EDID) zu vermeiden.
         let target_id = match monitor_id {
             Some(id) => id,
-            None => get_monitor_id(hmonitor)?,
+            None => {
+                if let Some(id) = self.id_cache.get(&hmonitor.0) {
+                    id.clone()
+                } else {
+                    let id = get_monitor_id(hmonitor)?;
+                    self.id_cache.insert(hmonitor.0, id.clone());
+                    id
+                }
+            }
         };
 
         // 2. Zustand und Monitor-Objekt finden
@@ -152,7 +166,48 @@ impl BrightnessController {
 
     /// Aktualisiert die Liste der Monitore und liest deren Zustände neu ein.
     fn handle_refresh(&mut self) -> Result<()> {
-        // TODO: Implementierung folgt in Schritt #40
+        log::info!("Refreshing monitor list and brightness levels...");
+
+        // 1. Physische Monitore neu enumerieren
+        let hmonitors = enumerate_monitors()?;
+        let mut new_monitors = Vec::new();
+
+        // Den ID-Cache leeren, da sich Handles geändert haben könnten
+        self.id_cache.clear();
+
+        for hmonitor in hmonitors {
+            // MonitorId ermitteln (und cachen)
+            let monitor_id = get_monitor_id(hmonitor)?;
+            self.id_cache.insert(hmonitor.0, monitor_id.clone());
+
+            // Physische Handles für DDC/CI
+            let physicals = get_physical_monitors(hmonitor)?;
+
+            for p_mon in physicals {
+                let mut ddc_mon = DdcMonitor::new(p_mon, monitor_id.clone());
+
+                // Aktuelle Helligkeit via DDC lesen
+                match ddc_mon.get_brightness() {
+                    Ok(val) => {
+                        let val_u8 = val as u8;
+                        // Zustand aktualisieren oder neu anlegen
+                        self.states
+                            .entry(monitor_id.clone())
+                            .and_modify(|s| s.update_from_ddc(val_u8))
+                            .or_insert_with(|| MonitorState::new(val_u8));
+
+                        new_monitors.push(ddc_mon);
+                    }
+                    Err(e) => log::warn!(
+                        "Helligkeit konnte für {} nicht gelesen werden: {}",
+                        monitor_id,
+                        e
+                    ),
+                }
+            }
+        }
+
+        self.monitors = new_monitors;
         Ok(())
     }
 }
