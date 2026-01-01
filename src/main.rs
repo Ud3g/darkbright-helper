@@ -369,6 +369,7 @@ fn main() {
     // Phase 6, Step 46: Main Loop
     log::info!("Entering main event loop...");
     for msg in rx {
+        log::debug!("Main loop received message: {:?}", msg);
         match controller.handle_message(msg) {
             Ok(should_continue) => {
                 if !should_continue {
