@@ -54,9 +54,8 @@ pub fn enumerate_monitors() -> Result<Vec<HMONITOR>> {
             HDC::default(),
             None,
             Some(monitor_enum_proc),
-            LPARAM(&mut monitors as *mut _ as isize),
-        )
-        .as_bool()
+            LPARAM(&raw mut monitors as isize),
+        ).as_bool()
         {
             Ok(monitors)
         } else {
@@ -98,6 +97,7 @@ impl std::fmt::Debug for PhysicalMonitor {
 
 impl PhysicalMonitor {
     /// Returns the raw handle to the physical monitor.
+    #[must_use]
     pub fn handle(&self) -> HANDLE {
         self.inner.hPhysicalMonitor
     }
@@ -112,9 +112,9 @@ impl Drop for PhysicalMonitor {
     }
 }
 
-/// Gets the physical monitors associated with a monitor handle (HMONITOR).
+/// Gets the physical monitors associated with a monitor handle (`HMONITOR`).
 ///
-/// A single HMONITOR (logical monitor) can map to multiple physical monitors
+/// A single `HMONITOR` (logical monitor) can map to multiple physical monitors
 /// (e.g., in daisy-chain configurations), though usually it's 1:1.
 ///
 /// # Errors
@@ -124,10 +124,10 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
     let mut count = 0;
 
     unsafe {
-        GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, &mut count).map_err(|e| {
+        GetNumberOfPhysicalMonitorsFromHMONITOR(hmonitor, &raw mut count).map_err(|e| {
             BrightnessError::windows_api(
                 "GetNumberOfPhysicalMonitorsFromHMONITOR",
-                e.code().0 as u32,
+                e.code().0.cast_unsigned(),
             )
         })?;
     }
@@ -140,7 +140,10 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
 
     unsafe {
         GetPhysicalMonitorsFromHMONITOR(hmonitor, &mut physical_monitors).map_err(|e| {
-            BrightnessError::windows_api("GetPhysicalMonitorsFromHMONITOR", e.code().0 as u32)
+            BrightnessError::windows_api(
+                "GetPhysicalMonitorsFromHMONITOR",
+                e.code().0.cast_unsigned(),
+            )
         })?;
     }
 
@@ -163,7 +166,7 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
     let mut length = 0;
 
     unsafe {
-        if GetCapabilitiesStringLength(monitor.handle(), &mut length) == 0 {
+        if GetCapabilitiesStringLength(monitor.handle(), &raw mut length) == 0 {
             return Err(last_error_as_brightness_error(
                 "GetCapabilitiesStringLength",
             ));
@@ -234,8 +237,8 @@ pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, 
                 monitor.handle(),
                 vcp_code,
                 None,
-                &mut current_value,
-                Some(&mut max_value as *mut _),
+                &raw mut current_value,
+                Some(&raw mut max_value),
             ) != 0
             {
                 Ok((current_value, max_value))
@@ -285,6 +288,7 @@ pub struct DdcMonitor {
 
 impl DdcMonitor {
     /// Creates a new `DdcMonitor` instance.
+    #[must_use]
     pub fn new(handle: PhysicalMonitor, id: MonitorId) -> Self {
         Self {
             handle,
@@ -294,11 +298,13 @@ impl DdcMonitor {
     }
 
     /// Returns the monitor's unique identifier.
+    #[must_use]
     pub fn id(&self) -> &MonitorId {
         &self.id
     }
 
     /// Returns the cached brightness value, if available.
+    #[must_use]
     pub fn cached_brightness(&self) -> Option<u32> {
         self.cached_brightness
     }
@@ -306,6 +312,10 @@ impl DdcMonitor {
     /// Reads the current brightness from the monitor via DDC/CI.
     ///
     /// Updates the cached brightness value on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WindowsApi` error if the brightness cannot be read.
     pub fn get_brightness(&mut self) -> Result<u32> {
         let (current, _) = get_vcp_feature(&self.handle, 0x10)?;
         self.cached_brightness = Some(current);
@@ -315,6 +325,10 @@ impl DdcMonitor {
     /// Sets the brightness of the monitor via DDC/CI.
     ///
     /// Updates the cached brightness value on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WindowsApi` error if the brightness cannot be set.
     pub fn set_brightness(&mut self, value: u32) -> Result<()> {
         set_vcp_feature(&self.handle, 0x10, value)?;
         self.cached_brightness = Some(value);
@@ -338,7 +352,11 @@ mod tests {
 // EDID & Monitor ID Implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Retrieves the MonitorId for a given HMONITOR by reading and parsing the EDID.
+/// Retrieves the `MonitorId` for a given `HMONITOR` by reading and parsing the EDID.
+///
+/// # Errors
+///
+/// Returns an error if the EDID cannot be read or parsed.
 pub fn get_monitor_id(hmonitor: HMONITOR) -> Result<MonitorId> {
     let edid = get_edid_from_hmonitor(hmonitor)?;
     parse_edid(&edid).ok_or_else(|| {
@@ -346,25 +364,36 @@ pub fn get_monitor_id(hmonitor: HMONITOR) -> Result<MonitorId> {
     })
 }
 
-/// Reads the EDID binary data for a given HMONITOR using SetupAPI.
+/// Reads the EDID binary data for a given `HMONITOR` using `SetupAPI`.
+///
+/// # Errors
+///
+/// Returns a `WindowsApi` error if the EDID cannot be retrieved.
 fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
     // 1. Get Monitor Device Name (e.g. \\.\DISPLAY1)
-    let mut mi = MONITORINFOEXW::default();
-    mi.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    let mut mi = MONITORINFOEXW {
+        monitorInfo: windows::Win32::Graphics::Gdi::MONITORINFO {
+            cbSize: u32::try_from(std::mem::size_of::<MONITORINFOEXW>()).unwrap_or(0),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     unsafe {
-        if GetMonitorInfoW(hmonitor, &mut mi as *mut _ as *mut _).as_bool() == false {
+        if !GetMonitorInfoW(hmonitor, (&raw mut mi).cast()).as_bool() {
             return Err(last_error_as_brightness_error("GetMonitorInfoW"));
         }
     }
 
     // 2. Get Monitor Device ID (Instance ID)
-    let mut dd = DISPLAY_DEVICEW::default();
-    dd.cb = std::mem::size_of::<DISPLAY_DEVICEW>() as u32;
+    let mut dd = DISPLAY_DEVICEW {
+        cb: u32::try_from(std::mem::size_of::<DISPLAY_DEVICEW>()).unwrap_or(0),
+        ..Default::default()
+    };
 
     // We need to call EnumDisplayDevices with the device name from MonitorInfo
     unsafe {
-        if EnumDisplayDevicesW(PCWSTR(mi.szDevice.as_ptr()), 0, &mut dd, 0).as_bool() == false {
+        if !EnumDisplayDevicesW(PCWSTR(mi.szDevice.as_ptr()), 0, &raw mut dd, 0).as_bool() {
             return Err(last_error_as_brightness_error("EnumDisplayDevicesW"));
         }
     }
@@ -385,8 +414,22 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
     find_edid_by_instance_id(&target_instance_id)
 }
 
-/// Searches for a monitor with the matching Instance ID in the SetupAPI device list
+/// RAII for `HDEVINFO`
+struct SafeDevInfo(HDEVINFO);
+impl Drop for SafeDevInfo {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SetupDiDestroyDeviceInfoList(self.0);
+        }
+    }
+}
+
+/// Searches for a monitor with the matching Instance ID in the `SetupAPI` device list
 /// and reads its EDID from the registry.
+///
+/// # Errors
+///
+/// Returns an error if the monitor cannot be found in `SetupAPI`.
 fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
     let hdevinfo = unsafe {
         SetupDiGetClassDevsW(
@@ -396,25 +439,18 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
             DIGCF_PRESENT | DIGCF_PROFILE,
         )
     }
-    .map_err(|e| BrightnessError::windows_api("SetupDiGetClassDevsW", e.code().0 as u32))?;
+    .map_err(|e| BrightnessError::windows_api("SetupDiGetClassDevsW", e.code().0.cast_unsigned()))?;
 
-    // RAII for HDEVINFO
-    struct SafeDevInfo(HDEVINFO);
-    impl Drop for SafeDevInfo {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = SetupDiDestroyDeviceInfoList(self.0);
-            }
-        }
-    }
     let _safe_devinfo = SafeDevInfo(hdevinfo);
 
     let mut index = 0;
-    let mut devinfo_data = SP_DEVINFO_DATA::default();
-    devinfo_data.cbSize = std::mem::size_of::<SP_DEVINFO_DATA>() as u32;
+    let mut devinfo_data = SP_DEVINFO_DATA {
+        cbSize: u32::try_from(std::mem::size_of::<SP_DEVINFO_DATA>()).unwrap_or(0),
+        ..Default::default()
+    };
 
     // SetupDiEnumDeviceInfo returns Result<()> in windows 0.52+
-    while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &mut devinfo_data).is_ok() } {
+    while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &raw mut devinfo_data).is_ok() } {
         index += 1;
 
         // Get Instance ID
@@ -423,11 +459,10 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
         unsafe {
             if SetupDiGetDeviceInstanceIdW(
                 hdevinfo,
-                &devinfo_data,
+                &raw const devinfo_data,
                 Some(&mut buffer),
-                Some(&mut required_size),
-            )
-            .is_ok()
+                Some(&raw mut required_size),
+            ).is_ok()
             {
                 let instance_id = String::from_utf16_lossy(&buffer[..required_size as usize - 1]); // -1 for null
 
@@ -445,7 +480,21 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
     ))
 }
 
+/// RAII for `HKEY`
+struct SafeHKey(HKEY);
+impl Drop for SafeHKey {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = RegCloseKey(self.0);
+        }
+    }
+}
+
 /// Reads the "EDID" value from the device's registry key.
+///
+/// # Errors
+///
+/// Returns an error if the registry key cannot be opened or read.
 fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -> Result<Vec<u8>> {
     let hkey = unsafe {
         SetupDiOpenDevRegKey(
@@ -457,17 +506,8 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             KEY_READ.0,
         )
     }
-    .map_err(|e| BrightnessError::windows_api("SetupDiOpenDevRegKey", e.code().0 as u32))?;
+    .map_err(|e| BrightnessError::windows_api("SetupDiOpenDevRegKey", e.code().0.cast_unsigned()))?;
 
-    // RAII for HKEY
-    struct SafeHKey(HKEY);
-    impl Drop for SafeHKey {
-        fn drop(&mut self) {
-            unsafe {
-                let _ = RegCloseKey(self.0);
-            }
-        }
-    }
     let _safe_hkey = SafeHKey(hkey);
 
     // Read "EDID" value
@@ -481,9 +521,9 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             hkey,
             value_name,
             None,
-            Some(&mut data_type),
+            Some(&raw mut data_type),
             None,
-            Some(&mut data_len),
+            Some(&raw mut data_len),
         );
 
         if data_len == 0 {
@@ -498,15 +538,15 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             hkey,
             value_name,
             None,
-            Some(&mut data_type),
+            Some(&raw mut data_type),
             Some(buffer.as_mut_ptr()),
-            Some(&mut data_len),
+            Some(&raw mut data_len),
         );
 
         if let Err(e) = result {
             Err(BrightnessError::windows_api(
                 "RegQueryValueExW",
-                e.code().0 as u32,
+                e.code().0.cast_unsigned(),
             ))
         } else {
             Ok(buffer)
@@ -515,6 +555,7 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
 }
 
 /// Parses basic information from EDID binary data.
+#[must_use]
 fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
     if edid.len() < 128 {
         return None;
