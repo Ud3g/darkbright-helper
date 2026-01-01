@@ -15,7 +15,7 @@ use std::time::Instant;
 /// manufacturer ID, model name, and optional serial number from EDID.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MonitorId {
-    /// 3-character PnP manufacturer ID (e.g., "DEL" for Dell).
+    /// 3-character `PnP` manufacturer ID (e.g., "DEL" for Dell).
     pub manufacturer: String,
     /// Model name from EDID descriptor.
     pub model_name: String,
@@ -25,6 +25,7 @@ pub struct MonitorId {
 
 impl MonitorId {
     /// Creates a new monitor identifier.
+    #[must_use]
     pub fn new(
         manufacturer: impl Into<String>,
         model_name: impl Into<String>,
@@ -38,6 +39,7 @@ impl MonitorId {
     }
 
     /// Returns a display-friendly string for this monitor.
+    #[must_use]
     pub fn display_name(&self) -> String {
         match &self.serial_number {
             Some(sn) => format!("{} {} (SN:{})", self.manufacturer, self.model_name, sn),
@@ -71,6 +73,7 @@ pub struct MonitorState {
 
 impl MonitorState {
     /// Creates a new monitor state with the given initial brightness.
+    #[must_use]
     pub fn new(initial_brightness: u8) -> Self {
         Self {
             cached_brightness: initial_brightness.min(100),
@@ -83,6 +86,7 @@ impl MonitorState {
     /// Returns the effective brightness to display in the OSD.
     ///
     /// Uses pending value if available, otherwise cached value.
+    #[must_use]
     pub fn effective_brightness(&self) -> u8 {
         self.pending_brightness.unwrap_or(self.cached_brightness)
     }
