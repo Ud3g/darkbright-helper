@@ -3,25 +3,25 @@
 //! This module handles the low-level communication with monitors using the
 //! Windows Monitor Configuration API.
 
-use windows::core::PCWSTR;
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
-    SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
-    SetupDiGetDeviceInstanceIdW, SetupDiOpenDevRegKey, DICS_FLAG_GLOBAL, DIGCF_PRESENT,
-    DIGCF_PROFILE, DIREG_DEV, GUID_DEVCLASS_MONITOR, HDEVINFO, SP_DEVINFO_DATA,
+    DICS_FLAG_GLOBAL, DIGCF_PRESENT, DIGCF_PROFILE, DIREG_DEV, GUID_DEVCLASS_MONITOR, HDEVINFO,
+    SP_DEVINFO_DATA, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+    SetupDiGetDeviceInstanceIdW, SetupDiOpenDevRegKey,
 };
 use windows::Win32::Devices::Display::{
     CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
     GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR,
-    GetVCPFeatureAndVCPFeatureReply, SetVCPFeature, PHYSICAL_MONITOR,
+    GetVCPFeatureAndVCPFeatureReply, PHYSICAL_MONITOR, SetVCPFeature,
 };
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
-    EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
-    DISPLAY_DEVICEW,
+    DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR,
+    MONITORINFOEXW,
 };
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegQueryValueExW, HKEY, KEY_READ, REG_VALUE_TYPE,
+    HKEY, KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegQueryValueExW,
 };
+use windows::core::PCWSTR;
 
 use std::thread;
 use std::time::Duration;
@@ -164,7 +164,9 @@ pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
 
     unsafe {
         if GetCapabilitiesStringLength(monitor.handle(), &mut length) == 0 {
-            return Err(last_error_as_brightness_error("GetCapabilitiesStringLength"));
+            return Err(last_error_as_brightness_error(
+                "GetCapabilitiesStringLength",
+            ));
         }
     }
 
@@ -258,13 +260,11 @@ pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, 
 ///
 /// Returns a `WindowsApi` error if the VCP feature cannot be set.
 pub fn set_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8, value: u32) -> Result<()> {
-    retry_ddc_op(|| {
-        unsafe {
-            if SetVCPFeature(monitor.handle(), vcp_code, value) != 0 {
-                Ok(())
-            } else {
-                Err(last_error_as_brightness_error("SetVCPFeature"))
-            }
+    retry_ddc_op(|| unsafe {
+        if SetVCPFeature(monitor.handle(), vcp_code, value) != 0 {
+            Ok(())
+        } else {
+            Err(last_error_as_brightness_error("SetVCPFeature"))
         }
     })
 }
