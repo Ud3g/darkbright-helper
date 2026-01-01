@@ -56,8 +56,15 @@ const BAR_ERROR_COLOR: u32 = 0x000000CC; // BGR: 204, 0, 0
 /// Font size for percentage text.
 const FONT_SIZE: i32 = 18;
 
-/// Thread-local storage for OSD render state.
-/// This allows the window procedure to access the current brightness values.
+/// Icon for hardware brightness (sun symbol).
+const ICON_HARDWARE: &str = "🔆";
+/// Icon for overlay/dimming (sunglasses symbol).
+const ICON_OVERLAY: &str = "🕶";
+/// Width reserved for the icon on the left side.
+const ICON_WIDTH: i32 = 30;
+
+// Thread-local storage for OSD render state.
+// This allows the window procedure to access the current brightness values.
 thread_local! {
     static OSD_STATE: RefCell<OsdRenderState> = RefCell::new(OsdRenderState::default());
 }
@@ -162,9 +169,9 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
     unsafe {
         let width = client_rect.right - client_rect.left;
 
-        // Calculate bar dimensions
-        let bar_width = width - (OSD_PADDING * 2) - 60; // Leave space for percentage text
-        let bar_left = OSD_PADDING;
+        // Calculate bar dimensions (leave space for icon on left and percentage on right)
+        let bar_width = width - (OSD_PADDING * 2) - ICON_WIDTH - 50;
+        let bar_left = OSD_PADDING + ICON_WIDTH;
 
         // Determine if we show one or two bars
         let show_overlay_bar = state.overlay_opacity > 0;
@@ -174,7 +181,8 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             let bar1_top = OSD_PADDING;
             let bar2_top = OSD_PADDING + BAR_HEIGHT + BAR_SPACING;
 
-            // Hardware brightness bar (always at 0% when overlay is active)
+            // Hardware brightness bar with icon
+            draw_icon(hdc, OSD_PADDING, bar1_top, ICON_HARDWARE);
             draw_single_bar(
                 hdc,
                 bar_left,
@@ -186,7 +194,8 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             );
             draw_percentage_text(hdc, bar_left + bar_width + 8, bar1_top, state.hardware_brightness);
 
-            // Overlay bar
+            // Overlay bar with icon
+            draw_icon(hdc, OSD_PADDING, bar2_top, ICON_OVERLAY);
             draw_single_bar(
                 hdc,
                 bar_left,
@@ -201,6 +210,7 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             // Single-bar mode: centered vertically
             let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT) / 2;
 
+            draw_icon(hdc, OSD_PADDING, bar_top, ICON_HARDWARE);
             draw_single_bar(
                 hdc,
                 bar_left,
@@ -212,6 +222,58 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             );
             draw_percentage_text(hdc, bar_left + bar_width + 8, bar_top, state.hardware_brightness);
         }
+    }
+}
+
+/// Draws an icon (emoji) at the specified position.
+///
+/// # Safety
+///
+/// Must be called with a valid device context.
+unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
+    unsafe {
+        // Create font (use Segoe UI Emoji for proper emoji rendering)
+        let font = create_icon_font();
+        let old_font = SelectObject(hdc, font);
+
+        // Set text properties
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, COLORREF(TEXT_COLOR));
+
+        // Draw icon
+        let wide_text: Vec<u16> = icon.encode_utf16().collect();
+        let text_y = y + (BAR_HEIGHT - FONT_SIZE) / 2;
+        TextOutW(hdc, x, text_y, &wide_text);
+
+        // Cleanup
+        SelectObject(hdc, old_font);
+        DeleteObject(font);
+    }
+}
+
+/// Creates the font used for OSD icons (emoji).
+///
+/// # Safety
+///
+/// The returned HFONT must be deleted with DeleteObject when no longer needed.
+unsafe fn create_icon_font() -> HFONT {
+    unsafe {
+        CreateFontW(
+            FONT_SIZE,           // Height
+            0,                   // Width (0 = auto)
+            0,                   // Escapement
+            0,                   // Orientation
+            FW_NORMAL.0 as i32,  // Weight
+            0,                   // Italic
+            0,                   // Underline
+            0,                   // StrikeOut
+            DEFAULT_CHARSET.0 as u32,
+            OUT_DEFAULT_PRECIS.0 as u32,
+            CLIP_DEFAULT_PRECIS.0 as u32,
+            0,                   // Quality (DEFAULT_QUALITY)
+            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            w!("Segoe UI Emoji"), // Font face for emoji support
+        )
     }
 }
 
