@@ -595,6 +595,14 @@ impl OsdWindow {
         }
     }
 
+    /// Returns true if the OSD window is currently visible.
+    pub fn is_visible(&self) -> bool {
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+            IsWindowVisible(self.hwnd.as_raw()).as_bool()
+        }
+    }
+
     /// Returns the raw window handle.
     pub fn hwnd(&self) -> HWND {
         self.hwnd.as_raw()
