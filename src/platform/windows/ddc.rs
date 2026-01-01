@@ -55,7 +55,8 @@ pub fn enumerate_monitors() -> Result<Vec<HMONITOR>> {
             None,
             Some(monitor_enum_proc),
             LPARAM(&raw mut monitors as isize),
-        ).as_bool()
+        )
+        .as_bool()
         {
             Ok(monitors)
         } else {
@@ -439,7 +440,9 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
             DIGCF_PRESENT | DIGCF_PROFILE,
         )
     }
-    .map_err(|e| BrightnessError::windows_api("SetupDiGetClassDevsW", e.code().0.cast_unsigned()))?;
+    .map_err(|e| {
+        BrightnessError::windows_api("SetupDiGetClassDevsW", e.code().0.cast_unsigned())
+    })?;
 
     let _safe_devinfo = SafeDevInfo(hdevinfo);
 
@@ -462,7 +465,8 @@ fn find_edid_by_instance_id(target_instance_id: &str) -> Result<Vec<u8>> {
                 &raw const devinfo_data,
                 Some(&mut buffer),
                 Some(&raw mut required_size),
-            ).is_ok()
+            )
+            .is_ok()
             {
                 let instance_id = String::from_utf16_lossy(&buffer[..required_size as usize - 1]); // -1 for null
 
@@ -506,7 +510,9 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             KEY_READ.0,
         )
     }
-    .map_err(|e| BrightnessError::windows_api("SetupDiOpenDevRegKey", e.code().0.cast_unsigned()))?;
+    .map_err(|e| {
+        BrightnessError::windows_api("SetupDiOpenDevRegKey", e.code().0.cast_unsigned())
+    })?;
 
     let _safe_hkey = SafeHKey(hkey);
 
