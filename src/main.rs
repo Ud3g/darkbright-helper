@@ -1,5 +1,8 @@
 use std::collections::HashMap;
-use std::sync::mpsc;
+use std::sync::{LazyLock, Mutex, mpsc};
+
+use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
+use windows::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
@@ -15,6 +18,21 @@ use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::{BrightnessError, Result};
+
+static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
+    if ctrl_type == CTRL_C_EVENT {
+        if let Ok(guard) = SHUTDOWN_SENDER.lock() {
+            if let Some(tx) = &*guard {
+                let _ = tx.send(BrightnessMessage::Shutdown);
+                return TRUE;
+            }
+        }
+    }
+    FALSE
+}
 
 /// Main controller for brightness management.
 ///
@@ -73,10 +91,17 @@ impl BrightnessController {
                 self.handle_refresh()?;
             }
             BrightnessMessage::Shutdown => {
+                self.handle_shutdown()?;
                 return Ok(false);
             }
         }
         Ok(true)
+    }
+
+    /// Handles the shutdown process.
+    fn handle_shutdown(&mut self) -> Result<()> {
+        log::info!("Shutting down BrightnessController...");
+        Ok(())
     }
 
     /// Applies a relative brightness adjustment.
@@ -272,6 +297,16 @@ fn main() {
 
     // Phase 6, Step 44 & 45: Register hotkeys and start hotkey thread
     let (tx, rx) = mpsc::channel();
+
+    // Register Ctrl+C handler
+    if let Ok(mut guard) = SHUTDOWN_SENDER.lock() {
+        *guard = Some(tx.clone());
+    }
+
+    unsafe {
+        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), TRUE);
+    }
+
     let hotkey_config = config.clone();
 
     std::thread::spawn(move || {
