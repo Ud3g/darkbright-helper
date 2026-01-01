@@ -3,26 +3,26 @@
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW, CreateSolidBrush,
-    DeleteDC, DeleteObject, EndPaint, FillRect, GetMonitorInfoW, InvalidateRect, SelectObject,
-    SetBkMode, SetTextColor, TextOutW, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH,
-    FF_DONTCARE, FW_NORMAL, HDC, HFONT, HMONITOR, MONITORINFO, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC,
+    CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteDC, DeleteObject,
+    EndPaint, FF_DONTCARE, FW_NORMAL, FillRect, GetMonitorInfoW, HDC, HFONT, HMONITOR,
+    InvalidateRect, MONITORINFO, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode,
+    SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, KillTimer, RegisterClassExW,
-    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW,
-    CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WM_PAINT, WM_TIMER,
+    CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, GetClientRect,
+    HWND_TOPMOST, KillTimer, LWA_ALPHA, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
+    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, WM_PAINT, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
+use windows::core::{PCWSTR, w};
 
+use super::{SafeHwnd, last_error_as_brightness_error};
 use crate::core::state::MonitorState;
 use crate::error::{BrightnessError, Result};
-use super::{last_error_as_brightness_error, SafeHwnd};
 
 /// The class name for the OSD window.
 const OSD_CLASS_NAME: PCWSTR = w!("DarkBrightOSDClass");
@@ -202,7 +202,12 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
                 state.hardware_brightness,
                 state.is_error,
             );
-            draw_percentage_text(hdc, bar_left + bar_width + 8, bar1_top, state.hardware_brightness);
+            draw_percentage_text(
+                hdc,
+                bar_left + bar_width + 8,
+                bar1_top,
+                state.hardware_brightness,
+            );
 
             // Overlay bar with icon
             draw_icon(hdc, OSD_PADDING, bar2_top, ICON_OVERLAY);
@@ -215,7 +220,12 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
                 state.overlay_opacity,
                 false, // Overlay doesn't show error state
             );
-            draw_percentage_text(hdc, bar_left + bar_width + 8, bar2_top, state.overlay_opacity);
+            draw_percentage_text(
+                hdc,
+                bar_left + bar_width + 8,
+                bar2_top,
+                state.overlay_opacity,
+            );
         } else {
             // Single-bar mode: centered vertically
             let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT) / 2;
@@ -230,7 +240,12 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
                 state.hardware_brightness,
                 state.is_error,
             );
-            draw_percentage_text(hdc, bar_left + bar_width + 8, bar_top, state.hardware_brightness);
+            draw_percentage_text(
+                hdc,
+                bar_left + bar_width + 8,
+                bar_top,
+                state.hardware_brightness,
+            );
         }
     }
 }
@@ -269,18 +284,18 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
 unsafe fn create_icon_font() -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,           // Height
-            0,                   // Width (0 = auto)
-            0,                   // Escapement
-            0,                   // Orientation
-            FW_NORMAL.0 as i32,  // Weight
-            0,                   // Italic
-            0,                   // Underline
-            0,                   // StrikeOut
+            FONT_SIZE,          // Height
+            0,                  // Width (0 = auto)
+            0,                  // Escapement
+            0,                  // Orientation
+            FW_NORMAL.0 as i32, // Weight
+            0,                  // Italic
+            0,                  // Underline
+            0,                  // StrikeOut
             DEFAULT_CHARSET.0 as u32,
             OUT_DEFAULT_PRECIS.0 as u32,
             CLIP_DEFAULT_PRECIS.0 as u32,
-            0,                   // Quality (DEFAULT_QUALITY)
+            0, // Quality (DEFAULT_QUALITY)
             (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
             w!("Segoe UI Emoji"), // Font face for emoji support
         )
@@ -322,7 +337,11 @@ unsafe fn draw_single_bar(
                 right: x + fill_width,
                 bottom: y + height,
             };
-            let fill_color = if is_error { BAR_ERROR_COLOR } else { BAR_FILL_COLOR };
+            let fill_color = if is_error {
+                BAR_ERROR_COLOR
+            } else {
+                BAR_FILL_COLOR
+            };
             let fill_brush = CreateSolidBrush(COLORREF(fill_color));
             FillRect(hdc, &fill_rect, fill_brush);
             DeleteObject(fill_brush);
@@ -367,20 +386,20 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
 unsafe fn create_osd_font() -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,           // Height
-            0,                   // Width (0 = auto)
-            0,                   // Escapement
-            0,                   // Orientation
-            FW_NORMAL.0 as i32,  // Weight
-            0,                   // Italic
-            0,                   // Underline
-            0,                   // StrikeOut
+            FONT_SIZE,          // Height
+            0,                  // Width (0 = auto)
+            0,                  // Escapement
+            0,                  // Orientation
+            FW_NORMAL.0 as i32, // Weight
+            0,                  // Italic
+            0,                  // Underline
+            0,                  // StrikeOut
             DEFAULT_CHARSET.0 as u32,
             OUT_DEFAULT_PRECIS.0 as u32,
             CLIP_DEFAULT_PRECIS.0 as u32,
-            0,                   // Quality (DEFAULT_QUALITY)
+            0, // Quality (DEFAULT_QUALITY)
             (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-            w!("Segoe UI"),      // Font face
+            w!("Segoe UI"), // Font face
         )
     }
 }
@@ -429,9 +448,7 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
             Ok(())
         })
         .as_ref()
-        .map_err(|_| {
-            BrightnessError::windows_api("ensure_osd_class_registered", 0)
-        })?;
+        .map_err(|_| BrightnessError::windows_api("ensure_osd_class_registered", 0))?;
 
     Ok(OSD_CLASS_NAME)
 }
