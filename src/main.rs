@@ -251,4 +251,17 @@ fn main() {
             Config::default()
         }
     };
+
+    // Phase 6, Step 43: Enumerate monitors and initialize state
+    let mut controller = match BrightnessController::new(config) {
+        Ok(c) => c,
+        Err(e) => {
+            log::error!("Failed to initialize BrightnessController: {}", e);
+            return;
+        }
+    };
+
+    if let Err(e) = controller.handle_refresh() {
+        log::error!("Initial monitor enumeration failed: {}", e);
+    }
 }
