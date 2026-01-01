@@ -288,14 +288,14 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
 unsafe fn create_icon_font() -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,                  // Height
-            0,                          // Width (0 = auto)
-            0,                          // Escapement
-            0,                          // Orientation
-            i32::from(FW_NORMAL.0),     // Weight
-            0,                          // Italic
-            0,                          // Underline
-            0,                          // StrikeOut
+            FONT_SIZE,              // Height
+            0,                      // Width (0 = auto)
+            0,                      // Escapement
+            0,                      // Orientation
+            i32::from(FW_NORMAL.0), // Weight
+            0,                      // Italic
+            0,                      // Underline
+            0,                      // StrikeOut
             u32::from(DEFAULT_CHARSET.0),
             u32::from(OUT_DEFAULT_PRECIS.0),
             u32::from(CLIP_DEFAULT_PRECIS.0),
@@ -390,14 +390,14 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
 unsafe fn create_osd_font() -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,                  // Height
-            0,                          // Width (0 = auto)
-            0,                          // Escapement
-            0,                          // Orientation
-            i32::from(FW_NORMAL.0),     // Weight
-            0,                          // Italic
-            0,                          // Underline
-            0,                          // StrikeOut
+            FONT_SIZE,              // Height
+            0,                      // Width (0 = auto)
+            0,                      // Escapement
+            0,                      // Orientation
+            i32::from(FW_NORMAL.0), // Weight
+            0,                      // Italic
+            0,                      // Underline
+            0,                      // StrikeOut
             u32::from(DEFAULT_CHARSET.0),
             u32::from(OUT_DEFAULT_PRECIS.0),
             u32::from(CLIP_DEFAULT_PRECIS.0),
