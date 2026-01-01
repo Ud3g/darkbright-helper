@@ -19,6 +19,7 @@ pub struct BrightnessAdjustment {
 
 impl BrightnessAdjustment {
     /// Creates a new brightness adjustment result.
+    #[must_use]
     pub const fn new(hardware_brightness: u8, overlay_opacity: u8) -> Self {
         Self {
             hardware_brightness,
@@ -27,6 +28,7 @@ impl BrightnessAdjustment {
     }
 
     /// Returns true if the overlay should be visible.
+    #[must_use]
     pub const fn overlay_active(&self) -> bool {
         self.overlay_opacity > 0
     }
@@ -53,6 +55,7 @@ impl BrightnessAdjustment {
 /// # Returns
 ///
 /// The new `BrightnessAdjustment` with updated hardware and overlay values.
+#[must_use]
 pub fn calculate_adjustment(
     current_hardware: u8,
     current_overlay: u8,
@@ -86,14 +89,16 @@ fn calculate_decrease(
         if remaining > 0 {
             // Hardware hit 0, apply remaining to overlay
             let new_overlay = (overlay + remaining).min(100);
-            BrightnessAdjustment::new(0, new_overlay as u8)
+            // new_overlay is clamped to 100, so try_from is safe
+            BrightnessAdjustment::new(0, u8::try_from(new_overlay).unwrap_or(100))
         } else {
-            BrightnessAdjustment::new(new_hardware as u8, overlay as u8)
+            // new_hardware is based on saturating_sub of 0-100 values
+            BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(0), current_overlay)
         }
     } else {
         // Hardware already at 0, increase overlay opacity
         let new_overlay = (overlay + decrease_amount).min(100);
-        BrightnessAdjustment::new(0, new_overlay as u8)
+        BrightnessAdjustment::new(0, u8::try_from(new_overlay).unwrap_or(100))
     }
 }
 
@@ -114,25 +119,32 @@ fn calculate_increase(
         if remaining > 0 {
             // Overlay hit 0, apply remaining to hardware
             let new_hardware = (hardware + remaining).min(100);
-            BrightnessAdjustment::new(new_hardware as u8, 0)
+            BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(100), 0)
         } else {
-            BrightnessAdjustment::new(hardware as u8, new_overlay as u8)
+            // Safe to use current_hardware as it didn't change, and new_overlay is clamped
+            BrightnessAdjustment::new(current_hardware, u8::try_from(new_overlay).unwrap_or(0))
         }
     } else {
         // No overlay, increase hardware brightness
         let new_hardware = (hardware + increase_amount).min(100);
-        BrightnessAdjustment::new(new_hardware as u8, 0)
+        BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(100), 0)
     }
 }
 
 /// Clamps a brightness value to the valid range (0-100).
+///
+/// # Returns
+///
+/// The clamped value as `u8`.
 #[inline]
+#[must_use]
 pub const fn clamp_brightness(value: i16) -> u8 {
     if value < 0 {
         0
     } else if value > 100 {
         100
     } else {
+        // Safe as value is now guaranteed to be between 0 and 100
         value as u8
     }
 }
