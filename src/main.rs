@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
+use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{BrightnessMessage, MonitorId, MonitorState};
-use darkbright_helper::platform::windows::ddc::DdcMonitor;
+use darkbright_helper::platform::windows::ddc::{get_monitor_id, DdcMonitor};
+use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
-use darkbright_helper::Result;
+use darkbright_helper::{BrightnessError, Result};
 
 /// Haupt-Controller für die Helligkeitssteuerung.
 ///
@@ -69,9 +71,76 @@ impl BrightnessController {
 
     /// Wendet eine relative Helligkeitsänderung an.
     ///
-    /// Die eigentliche Logik wird in Schritt #37 implementiert.
-    fn handle_adjust(&mut self, _monitor_id: Option<MonitorId>, _delta: i8) -> Result<()> {
-        // TODO: Implementierung folgt in Schritt #37
+    /// Ermittelt den Zielmonitor (Mausposition), berechnet die neuen Werte,
+    /// zeigt das OSD sofort an und führt dann das DDC-Update durch.
+    fn handle_adjust(&mut self, monitor_id: Option<MonitorId>, delta: i8) -> Result<()> {
+        // 1. Ziel-Monitor und Handle ermitteln (Schritt #34)
+        // Wir benötigen das HMONITOR Handle für die OSD- und Overlay-Positionierung.
+        let hmonitor = get_monitor_under_cursor()?;
+
+        // Wenn keine ID übergeben wurde, identifizieren wir den Monitor unter dem Cursor.
+        let target_id = match monitor_id {
+            Some(id) => id,
+            None => get_monitor_id(hmonitor)?,
+        };
+
+        // 2. Zustand und Monitor-Objekt finden
+        let state = self.states.get_mut(&target_id).ok_or_else(|| {
+            BrightnessError::MonitorNotFound(target_id.to_string())
+        })?;
+
+        let monitor = self.monitors.iter_mut().find(|m| m.id() == &target_id).ok_or_else(|| {
+            BrightnessError::MonitorNotFound(target_id.to_string())
+        })?;
+
+        // 3. Neue Helligkeit berechnen (Schritt #37)
+        let adjustment = calculate_adjustment(
+            state.effective_brightness(),
+            state.overlay_opacity,
+            delta
+        );
+
+        // 4. Optimistisches Update (Schritt #38)
+        state.set_pending(adjustment.hardware_brightness);
+        let old_overlay = state.overlay_opacity;
+        state.overlay_opacity = adjustment.overlay_opacity;
+
+        // Overlay aktualisieren (Software-Ebene ist sofort wirksam)
+        if state.overlay_opacity != old_overlay {
+            self.overlay_manager.update(&target_id, hmonitor, state.overlay_opacity)?;
+        }
+
+        // OSD anzeigen oder aktualisieren
+        if self.osd.is_visible() {
+            self.osd.update(state)?;
+        } else {
+            self.osd.show(hmonitor, state)?;
+        }
+
+        // 5. Hardware-Update via DDC (Blocking im Controller-Thread)
+        log::debug!("Setting DDC brightness for {}: {}%", target_id, adjustment.hardware_brightness);
+        
+        match monitor.set_brightness(adjustment.hardware_brightness as u32) {
+            Ok(_) => {
+                state.confirm_brightness();
+                // OSD zur Bestätigung aktualisieren (entfernt ggf. Error-Färbung)
+                self.osd.update(state)?;
+            }
+            Err(e) => {
+                log::error!("DDC-Fehler für {}: {}", target_id, e);
+                // 6. Fehler-Rollback (Schritt #39)
+                state.revert_pending();
+                state.overlay_opacity = old_overlay;
+                
+                // Overlay auf alten Wert zurücksetzen
+                let _ = self.overlay_manager.update(&target_id, hmonitor, old_overlay);
+                
+                // OSD auf Fehlerzustand setzen
+                self.osd.update_error(state)?;
+                return Err(e);
+            }
+        }
+
         Ok(())
     }
 
