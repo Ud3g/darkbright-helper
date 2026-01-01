@@ -24,7 +24,7 @@ static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>>
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
-        log::info!("Ctrl+C/Break received. Initiating shutdown...");
+        log::info!("Shutdown signal received.");
         if let Ok(guard) = SHUTDOWN_SENDER.lock() {
             if let Some(tx) = &*guard {
                 let _ = tx.send(BrightnessMessage::Shutdown);
@@ -101,7 +101,6 @@ impl BrightnessController {
 
     /// Handles the shutdown process.
     fn handle_shutdown(&mut self) -> Result<()> {
-        log::info!("Shutting down BrightnessController...");
         Ok(())
     }
 
@@ -372,7 +371,6 @@ fn main() {
         match controller.handle_message(msg) {
             Ok(should_continue) => {
                 if !should_continue {
-                    log::info!("Shutdown requested.");
                     break;
                 }
             }
