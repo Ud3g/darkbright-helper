@@ -119,12 +119,33 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
 Document all public items with `///` doc comments. Include:
 - Brief description
 - `# Arguments` for non-obvious parameters
-- `# Returns` for non-trivial return values  
-- `# Errors` listing when `Result::Err` is returned
+- `# Returns` for non-trivial return values
+- `# Errors` listing when `Result::Err` is returned (Strictly enforced by `clippy::missing_errors_doc`)
+- `# Panics` listing any potential panic conditions (Strictly enforced by `clippy::missing_panics_doc`)
+- Use backticks around code elements (e.g., `Result`, `SomeType`, `SetupAPI`) to satisfy `clippy::doc_markdown`.
 
 ---
 
-## 5. Error Handling
+## 5. Coding Style & Linting
+
+### Numeric Literals
+Use underscores for readability in long numeric literals, especially hex colors/masks:
+```rust
+const COLOR: u32 = 0x00FF_FFFF;
+```
+
+### Casting
+Minimize `as` casting.
+- Use `u32::from(val)` for lossless conversions (`clippy::cast_lossless`).
+- Use `try_from` for potential truncation.
+- Use `.cast_unsigned()` or `.cast_signed()` for sign changes if intentional.
+
+### Purity
+Annotate pure functions (constructors, getters, calculations) with `#[must_use]` to ensure their results aren't accidentally discarded.
+
+---
+
+## 6. Error Handling
 
 Use a centralized error module (`src/error.rs`) with a project-specific error enum and type alias:
 
