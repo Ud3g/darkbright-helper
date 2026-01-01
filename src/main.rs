@@ -239,4 +239,16 @@ fn main() {
         .init();
 
     log::info!("Brightness Control Tool Starting...");
+
+    // Phase 6, Step 42: Load configuration
+    let config = match Config::load() {
+        Ok(cfg) => {
+            log::info!("Configuration loaded successfully.");
+            cfg
+        }
+        Err(e) => {
+            log::error!("Failed to load configuration: {}. Using defaults.", e);
+            Config::default()
+        }
+    };
 }
