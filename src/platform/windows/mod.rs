@@ -32,9 +32,7 @@ pub mod overlay;
 pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
     let mut cursor_pos = POINT::default();
     unsafe {
-        if !GetCursorPos(&mut cursor_pos).as_bool() {
-            return Err(last_error_as_brightness_error("GetCursorPos"));
-        }
+        GetCursorPos(&mut cursor_pos).to_brightness_result("GetCursorPos")?;
 
         // MONITOR_DEFAULTTONEAREST stellt sicher, dass wir immer ein Handle erhalten,
         // auch wenn der Punkt außerhalb aller Monitore liegt.
