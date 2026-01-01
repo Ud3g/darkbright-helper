@@ -292,7 +292,7 @@ unsafe fn create_icon_font() -> HFONT {
             0,                      // Width (0 = auto)
             0,                      // Escapement
             0,                      // Orientation
-            FW_NORMAL.0 as i32,     // Weight
+            FW_NORMAL.0.cast_signed(), // Weight
             0,                      // Italic
             0,                      // Underline
             0,                      // StrikeOut
@@ -333,7 +333,7 @@ unsafe fn draw_single_bar(
         let _ = DeleteObject(bg_brush);
 
         // Draw filled portion
-        let fill_width = (i64::from(width) * i64::from(percent) / 100) as i32;
+        let fill_width = i32::try_from(i64::from(width) * i64::from(percent) / 100).unwrap_or(0);
         if fill_width > 0 {
             let fill_rect = RECT {
                 left: x,
@@ -394,7 +394,7 @@ unsafe fn create_osd_font() -> HFONT {
             0,                      // Width (0 = auto)
             0,                      // Escapement
             0,                      // Orientation
-            FW_NORMAL.0 as i32,     // Weight
+            FW_NORMAL.0.cast_signed(), // Weight
             0,                      // Italic
             0,                      // Underline
             0,                      // StrikeOut
@@ -408,7 +408,7 @@ unsafe fn create_osd_font() -> HFONT {
     }
 }
 
-/// Updates the OSD render state from a MonitorState.
+/// Updates the OSD render state from a `MonitorState`.
 fn update_osd_state(state: &MonitorState, is_error: bool) {
     OSD_STATE.with(|s| {
         let mut render_state = s.borrow_mut();
@@ -423,17 +423,12 @@ fn update_osd_state(state: &MonitorState, is_error: bool) {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
-/// Registers the window class for the OSD window if not already registered.
-///
-/// # Errors
-///
-/// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
 pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
     REGISTER_CLASS_ONCE
         .get_or_init(|| {
             unsafe {
                 let hinstance = GetModuleHandleW(None).map_err(|e| {
-                    BrightnessError::windows_api("GetModuleHandleW", e.code().0 as u32)
+                    BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
                 })?;
 
                 // A gray brush for the default background.
@@ -474,7 +469,6 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
 ///
 /// Returns `BrightnessError::WindowsApi` if window class registration or
 /// `CreateWindowExW` fails.
-#[must_use]
 pub fn create_osd_window() -> Result<SafeHwnd> {
     let class_name = ensure_osd_class_registered()?;
 
@@ -509,18 +503,8 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
 ///
 /// # Arguments
 ///
-/// * `hwnd` - The OSD window handle.
-/// * `hmonitor` - The monitor to position the OSD on.
-///
-/// # Errors
-///
-/// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
-/// Positions the OSD window at the bottom-center of the specified monitor.
-///
-/// # Arguments
-///
-/// * `hwnd` - The OSD window handle.
-/// * `hmonitor` - The monitor to position the OSD on.
+/// * `hwnd` - The `HWND` of the OSD window.
+/// * `hmonitor` - The `HMONITOR` to position the OSD on.
 ///
 /// # Errors
 ///
@@ -552,7 +536,7 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
             OSD_HEIGHT,
             SWP_NOACTIVATE,
         )
-        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0 as u32))?;
+        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned()))?;
     }
 
     Ok(())
@@ -572,7 +556,7 @@ pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     unsafe {
         SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| {
-            BrightnessError::windows_api("SetLayeredWindowAttributes", e.code().0 as u32)
+            BrightnessError::windows_api("SetLayeredWindowAttributes", e.code().0.cast_unsigned())
         })?;
     }
     Ok(())
@@ -588,7 +572,7 @@ pub struct OsdWindow {
 }
 
 impl OsdWindow {
-    /// Creates a new OsdWindow.
+    /// Creates a new `OsdWindow`.
     ///
     /// # Arguments
     ///
@@ -598,7 +582,6 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window creation or opacity setting fails.
-    #[must_use]
     pub fn new(opacity: f32, timeout_ms: u32) -> Result<Self> {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
@@ -606,16 +589,6 @@ impl OsdWindow {
         Ok(Self { hwnd, timeout_ms })
     }
 
-    /// Shows the OSD for a specific monitor with the given state.
-    ///
-    /// # Arguments
-    ///
-    /// * `hmonitor` - The monitor to display the OSD on.
-    /// * `state` - The current monitor brightness state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if window positioning fails.
     /// Shows the OSD for a specific monitor with the given state.
     ///
     /// # Arguments
@@ -639,16 +612,6 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Shows the OSD with an error indicator (red progress bar).
-    ///
-    /// # Arguments
-    ///
-    /// * `hmonitor` - The monitor to display the OSD on.
-    /// * `state` - The current monitor brightness state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if window positioning fails.
     /// Shows the OSD with an error indicator (red progress bar).
     ///
     /// # Arguments
@@ -691,13 +654,6 @@ impl OsdWindow {
     /// # Arguments
     ///
     /// * `state` - The current monitor brightness state.
-    /// Triggers a redraw of the OSD with updated state.
-    ///
-    /// Also resets the auto-hide timer.
-    ///
-    /// # Arguments
-    ///
-    /// * `state` - The current monitor brightness state.
     ///
     /// # Errors
     ///
@@ -712,13 +668,6 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Triggers a redraw of the OSD with error state (red progress bar).
-    ///
-    /// Also resets the auto-hide timer.
-    ///
-    /// # Arguments
-    ///
-    /// * `state` - The current monitor brightness state.
     /// Triggers a redraw of the OSD with error state (red progress bar).
     ///
     /// Also resets the auto-hide timer.
