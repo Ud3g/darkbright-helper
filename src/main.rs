@@ -4,7 +4,7 @@ use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{BrightnessMessage, MonitorId, MonitorState};
 use darkbright_helper::platform::windows::ddc::{
-    enumerate_monitors, get_monitor_id, get_physical_monitors, DdcMonitor,
+    DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
 };
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
@@ -99,20 +99,20 @@ impl BrightnessController {
         };
 
         // 2. Find state and monitor object
-        let state = self.states.get_mut(&target_id).ok_or_else(|| {
-            BrightnessError::MonitorNotFound(target_id.to_string())
-        })?;
+        let state = self
+            .states
+            .get_mut(&target_id)
+            .ok_or_else(|| BrightnessError::MonitorNotFound(target_id.to_string()))?;
 
-        let monitor = self.monitors.iter_mut().find(|m| m.id() == &target_id).ok_or_else(|| {
-            BrightnessError::MonitorNotFound(target_id.to_string())
-        })?;
+        let monitor = self
+            .monitors
+            .iter_mut()
+            .find(|m| m.id() == &target_id)
+            .ok_or_else(|| BrightnessError::MonitorNotFound(target_id.to_string()))?;
 
         // 3. Calculate new brightness
-        let adjustment = calculate_adjustment(
-            state.effective_brightness(),
-            state.overlay_opacity,
-            delta
-        );
+        let adjustment =
+            calculate_adjustment(state.effective_brightness(), state.overlay_opacity, delta);
 
         // 4. Optimistic update
         state.set_pending(adjustment.hardware_brightness);
@@ -121,7 +121,8 @@ impl BrightnessController {
 
         // Update overlay (software layer is immediately effective)
         if state.overlay_opacity != old_overlay {
-            self.overlay_manager.update(&target_id, hmonitor, state.overlay_opacity)?;
+            self.overlay_manager
+                .update(&target_id, hmonitor, state.overlay_opacity)?;
         }
 
         // Show or update OSD
@@ -132,8 +133,12 @@ impl BrightnessController {
         }
 
         // 5. Hardware update via DDC (blocking in controller thread)
-        log::debug!("Setting DDC brightness for {}: {}%", target_id, adjustment.hardware_brightness);
-        
+        log::debug!(
+            "Setting DDC brightness for {}: {}%",
+            target_id,
+            adjustment.hardware_brightness
+        );
+
         match monitor.set_brightness(adjustment.hardware_brightness as u32) {
             Ok(_) => {
                 state.confirm_brightness();
@@ -145,10 +150,12 @@ impl BrightnessController {
                 // 6. Error rollback
                 state.revert_pending();
                 state.overlay_opacity = old_overlay;
-                
+
                 // Revert overlay to old value
-                let _ = self.overlay_manager.update(&target_id, hmonitor, old_overlay);
-                
+                let _ = self
+                    .overlay_manager
+                    .update(&target_id, hmonitor, old_overlay);
+
                 // Set OSD to error state
                 self.osd.update_error(state)?;
                 return Err(e);
@@ -207,11 +214,7 @@ impl BrightnessController {
 
                         new_monitors.push(ddc_mon);
                     }
-                    Err(e) => log::warn!(
-                        "Could not read brightness for {}: {}",
-                        monitor_id,
-                        e
-                    ),
+                    Err(e) => log::warn!("Could not read brightness for {}: {}", monitor_id, e),
                 }
             }
         }

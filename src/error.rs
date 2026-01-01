@@ -42,11 +42,17 @@ pub enum BrightnessError {
     // ── Configuration Errors ─────────────────────────────────────────────
     /// Failed to read the configuration file.
     #[error("Failed to read config file '{path}': {source}")]
-    ConfigRead { path: String, source: std::io::Error },
+    ConfigRead {
+        path: String,
+        source: std::io::Error,
+    },
 
     /// Failed to write the configuration file.
     #[error("Failed to write config file '{path}': {source}")]
-    ConfigWrite { path: String, source: std::io::Error },
+    ConfigWrite {
+        path: String,
+        source: std::io::Error,
+    },
 
     /// Failed to parse the configuration file.
     #[error("Failed to parse config file '{path}': {source}")]

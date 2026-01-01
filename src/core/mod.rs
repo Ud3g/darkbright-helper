@@ -11,6 +11,6 @@ pub mod config;
 pub mod state;
 
 // Re-export commonly used types
-pub use brightness::{calculate_adjustment, BrightnessAdjustment};
+pub use brightness::{BrightnessAdjustment, calculate_adjustment};
 pub use config::Config;
 pub use state::{BrightnessMessage, MonitorId, MonitorState};
