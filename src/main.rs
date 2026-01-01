@@ -330,6 +330,19 @@ fn main() {
         hotkey_manager.run_message_loop();
     });
 
-    // Keep rx alive for next step
-    let _ = rx;
+    // Phase 6, Step 46: Main Loop
+    log::info!("Entering main event loop...");
+    for msg in rx {
+        match controller.handle_message(msg) {
+            Ok(should_continue) => {
+                if !should_continue {
+                    log::info!("Shutdown requested.");
+                    break;
+                }
+            }
+            Err(e) => {
+                log::error!("Error processing message: {}", e);
+            }
+        }
+    }
 }
