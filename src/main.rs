@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, mpsc};
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
-use windows::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
+use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
@@ -23,7 +23,8 @@ static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>>
     LazyLock::new(|| Mutex::new(None));
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
-    if ctrl_type == CTRL_C_EVENT {
+    if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
+        log::info!("Ctrl+C/Break received. Initiating shutdown...");
         if let Ok(guard) = SHUTDOWN_SENDER.lock() {
             if let Some(tx) = &*guard {
                 let _ = tx.send(BrightnessMessage::Shutdown);
