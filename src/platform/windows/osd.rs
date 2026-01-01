@@ -14,10 +14,10 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, GetClientRect, RegisterClassExW, SetLayeredWindowAttributes,
-    SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA,
-    SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, GetClientRect, KillTimer, RegisterClassExW,
+    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, CS_HREDRAW, CS_VREDRAW,
+    CW_USEDEFAULT, HWND_TOPMOST, LWA_ALPHA, SWP_NOACTIVATE, SW_HIDE, SW_SHOW, WM_PAINT, WM_TIMER,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 use crate::core::state::MonitorState;
@@ -63,6 +63,9 @@ const ICON_OVERLAY: &str = "🕶";
 /// Width reserved for the icon on the left side.
 const ICON_WIDTH: i32 = 30;
 
+/// Timer ID for the auto-hide functionality.
+const HIDE_TIMER_ID: usize = 1;
+
 // Thread-local storage for OSD render state.
 // This allows the window procedure to access the current brightness values.
 thread_local! {
@@ -103,6 +106,13 @@ unsafe extern "system" fn wnd_proc(
                     EndPaint(hwnd, &ps);
                 }
 
+                LRESULT(0)
+            }
+            WM_TIMER => {
+                if wparam.0 == HIDE_TIMER_ID {
+                    let _ = KillTimer(hwnd, HIDE_TIMER_ID);
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -509,15 +519,16 @@ pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
 /// (Step #33)
 pub struct OsdWindow {
     hwnd: SafeHwnd,
+    timeout_ms: u32,
 }
 
 impl OsdWindow {
     /// Creates a new OsdWindow.
-    pub fn new(opacity: f32) -> Result<Self> {
+    pub fn new(opacity: f32, timeout_ms: u32) -> Result<Self> {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
 
-        Ok(Self { hwnd })
+        Ok(Self { hwnd, timeout_ms })
     }
 
     /// Shows the OSD for a specific monitor with the given state.
@@ -528,7 +539,7 @@ impl OsdWindow {
         unsafe {
             let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
-            // TODO: Start auto-hide timer (Step #32)
+            self.reset_timer();
         }
 
         Ok(())
@@ -542,6 +553,7 @@ impl OsdWindow {
         unsafe {
             let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
+            self.reset_timer();
         }
 
         Ok(())
@@ -561,6 +573,7 @@ impl OsdWindow {
         unsafe {
             // Invalidate the entire window to trigger WM_PAINT
             let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            self.reset_timer();
         }
         Ok(())
     }
@@ -570,8 +583,16 @@ impl OsdWindow {
         update_osd_state(state, true);
         unsafe {
             let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            self.reset_timer();
         }
         Ok(())
+    }
+
+    /// Resets the auto-hide timer.
+    fn reset_timer(&self) {
+        unsafe {
+            let _ = SetTimer(self.hwnd.as_raw(), HIDE_TIMER_ID, self.timeout_ms, None);
+        }
     }
 
     /// Returns the raw window handle.
