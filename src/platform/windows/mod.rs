@@ -7,7 +7,7 @@
 //! - On-screen display (OSD)
 
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
-use windows::Win32::Graphics::Gdi::{MonitorFromPoint, HMONITOR, MONITOR_DEFAULTTONEAREST};
+use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetCursorPos};
 
 use crate::error::{BrightnessError, Result};
@@ -55,9 +55,7 @@ pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
 /// the Windows `GetLastError()` API.
 #[inline]
 pub fn get_last_error_code() -> u32 {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .unwrap_or(0) as u32
+    std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32
 }
 
 /// Converts the last Windows error into a `BrightnessError::WindowsApi`.
