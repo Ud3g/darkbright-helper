@@ -553,6 +553,7 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
 ///
 /// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
 pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     unsafe {
         SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| {

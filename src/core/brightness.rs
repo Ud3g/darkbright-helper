@@ -145,7 +145,9 @@ pub const fn clamp_brightness(value: i16) -> u8 {
         100
     } else {
         // Safe as value is now guaranteed to be between 0 and 100
-        value as u8
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let v = value as u8;
+        v
     }
 }
 

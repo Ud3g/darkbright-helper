@@ -182,7 +182,7 @@ impl HotkeyManager {
                 if msg.message == WM_HOTKEY {
                     // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey.
                     // Cast is safe as we only register small positive IDs (1-4).
-                    #[allow(clippy::cast_possible_truncation)]
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                     let id = msg.wParam.0 as i32;
                     let delta = match id {
                         BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => self.step_percent,
