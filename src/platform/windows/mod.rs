@@ -32,7 +32,8 @@ pub mod overlay;
 pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
     let mut cursor_pos = POINT::default();
     unsafe {
-        GetCursorPos(&mut cursor_pos).to_brightness_result("GetCursorPos")?;
+        // SAFETY: We pass a valid raw pointer to a POINT struct.
+        GetCursorPos(&raw mut cursor_pos).to_brightness_result("GetCursorPos")?;
 
         // MONITOR_DEFAULTTONEAREST ensures we always get a handle,
         // even if the point is outside all monitors.
@@ -49,13 +50,17 @@ pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
 // Error Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Returns the last Windows error code as a u32.
+/// Returns the last Windows error code as a `u32`.
 ///
 /// This uses `std::io::Error::last_os_error()` which internally calls
 /// the Windows `GetLastError()` API.
 #[inline]
+#[must_use]
 pub fn get_last_error_code() -> u32 {
-    std::io::Error::last_os_error().raw_os_error().unwrap_or(0) as u32
+    std::io::Error::last_os_error()
+        .raw_os_error()
+        .unwrap_or(0)
+        .cast_unsigned()
 }
 
 /// Converts the last Windows error into a `BrightnessError::WindowsApi`.
@@ -63,6 +68,11 @@ pub fn get_last_error_code() -> u32 {
 /// # Arguments
 ///
 /// * `function` - Name of the Windows API function that failed
+///
+/// # Returns
+///
+/// A `BrightnessError` initialized with the function name and last error code.
+#[must_use]
 pub fn last_error_as_brightness_error(function: impl Into<String>) -> BrightnessError {
     BrightnessError::windows_api(function, get_last_error_code())
 }
@@ -94,6 +104,7 @@ impl SafeHwnd {
     ///
     /// The caller must ensure that `hwnd` is a valid window handle
     /// that should be destroyed when this wrapper is dropped.
+    #[must_use]
     pub const unsafe fn new_owned(hwnd: HWND) -> Self {
         Self { hwnd, owned: true }
     }
@@ -101,18 +112,21 @@ impl SafeHwnd {
     /// Creates a borrowed `SafeHwnd` that will NOT be destroyed on drop.
     ///
     /// Use this for window handles that are managed elsewhere.
+    #[must_use]
     pub const fn new_borrowed(hwnd: HWND) -> Self {
         Self { hwnd, owned: false }
     }
 
     /// Returns the raw `HWND`.
     #[inline]
+    #[must_use]
     pub const fn as_raw(&self) -> HWND {
         self.hwnd
     }
 
     /// Returns true if this handle is valid (non-zero).
     #[inline]
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.hwnd.0 != 0
     }
@@ -120,6 +134,7 @@ impl SafeHwnd {
     /// Consumes the wrapper and returns the raw handle without destroying it.
     ///
     /// The caller becomes responsible for destroying the window.
+    #[must_use]
     pub fn into_raw(self) -> HWND {
         let hwnd = self.hwnd;
         std::mem::forget(self);
@@ -153,18 +168,21 @@ impl SafeHandle {
     ///
     /// The caller must ensure that `handle` is a valid handle
     /// that should be closed with `CloseHandle` when dropped.
+    #[must_use]
     pub const unsafe fn new(handle: HANDLE) -> Self {
         Self { handle }
     }
 
     /// Returns the raw `HANDLE`.
     #[inline]
+    #[must_use]
     pub const fn as_raw(&self) -> HANDLE {
         self.handle
     }
 
     /// Returns true if this handle is valid (non-zero and not INVALID_HANDLE_VALUE).
     #[inline]
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.handle.0 != 0 && self.handle.0 != -1
     }
@@ -172,6 +190,7 @@ impl SafeHandle {
     /// Consumes the wrapper and returns the raw handle without closing it.
     ///
     /// The caller becomes responsible for closing the handle.
+    #[must_use]
     pub fn into_raw(self) -> HANDLE {
         let handle = self.handle;
         std::mem::forget(self);
@@ -202,6 +221,10 @@ pub trait WindowsResultExt<T> {
     /// # Arguments
     ///
     /// * `function` - Name of the Windows API function for error messages
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::WindowsApi` if the original result is an `Err`.
     fn to_brightness_result(self, function: &str) -> Result<T>;
 }
 
