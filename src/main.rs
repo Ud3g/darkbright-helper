@@ -139,14 +139,14 @@ impl BrightnessController {
             adjustment.hardware_brightness
         );
 
-        match monitor.set_brightness(adjustment.hardware_brightness as u32) {
-            Ok(_) => {
+        match monitor.set_brightness(u32::from(adjustment.hardware_brightness)) {
+            Ok(()) => {
                 state.confirm_brightness();
                 // Update OSD to confirm (removes error coloring if present)
                 self.osd.update(state)?;
             }
             Err(e) => {
-                log::error!("DDC error for {}: {}", target_id, e);
+                log::error!("DDC error for {target_id}: {e}");
                 // 6. Error rollback
                 state.revert_pending();
                 state.overlay_opacity = old_overlay;
@@ -171,6 +171,7 @@ impl BrightnessController {
     ///
     /// * `monitor_id` - Target monitor (None = monitor under cursor).
     /// * `value` - Target brightness (0-100).
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn handle_set_absolute(&mut self, _monitor_id: Option<MonitorId>, _value: u8) -> Result<()> {
         // Placeholder for future extensions (e.g., fixed brightness via CLI command)
         Ok(())
@@ -205,6 +206,7 @@ impl BrightnessController {
                 // Read current brightness via DDC
                 match ddc_mon.get_brightness() {
                     Ok(val) => {
+                        #[allow(clippy::cast_possible_truncation)]
                         let val_u8 = val as u8;
                         // Update or create state
                         self.states
@@ -214,7 +216,7 @@ impl BrightnessController {
 
                         new_monitors.push(ddc_mon);
                     }
-                    Err(e) => log::warn!("Could not read brightness for {}: {}", monitor_id, e),
+                    Err(e) => log::warn!("Could not read brightness for {monitor_id}: {e}"),
                 }
             }
         }
