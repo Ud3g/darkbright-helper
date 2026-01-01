@@ -35,7 +35,7 @@ const OSD_HEIGHT: i32 = 80;
 const OSD_BOTTOM_MARGIN: i32 = 100;
 
 /// OSD background color (dark gray, semi-transparent look).
-const OSD_BACKGROUND_COLOR: u32 = 0x00303030; // RGB: 48, 48, 48
+const OSD_BACKGROUND_COLOR: u32 = 0x0030_3030; // RGB: 48, 48, 48
 
 /// Padding inside the OSD window.
 const OSD_PADDING: i32 = 10;
@@ -45,13 +45,13 @@ const BAR_HEIGHT: i32 = 20;
 const BAR_SPACING: i32 = 8;
 
 /// Progress bar fill color (bright blue).
-const BAR_FILL_COLOR: u32 = 0x00D0A030; // BGR: 48, 160, 208 (golden/orange)
+const BAR_FILL_COLOR: u32 = 0x00D0_A030; // BGR: 48, 160, 208 (golden/orange)
 /// Progress bar background color (dark gray).
-const BAR_BACKGROUND_COLOR: u32 = 0x00505050; // BGR: 80, 80, 80
+const BAR_BACKGROUND_COLOR: u32 = 0x0050_5050; // BGR: 80, 80, 80
 /// Text color (white).
-const TEXT_COLOR: u32 = 0x00FFFFFF; // BGR: 255, 255, 255
+const TEXT_COLOR: u32 = 0x00FF_FFFF; // BGR: 255, 255, 255
 /// Error bar color (red).
-const BAR_ERROR_COLOR: u32 = 0x000000CC; // BGR: 204, 0, 0
+const BAR_ERROR_COLOR: u32 = 0x0000_00CC; // BGR: 204, 0, 0
 
 /// Font size for percentage text.
 const FONT_SIZE: i32 = 18;
@@ -89,6 +89,10 @@ static REGISTER_CLASS_ONCE: OnceLock<Result<()>> = OnceLock::new();
 /// Window procedure for the OSD window.
 ///
 /// Handles `WM_PAINT` for custom rendering of the brightness indicator.
+///
+/// # Safety
+///
+/// This is a system callback. The caller must ensure `hwnd` is a valid window handle.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -99,11 +103,11 @@ unsafe extern "system" fn wnd_proc(
         match msg {
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
-                let hdc = BeginPaint(hwnd, &mut ps);
+                let hdc = BeginPaint(hwnd, &raw mut ps);
 
                 if hdc.0 != 0 {
                     paint_osd(hwnd, hdc);
-                    EndPaint(hwnd, &ps);
+                    EndPaint(hwnd, &raw const ps);
                 }
 
                 LRESULT(0)
@@ -128,7 +132,7 @@ unsafe extern "system" fn wnd_proc(
 unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
     unsafe {
         let mut rect = RECT::default();
-        if GetClientRect(hwnd, &mut rect).is_err() {
+        if GetClientRect(hwnd, &raw mut rect).is_err() {
             return;
         }
 
@@ -143,7 +147,7 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 
         let mem_bitmap = CreateCompatibleBitmap(hdc, width, height);
         if mem_bitmap.0 == 0 {
-            DeleteDC(mem_dc);
+            let _ = DeleteDC(mem_dc);
             return;
         }
 
@@ -151,8 +155,8 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 
         // Fill background
         let bg_brush = CreateSolidBrush(COLORREF(OSD_BACKGROUND_COLOR));
-        FillRect(mem_dc, &rect, bg_brush);
-        DeleteObject(bg_brush);
+        FillRect(mem_dc, &raw const rect, bg_brush);
+        let _ = DeleteObject(bg_brush);
 
         // Get current state from thread-local storage
         let state = OSD_STATE.with(|s| s.borrow().clone());
@@ -228,7 +232,7 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             );
         } else {
             // Single-bar mode: centered vertically
-            let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT) / 2;
+            let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT).saturating_div(2);
 
             draw_icon(hdc, OSD_PADDING, bar_top, ICON_HARDWARE);
             draw_single_bar(
@@ -280,23 +284,23 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
 ///
 /// # Safety
 ///
-/// The returned HFONT must be deleted with DeleteObject when no longer needed.
+/// The returned `HFONT` must be deleted with `DeleteObject` when no longer needed.
 unsafe fn create_icon_font() -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,          // Height
-            0,                  // Width (0 = auto)
-            0,                  // Escapement
-            0,                  // Orientation
-            FW_NORMAL.0 as i32, // Weight
-            0,                  // Italic
-            0,                  // Underline
-            0,                  // StrikeOut
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
+            FONT_SIZE,                  // Height
+            0,                          // Width (0 = auto)
+            0,                          // Escapement
+            0,                          // Orientation
+            i32::from(FW_NORMAL.0),     // Weight
+            0,                          // Italic
+            0,                          // Underline
+            0,                          // StrikeOut
+            u32::from(DEFAULT_CHARSET.0),
+            u32::from(OUT_DEFAULT_PRECIS.0),
+            u32::from(CLIP_DEFAULT_PRECIS.0),
             0, // Quality (DEFAULT_QUALITY)
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            u32::from(DEFAULT_PITCH.0 | FF_DONTCARE.0),
             w!("Segoe UI Emoji"), // Font face for emoji support
         )
     }
@@ -325,11 +329,11 @@ unsafe fn draw_single_bar(
             bottom: y + height,
         };
         let bg_brush = CreateSolidBrush(COLORREF(BAR_BACKGROUND_COLOR));
-        FillRect(hdc, &bg_rect, bg_brush);
-        DeleteObject(bg_brush);
+        FillRect(hdc, &raw const bg_rect, bg_brush);
+        let _ = DeleteObject(bg_brush);
 
         // Draw filled portion
-        let fill_width = (width as i64 * percent as i64 / 100) as i32;
+        let fill_width = (i64::from(width) * i64::from(percent) / 100) as i32;
         if fill_width > 0 {
             let fill_rect = RECT {
                 left: x,
@@ -343,8 +347,8 @@ unsafe fn draw_single_bar(
                 BAR_FILL_COLOR
             };
             let fill_brush = CreateSolidBrush(COLORREF(fill_color));
-            FillRect(hdc, &fill_rect, fill_brush);
-            DeleteObject(fill_brush);
+            FillRect(hdc, &raw const fill_rect, fill_brush);
+            let _ = DeleteObject(fill_brush);
         }
     }
 }
@@ -365,16 +369,16 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
         SetTextColor(hdc, COLORREF(TEXT_COLOR));
 
         // Format and draw text
-        let text = format!("{}%", percent);
+        let text = format!("{percent}%");
         let wide_text: Vec<u16> = text.encode_utf16().collect();
 
         // Center text vertically with the bar
-        let text_y = y + (BAR_HEIGHT - FONT_SIZE) / 2;
+        let text_y = y + (BAR_HEIGHT - FONT_SIZE).saturating_div(2);
         TextOutW(hdc, x, text_y, &wide_text);
 
         // Cleanup
         SelectObject(hdc, old_font);
-        DeleteObject(font);
+        let _ = DeleteObject(font);
     }
 }
 
@@ -382,23 +386,23 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
 ///
 /// # Safety
 ///
-/// The returned HFONT must be deleted with DeleteObject when no longer needed.
+/// The returned `HFONT` must be deleted with `DeleteObject` when no longer needed.
 unsafe fn create_osd_font() -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,          // Height
-            0,                  // Width (0 = auto)
-            0,                  // Escapement
-            0,                  // Orientation
-            FW_NORMAL.0 as i32, // Weight
-            0,                  // Italic
-            0,                  // Underline
-            0,                  // StrikeOut
-            DEFAULT_CHARSET.0 as u32,
-            OUT_DEFAULT_PRECIS.0 as u32,
-            CLIP_DEFAULT_PRECIS.0 as u32,
+            FONT_SIZE,                  // Height
+            0,                          // Width (0 = auto)
+            0,                          // Escapement
+            0,                          // Orientation
+            i32::from(FW_NORMAL.0),     // Weight
+            0,                          // Italic
+            0,                          // Underline
+            0,                          // StrikeOut
+            u32::from(DEFAULT_CHARSET.0),
+            u32::from(OUT_DEFAULT_PRECIS.0),
+            u32::from(CLIP_DEFAULT_PRECIS.0),
             0, // Quality (DEFAULT_QUALITY)
-            (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+            u32::from(DEFAULT_PITCH.0 | FF_DONTCARE.0),
             w!("Segoe UI"), // Font face
         )
     }
@@ -419,6 +423,11 @@ fn update_osd_state(state: &MonitorState, is_error: bool) {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
+/// Registers the window class for the OSD window if not already registered.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
 pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
     REGISTER_CLASS_ONCE
         .get_or_init(|| {
@@ -427,21 +436,21 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
                     BrightnessError::windows_api("GetModuleHandleW", e.code().0 as u32)
                 })?;
 
-                // Ein grauer Brush als Standardhintergrund.
+                // A gray brush for the default background.
                 let background_brush = CreateSolidBrush(COLORREF(OSD_BACKGROUND_COLOR));
 
                 let wnd_class = WNDCLASSEXW {
-                    cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                    cbSize: u32::try_from(std::mem::size_of::<WNDCLASSEXW>()).unwrap_or(0),
                     style: CS_HREDRAW | CS_VREDRAW,
                     lpfnWndProc: Some(wnd_proc),
                     hInstance: hinstance.into(),
-                    hCursor: Default::default(),
+                    hCursor: windows::Win32::UI::WindowsAndMessaging::HCURSOR::default(),
                     hbrBackground: background_brush,
                     lpszClassName: OSD_CLASS_NAME,
                     ..Default::default()
                 };
 
-                if RegisterClassExW(&wnd_class) == 0 {
+                if RegisterClassExW(&raw const wnd_class) == 0 {
                     return Err(last_error_as_brightness_error("RegisterClassExW"));
                 }
             }
@@ -465,6 +474,7 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
 ///
 /// Returns `BrightnessError::WindowsApi` if window class registration or
 /// `CreateWindowExW` fails.
+#[must_use]
 pub fn create_osd_window() -> Result<SafeHwnd> {
     let class_name = ensure_osd_class_registered()?;
 
@@ -505,14 +515,24 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
+/// Positions the OSD window at the bottom-center of the specified monitor.
+///
+/// # Arguments
+///
+/// * `hwnd` - The OSD window handle.
+/// * `hmonitor` - The monitor to position the OSD on.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
 pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
     let mut mi = MONITORINFO {
-        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
         ..Default::default()
     };
 
     unsafe {
-        if !GetMonitorInfoW(hmonitor, &mut mi).as_bool() {
+        if !GetMonitorInfoW(hmonitor, &raw mut mi).as_bool() {
             return Err(last_error_as_brightness_error("GetMonitorInfoW"));
         }
 
@@ -578,6 +598,7 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window creation or opacity setting fails.
+    #[must_use]
     pub fn new(opacity: f32, timeout_ms: u32) -> Result<Self> {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
@@ -595,12 +616,22 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window positioning fails.
+    /// Shows the OSD for a specific monitor with the given state.
+    ///
+    /// # Arguments
+    ///
+    /// * `hmonitor` - The monitor to display the OSD on.
+    /// * `state` - The current monitor brightness state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window positioning fails.
     pub fn show(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
         position_osd_window(self.hwnd.as_raw(), hmonitor)?;
         update_osd_state(state, false);
 
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
             self.reset_timer();
         }
@@ -618,12 +649,22 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window positioning fails.
+    /// Shows the OSD with an error indicator (red progress bar).
+    ///
+    /// # Arguments
+    ///
+    /// * `hmonitor` - The monitor to display the OSD on.
+    /// * `state` - The current monitor brightness state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if window positioning fails.
     pub fn show_error(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
         position_osd_window(self.hwnd.as_raw(), hmonitor)?;
         update_osd_state(state, true);
 
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
             self.reset_timer();
         }
@@ -632,6 +673,10 @@ impl OsdWindow {
     }
 
     /// Hides the OSD window immediately.
+    ///
+    /// # Errors
+    ///
+    /// This method is currently infallible but returns `Result` for consistency with Win32 APIs.
     pub fn hide(&self) -> Result<()> {
         unsafe {
             let _ = ShowWindow(self.hwnd.as_raw(), SW_HIDE);
@@ -646,11 +691,22 @@ impl OsdWindow {
     /// # Arguments
     ///
     /// * `state` - The current monitor brightness state.
+    /// Triggers a redraw of the OSD with updated state.
+    ///
+    /// Also resets the auto-hide timer.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current monitor brightness state.
+    ///
+    /// # Errors
+    ///
+    /// This method is currently infallible but returns `Result` for consistency.
     pub fn update(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, false);
         unsafe {
             // Invalidate the entire window to trigger WM_PAINT
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
             self.reset_timer();
         }
         Ok(())
@@ -663,10 +719,21 @@ impl OsdWindow {
     /// # Arguments
     ///
     /// * `state` - The current monitor brightness state.
+    /// Triggers a redraw of the OSD with error state (red progress bar).
+    ///
+    /// Also resets the auto-hide timer.
+    ///
+    /// # Arguments
+    ///
+    /// * `state` - The current monitor brightness state.
+    ///
+    /// # Errors
+    ///
+    /// This method is currently infallible but returns `Result` for consistency.
     pub fn update_error(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, true);
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
             self.reset_timer();
         }
         Ok(())
@@ -680,6 +747,7 @@ impl OsdWindow {
     }
 
     /// Returns `true` if the OSD window is currently visible.
+    #[must_use]
     pub fn is_visible(&self) -> bool {
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
@@ -688,6 +756,7 @@ impl OsdWindow {
     }
 
     /// Returns the raw window handle for advanced operations.
+    #[must_use]
     pub fn hwnd(&self) -> HWND {
         self.hwnd.as_raw()
     }
