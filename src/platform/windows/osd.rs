@@ -292,7 +292,7 @@ unsafe fn create_icon_font() -> HFONT {
             0,                      // Width (0 = auto)
             0,                      // Escapement
             0,                      // Orientation
-            i32::from(FW_NORMAL.0), // Weight
+            FW_NORMAL.0 as i32,     // Weight
             0,                      // Italic
             0,                      // Underline
             0,                      // StrikeOut
@@ -394,7 +394,7 @@ unsafe fn create_osd_font() -> HFONT {
             0,                      // Width (0 = auto)
             0,                      // Escapement
             0,                      // Orientation
-            i32::from(FW_NORMAL.0), // Weight
+            FW_NORMAL.0 as i32,     // Weight
             0,                      // Italic
             0,                      // Underline
             0,                      // StrikeOut
@@ -631,7 +631,7 @@ impl OsdWindow {
         update_osd_state(state, false);
 
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
             self.reset_timer();
         }
@@ -664,7 +664,7 @@ impl OsdWindow {
         update_osd_state(state, true);
 
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
             self.reset_timer();
         }
@@ -706,7 +706,7 @@ impl OsdWindow {
         update_osd_state(state, false);
         unsafe {
             // Invalidate the entire window to trigger WM_PAINT
-            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             self.reset_timer();
         }
         Ok(())
@@ -733,7 +733,7 @@ impl OsdWindow {
     pub fn update_error(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, true);
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), std::ptr::null(), true);
+            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             self.reset_timer();
         }
         Ok(())
