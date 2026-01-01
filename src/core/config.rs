@@ -172,6 +172,7 @@ impl Config {
     /// Returns the default configuration file path.
     ///
     /// Location: `%APPDATA%\BrightnessControl\config.json`
+    #[must_use]
     pub fn default_path() -> Option<PathBuf> {
         dirs_next::config_dir().map(|p| p.join("BrightnessControl").join("config.json"))
     }
@@ -232,6 +233,10 @@ impl Config {
     /// # Errors
     ///
     /// Returns `ConfigWrite` if the file cannot be written.
+    ///
+    /// # Panics
+    ///
+    /// Panics if JSON serialization fails.
     pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         let path_str = path.display().to_string();
 
