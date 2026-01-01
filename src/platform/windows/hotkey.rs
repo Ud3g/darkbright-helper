@@ -53,12 +53,13 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // In Rust 2024, unsafe fn body still requires explicit unsafe block
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
 /// Manages global hotkey registration and handling.
 pub struct HotkeyManager {
-    /// Handle to the invisible message window that receives WM_HOTKEY messages.
+    /// Handle to the invisible message window that receives `WM_HOTKEY` messages.
     hwnd: HWND,
     /// List of currently registered hotkey IDs.
     registered_ids: Vec<i32>,
@@ -69,9 +70,20 @@ pub struct HotkeyManager {
 }
 
 impl HotkeyManager {
-    /// Creates a new HotkeyManager.
+    /// Creates a new `HotkeyManager`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `BrightnessError::WindowsApi` if the message window cannot be created.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the current process module handle cannot be retrieved.
     pub fn new(sender: Sender<BrightnessMessage>, step_percent: u8) -> Result<Self> {
-        let hinstance = unsafe { GetModuleHandleW(None).unwrap() };
+        let hinstance = unsafe {
+            GetModuleHandleW(None)
+                .map_err(|e| BrightnessError::windows_api("GetModuleHandleW", e.code().0 as u32))?
+        };
         let class_name = w!("DarkBrightHotkeyWindow");
 
         let wnd_class = WNDCLASSW {
@@ -124,7 +136,7 @@ impl HotkeyManager {
     ///
     /// # Errors
     ///
-    /// Returns `WindowsApi` error if registration fails.
+    /// Returns `BrightnessError::WindowsApi` if registration fails.
     pub fn register_hotkey(
         &mut self,
         id: i32,
@@ -132,7 +144,7 @@ impl HotkeyManager {
         vk: VIRTUAL_KEY,
     ) -> Result<()> {
         unsafe {
-            RegisterHotKey(self.hwnd, id, modifiers, vk.0 as u32)
+            RegisterHotKey(self.hwnd, id, modifiers, u32::from(vk.0))
                 .map_err(|e| BrightnessError::windows_api("RegisterHotKey", e.code().0 as u32))?;
         }
         self.registered_ids.push(id);
@@ -140,6 +152,10 @@ impl HotkeyManager {
     }
 
     /// Unregisters a hotkey.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::WindowsApi` if unregistration fails.
     pub fn unregister_hotkey(&mut self, id: i32) -> Result<()> {
         unsafe {
             UnregisterHotKey(self.hwnd, id)
@@ -151,7 +167,7 @@ impl HotkeyManager {
 
     /// Runs the message loop to process hotkey events.
     ///
-    /// This method blocks until the message loop is terminated (e.g. by WM_QUIT).
+    /// This method blocks until the message loop is terminated (e.g. by `WM_QUIT`).
     pub fn run_message_loop(&self) {
         let mut msg = MSG::default();
         unsafe {
@@ -161,6 +177,7 @@ impl HotkeyManager {
             // -1: Error
             while GetMessageW(&mut msg, HWND::default(), 0, 0).0 > 0 {
                 if msg.message == WM_HOTKEY {
+                    // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey
                     let id = msg.wParam.0 as i32;
                     let delta = match id {
                         BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => self.step_percent,
@@ -209,6 +226,7 @@ pub struct ParsedHotkey {
 
 impl ParsedHotkey {
     /// Creates a new parsed hotkey.
+    #[must_use]
     pub const fn new(modifiers: HOT_KEY_MODIFIERS, vk_code: VIRTUAL_KEY) -> Self {
         Self { modifiers, vk_code }
     }
@@ -306,6 +324,7 @@ static KEY_MAP: LazyLock<HashMap<&'static str, VIRTUAL_KEY>> = LazyLock::new(|| 
     m.insert("plus", VK_OEM_PLUS);
     m.insert("minus", VK_OEM_MINUS);
 
+    // Note: Leak is acceptable as this is done once in LazyLock for the lifetime of the process.
     // Letters A-Z (VK codes are same as ASCII uppercase)
     for c in 'a'..='z' {
         let key_name: &'static str = Box::leak(c.to_string().into_boxed_str());
@@ -393,10 +412,11 @@ static VK_TO_NAME: LazyLock<Vec<(&'static str, VIRTUAL_KEY)>> = LazyLock::new(||
 ///
 /// # Errors
 ///
-/// Returns `ConfigInvalid` if:
-/// - The string is empty or contains only modifiers
-/// - An unknown key name is encountered
-/// - No valid key (only modifiers) is specified
+/// Returns `BrightnessError::ConfigInvalid` if:
+/// - The string is empty or contains only modifiers.
+/// - An unknown key name is encountered.
+/// - No valid key (only modifiers) is specified.
+#[must_use]
 pub fn parse_hotkey(s: &str) -> Result<ParsedHotkey> {
     let s = s.trim();
 
