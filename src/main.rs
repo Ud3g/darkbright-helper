@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
+use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
@@ -29,11 +30,11 @@ static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>>
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
         log::info!("Shutdown signal received.");
-        if let Ok(guard) = SHUTDOWN_SENDER.lock() {
-            if let Some(tx) = &*guard {
-                let _ = tx.send(BrightnessMessage::Shutdown);
-                return TRUE;
-            }
+        if let Ok(guard) = SHUTDOWN_SENDER.lock()
+            && let Some(tx) = &*guard
+        {
+            let _ = tx.send(BrightnessMessage::Shutdown);
+            return TRUE;
         }
     }
     FALSE
@@ -105,6 +106,7 @@ impl BrightnessController {
     }
 
     /// Handles the shutdown process.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn handle_shutdown(&mut self) -> Result<()> {
         Ok(())
     }
@@ -301,11 +303,66 @@ impl BrightnessController {
 fn pump_windows_messages() {
     unsafe {
         let mut msg = MSG::default();
-        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+        while PeekMessageW(&raw mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&raw const msg);
+            DispatchMessageW(&raw const msg);
         }
     }
+}
+
+fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) {
+    std::thread::spawn(move || {
+        let mut hotkey_manager = match HotkeyManager::new(tx, config.brightness.step_percent) {
+            Ok(hm) => hm,
+            Err(e) => {
+                log::error!("Failed to initialize HotkeyManager: {e}");
+                return;
+            }
+        };
+
+        // Register primary hotkeys from config
+        match parse_hotkey(&config.hotkeys.brightness_up) {
+            Ok(p) => {
+                if let Err(e) =
+                    hotkey_manager.register_hotkey(BRIGHTNESS_UP_ID, p.modifiers, p.vk_code)
+                {
+                    log::error!("Failed to register primary brightness up hotkey: {e}");
+                }
+            }
+            Err(e) => log::error!("Invalid brightness_up hotkey in config: {e}"),
+        }
+
+        match parse_hotkey(&config.hotkeys.brightness_down) {
+            Ok(p) => {
+                if let Err(e) =
+                    hotkey_manager.register_hotkey(BRIGHTNESS_DOWN_ID, p.modifiers, p.vk_code)
+                {
+                    log::error!("Failed to register primary brightness down hotkey: {e}");
+                }
+            }
+            Err(e) => log::error!("Invalid brightness_down hotkey in config: {e}"),
+        }
+
+        // Register secondary (opportunistic) hotkeys
+        if let Err(e) = hotkey_manager.register_hotkey(
+            BRIGHTNESS_UP_ALT_ID,
+            HOT_KEY_MODIFIERS(0),
+            VK_BRIGHTNESS_UP,
+        ) {
+            log::debug!("Secondary brightness up hotkey not registered: {e}");
+        }
+
+        if let Err(e) = hotkey_manager.register_hotkey(
+            BRIGHTNESS_DOWN_ALT_ID,
+            HOT_KEY_MODIFIERS(0),
+            VK_BRIGHTNESS_DOWN,
+        ) {
+            log::debug!("Secondary brightness down hotkey not registered: {e}");
+        }
+
+        // Run message loop (blocks until thread ends)
+        hotkey_manager.run_message_loop();
+    });
 }
 
 fn main() {
@@ -329,7 +386,7 @@ fn main() {
             cfg
         }
         Err(e) => {
-            log::error!("Failed to load configuration: {}. Using defaults.", e);
+            log::error!("Failed to load configuration: {e}. Using defaults.");
             Config::default()
         }
     };
@@ -338,13 +395,13 @@ fn main() {
     let mut controller = match BrightnessController::new(config.clone()) {
         Ok(c) => c,
         Err(e) => {
-            log::error!("Failed to initialize BrightnessController: {}", e);
+            log::error!("Failed to initialize BrightnessController: {e}");
             return;
         }
     };
 
     if let Err(e) = controller.handle_refresh() {
-        log::error!("Initial monitor enumeration failed: {}", e);
+        log::error!("Initial monitor enumeration failed: {e}");
     }
 
     // Phase 6, Step 44 & 45: Register hotkeys and start hotkey thread
@@ -359,63 +416,7 @@ fn main() {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), TRUE);
     }
 
-    let hotkey_config = config.clone();
-
-    std::thread::spawn(move || {
-        let mut hotkey_manager = match HotkeyManager::new(tx, hotkey_config.brightness.step_percent)
-        {
-            Ok(hm) => hm,
-            Err(e) => {
-                log::error!("Failed to initialize HotkeyManager: {}", e);
-                return;
-            }
-        };
-
-        // Register primary hotkeys from config
-        match parse_hotkey(&hotkey_config.hotkeys.brightness_up) {
-            Ok(p) => {
-                if let Err(e) =
-                    hotkey_manager.register_hotkey(BRIGHTNESS_UP_ID, p.modifiers, p.vk_code)
-                {
-                    log::error!("Failed to register primary brightness up hotkey: {}", e);
-                }
-            }
-            Err(e) => log::error!("Invalid brightness_up hotkey in config: {}", e),
-        }
-
-        match parse_hotkey(&hotkey_config.hotkeys.brightness_down) {
-            Ok(p) => {
-                if let Err(e) =
-                    hotkey_manager.register_hotkey(BRIGHTNESS_DOWN_ID, p.modifiers, p.vk_code)
-                {
-                    log::error!("Failed to register primary brightness down hotkey: {}", e);
-                }
-            }
-            Err(e) => log::error!("Invalid brightness_down hotkey in config: {}", e),
-        }
-
-        // Register secondary (opportunistic) hotkeys
-        use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
-
-        if let Err(e) = hotkey_manager.register_hotkey(
-            BRIGHTNESS_UP_ALT_ID,
-            HOT_KEY_MODIFIERS(0),
-            VK_BRIGHTNESS_UP,
-        ) {
-            log::debug!("Secondary brightness up hotkey not registered: {}", e);
-        }
-
-        if let Err(e) = hotkey_manager.register_hotkey(
-            BRIGHTNESS_DOWN_ALT_ID,
-            HOT_KEY_MODIFIERS(0),
-            VK_BRIGHTNESS_DOWN,
-        ) {
-            log::debug!("Secondary brightness down hotkey not registered: {}", e);
-        }
-
-        // Run message loop (blocks until thread ends)
-        hotkey_manager.run_message_loop();
-    });
+    start_hotkey_thread(config, tx);
 
     // Phase 6, Step 46: Main Loop
     log::info!("Entering main event loop...");
@@ -426,7 +427,7 @@ fn main() {
         // Check for brightness messages with a short timeout
         match rx.recv_timeout(Duration::from_millis(16)) {
             Ok(msg) => {
-                log::debug!("Main loop received message: {:?}", msg);
+                log::debug!("Main loop received message: {msg:?}");
                 match controller.handle_message(msg) {
                     Ok(should_continue) => {
                         if !should_continue {
@@ -434,7 +435,7 @@ fn main() {
                         }
                     }
                     Err(e) => {
-                        log::error!("Error processing message: {}", e);
+                        log::error!("Error processing message: {e}");
                     }
                 }
             }
