@@ -207,20 +207,28 @@ impl BrightnessController {
             }
             Err(e) => {
                 log::error!(
-                    "{target_id}: DDC failed setting hw {old_hardware}%→{new_hardware}%, reverted to hw={old_hardware}%, overlay={old_overlay}%"
+                    "{target_id}: DDC failed setting hw {old_hardware}%→{new_hardware}%: {e}"
+                );
+                log::debug!(
+                    "{target_id}: Reverted to hw={old_hardware}%, overlay={old_overlay}%"
                 );
                 // 6. Error rollback
                 state.revert_pending();
                 state.overlay_opacity = old_overlay;
 
                 // Revert overlay to old value
-                let _ = self
+                if let Err(overlay_err) = self
                     .overlay_manager
-                    .update(&target_id, hmonitor, old_overlay);
+                    .update(&target_id, hmonitor, old_overlay)
+                {
+                    log::error!("{target_id}: Failed to revert overlay: {overlay_err}");
+                }
 
                 // Set OSD to error state
-                self.osd.update_error(state)?;
-                return Err(e);
+                if let Err(osd_err) = self.osd.update_error(state) {
+                    log::error!("{target_id}: Failed to show OSD error state: {osd_err}");
+                }
+                // Error is handled (logged, OSD shows error), don't propagate
             }
         }
 

@@ -206,8 +206,16 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
             Err(e) => {
                 attempts += 1;
                 if attempts >= DDC_RETRIES {
+                    log::error!("DDC operation failed after {} retries: {}", DDC_RETRIES, e);
                     return Err(e);
                 }
+                log::warn!(
+                    "DDC operation failed (attempt {}/{}), retrying in {}ms: {}",
+                    attempts,
+                    DDC_RETRIES,
+                    DDC_RETRY_DELAY_MS,
+                    e
+                );
                 thread::sleep(Duration::from_millis(DDC_RETRY_DELAY_MS));
             }
         }
