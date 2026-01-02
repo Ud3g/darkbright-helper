@@ -29,10 +29,15 @@ const OSD_CLASS_NAME: PCWSTR = w!("DarkBrightOSDClass");
 
 /// OSD window width in pixels.
 const OSD_WIDTH: i32 = 300;
-/// OSD window height in pixels.
-const OSD_HEIGHT: i32 = 80;
+/// OSD window height in pixels (includes space for error footer).
+const OSD_HEIGHT: i32 = 110;
 /// Margin from the bottom of the monitor in pixels.
 const OSD_BOTTOM_MARGIN: i32 = 100;
+
+/// Height reserved for the error message footer area.
+const FOOTER_HEIGHT: i32 = 25;
+/// Error message displayed when DDC communication fails.
+const ERROR_MESSAGE: &str = "DDC Error - Adjustment failed";
 
 /// OSD background color (dark gray, semi-transparent look).
 const OSD_BACKGROUND_COLOR: u32 = 0x0030_3030; // RGB: 48, 48, 48
