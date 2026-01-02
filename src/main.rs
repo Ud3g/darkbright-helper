@@ -61,6 +61,8 @@ struct BrightnessController {
     last_activity: Instant,
     /// Timestamp of last completed DDC refresh.
     last_refresh: Instant,
+    /// Flag to prevent overlapping refresh requests.
+    refresh_in_progress: bool,
 }
 
 impl BrightnessController {
@@ -87,6 +89,7 @@ impl BrightnessController {
             ddc_cmd_tx,
             last_activity: now,
             last_refresh: now,
+            refresh_in_progress: false,
         })
     }
 
@@ -189,8 +192,9 @@ impl BrightnessController {
                 .or_insert_with(|| MonitorState::new(brightness));
         }
 
-        // Update refresh timestamp for periodic refresh tracking
+        // Update refresh timestamp and clear in-progress flag
         self.last_refresh = Instant::now();
+        self.refresh_in_progress = false;
     }
 
     /// Applies a relative brightness adjustment.
@@ -314,9 +318,37 @@ impl BrightnessController {
         // Clear ID cache since handles may change after refresh
         self.id_cache.clear();
 
+        // Mark refresh in progress to prevent overlapping requests
+        self.refresh_in_progress = true;
+
         // Send refresh command to worker (non-blocking)
         if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::RefreshAll) {
             log::error!("Failed to send refresh command to DDC worker: {e}");
+            self.refresh_in_progress = false;
+        }
+    }
+
+    /// Checks if a periodic refresh is due and triggers it if needed.
+    ///
+    /// This is called from the main loop to keep monitor state in sync
+    /// with external changes (e.g., physical monitor buttons, other apps).
+    fn check_periodic_refresh(&mut self) {
+        let periodic_seconds = self.config.refresh.periodic_seconds;
+
+        // Skip if periodic refresh is disabled (0) or refresh already in progress
+        if periodic_seconds == 0 || self.refresh_in_progress {
+            return;
+        }
+
+        let elapsed = self.last_refresh.elapsed();
+        let interval = Duration::from_secs(u64::from(periodic_seconds));
+
+        if elapsed >= interval {
+            log::debug!(
+                "Periodic refresh triggered ({}s since last refresh)",
+                elapsed.as_secs()
+            );
+            self.handle_refresh();
         }
     }
 }
@@ -500,6 +532,9 @@ fn main() {
     loop {
         // Pump Windows messages (for OSD WM_PAINT, WM_TIMER, etc.)
         pump_windows_messages();
+
+        // Check if periodic refresh is due
+        controller.check_periodic_refresh();
 
         // Check for brightness messages with a short timeout
         match rx.recv_timeout(Duration::from_millis(16)) {
