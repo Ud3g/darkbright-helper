@@ -203,6 +203,10 @@ impl BrightnessController {
     /// shows the OSD immediately with optimistic update, and sends the DDC
     /// command to the worker thread (non-blocking).
     fn handle_adjust(&mut self, monitor_id: Option<MonitorId>, delta: i8) -> Result<()> {
+        // Check if we need an inactivity-based refresh before processing
+        // (must be checked BEFORE updating last_activity)
+        self.check_inactivity_refresh();
+
         // Update activity timestamp for inactivity-based refresh tracking
         self.last_activity = Instant::now();
 
@@ -346,6 +350,34 @@ impl BrightnessController {
         if elapsed >= interval {
             log::debug!(
                 "Periodic refresh triggered ({}s since last refresh)",
+                elapsed.as_secs()
+            );
+            self.handle_refresh();
+        }
+    }
+
+    /// Checks if a refresh is needed due to inactivity and triggers it if so.
+    ///
+    /// This is called at the start of `handle_adjust()` to resync with
+    /// external changes before applying a brightness adjustment after
+    /// the user has been inactive for a configured duration.
+    ///
+    /// Uses non-blocking approach: triggers refresh but proceeds with
+    /// optimistic adjustment. Values reconcile when `DdcRefreshResult` arrives.
+    fn check_inactivity_refresh(&mut self) {
+        let inactivity_seconds = self.config.refresh.inactivity_seconds;
+
+        // Skip if inactivity refresh is disabled (0) or refresh already in progress
+        if inactivity_seconds == 0 || self.refresh_in_progress {
+            return;
+        }
+
+        let elapsed = self.last_activity.elapsed();
+        let threshold = Duration::from_secs(u64::from(inactivity_seconds));
+
+        if elapsed >= threshold {
+            log::debug!(
+                "Inactivity refresh triggered ({}s since last activity)",
                 elapsed.as_secs()
             );
             self.handle_refresh();
