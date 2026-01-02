@@ -19,9 +19,11 @@ pub mod ddc_worker;
 pub mod hotkey;
 pub mod osd;
 pub mod overlay;
+pub mod power;
 
 // Re-export commonly used types
 pub use ddc_worker::DdcWorker;
+pub use power::PowerEventListener;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Helpers
