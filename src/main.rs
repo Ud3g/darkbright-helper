@@ -112,6 +112,10 @@ impl BrightnessController {
             BrightnessMessage::Refresh => {
                 self.handle_refresh();
             }
+            BrightnessMessage::SystemResumed => {
+                log::info!("System resumed from sleep/hibernate, triggering refresh");
+                self.handle_refresh();
+            }
             BrightnessMessage::DdcSetResult {
                 monitor_id,
                 value,
