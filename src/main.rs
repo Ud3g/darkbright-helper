@@ -1,8 +1,12 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, mpsc};
+use std::time::Duration;
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DispatchMessageW, MSG, PeekMessageW, PM_REMOVE, TranslateMessage,
+};
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
@@ -284,6 +288,20 @@ impl BrightnessController {
     }
 }
 
+/// Pumps all pending Windows messages for the current thread.
+///
+/// This is necessary because the main thread owns OSD and overlay windows
+/// that need to receive `WM_PAINT` and `WM_TIMER` messages.
+fn pump_windows_messages() {
+    unsafe {
+        let mut msg = MSG::default();
+        while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+            let _ = TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
 fn main() {
     // Phase 6, Step 41: Initialize logging
     // Default to "info" in release and "debug" in debug builds if RUST_LOG is not set.
@@ -395,16 +413,31 @@ fn main() {
 
     // Phase 6, Step 46: Main Loop
     log::info!("Entering main event loop...");
-    for msg in rx {
-        log::debug!("Main loop received message: {:?}", msg);
-        match controller.handle_message(msg) {
-            Ok(should_continue) => {
-                if !should_continue {
-                    break;
+    loop {
+        // Pump Windows messages (for OSD WM_PAINT, WM_TIMER, etc.)
+        pump_windows_messages();
+
+        // Check for brightness messages with a short timeout
+        match rx.recv_timeout(Duration::from_millis(16)) {
+            Ok(msg) => {
+                log::debug!("Main loop received message: {:?}", msg);
+                match controller.handle_message(msg) {
+                    Ok(should_continue) => {
+                        if !should_continue {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Error processing message: {}", e);
+                    }
                 }
             }
-            Err(e) => {
-                log::error!("Error processing message: {}", e);
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // No message received, continue pumping Windows messages
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                log::info!("Channel disconnected, shutting down.");
+                break;
             }
         }
     }
