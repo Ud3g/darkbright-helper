@@ -324,33 +324,56 @@ fn pump_windows_messages() {
 }
 
 fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> Result<()> {
-    // Parse and validate primary hotkeys before spawning thread (fail fast)
+    // Parse and validate primary hotkeys before spawning thread (fail fast on parse errors)
     let up_hotkey = parse_hotkey(&config.hotkeys.brightness_up)
         .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_up", e.to_string()))?;
 
     let down_hotkey = parse_hotkey(&config.hotkeys.brightness_down)
         .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_down", e.to_string()))?;
 
-    // Create hotkey manager and register primary hotkeys (fatal if they fail)
-    let mut hotkey_manager = HotkeyManager::new(tx, config.brightness.step_percent)?;
+    // Channel to receive registration result from the hotkey thread.
+    // Hotkeys MUST be registered on the same thread that runs the message loop,
+    // because WM_HOTKEY messages are sent to the registering thread's queue.
+    let (result_tx, result_rx) = mpsc::channel::<Result<()>>();
 
-    hotkey_manager
-        .register_hotkey(BRIGHTNESS_UP_ID, up_hotkey.modifiers, up_hotkey.vk_code)
-        .map_err(|e| {
-            BrightnessError::hotkey_registration(config.hotkeys.brightness_up.clone(), e.to_string())
-        })?;
-
-    hotkey_manager
-        .register_hotkey(BRIGHTNESS_DOWN_ID, down_hotkey.modifiers, down_hotkey.vk_code)
-        .map_err(|e| {
-            BrightnessError::hotkey_registration(
-                config.hotkeys.brightness_down.clone(),
-                e.to_string(),
-            )
-        })?;
-
-    // Spawn thread only after primary hotkeys are successfully registered
+    let config_clone = config.clone();
     std::thread::spawn(move || {
+        // Create hotkey manager on THIS thread (creates message window here)
+        let mut hotkey_manager = match HotkeyManager::new(tx, config_clone.brightness.step_percent) {
+            Ok(hm) => hm,
+            Err(e) => {
+                let _ = result_tx.send(Err(e));
+                return;
+            }
+        };
+
+        // Register primary hotkeys on THIS thread (fatal if they fail)
+        if let Err(e) = hotkey_manager.register_hotkey(
+            BRIGHTNESS_UP_ID,
+            up_hotkey.modifiers,
+            up_hotkey.vk_code,
+        ) {
+            let _ = result_tx.send(Err(BrightnessError::hotkey_registration(
+                config_clone.hotkeys.brightness_up.clone(),
+                e.to_string(),
+            )));
+            return;
+        }
+
+        if let Err(e) = hotkey_manager.register_hotkey(
+            BRIGHTNESS_DOWN_ID,
+            down_hotkey.modifiers,
+            down_hotkey.vk_code,
+        ) {
+            let _ = result_tx.send(Err(BrightnessError::hotkey_registration(
+                config_clone.hotkeys.brightness_down.clone(),
+                e.to_string(),
+            )));
+            return;
+        }
+
+        // Signal success to main thread
+        let _ = result_tx.send(Ok(()));
 
         // Register secondary (opportunistic) hotkeys - non-fatal
         if let Err(e) = hotkey_manager.register_hotkey(
@@ -373,7 +396,10 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> R
         hotkey_manager.run_message_loop();
     });
 
-    Ok(())
+    // Wait for registration result from hotkey thread
+    result_rx
+        .recv()
+        .map_err(|_| BrightnessError::ChannelRecv)?
 }
 
 fn main() {
