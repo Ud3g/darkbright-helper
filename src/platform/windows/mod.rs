@@ -20,6 +20,9 @@ pub mod hotkey;
 pub mod osd;
 pub mod overlay;
 
+// Re-export commonly used types
+pub use ddc_worker::DdcWorker;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Helpers
 // ─────────────────────────────────────────────────────────────────────────────

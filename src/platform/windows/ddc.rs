@@ -351,6 +351,13 @@ mod tests {
         let result = enumerate_monitors();
         assert!(result.is_ok());
     }
+
+    /// Static assertion that `DdcMonitor` is `Send`.
+    /// This is required for the DDC worker thread to own monitors.
+    const _: () = {
+        const fn assert_send<T: Send>() {}
+        assert_send::<DdcMonitor>();
+    };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
