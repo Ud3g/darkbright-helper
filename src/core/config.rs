@@ -295,3 +295,39 @@ impl Config {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_save_and_load_config() {
+        let temp_dir = std::env::temp_dir();
+        let file_path = temp_dir.join("darkbright_test_config.json");
+
+        // Ensure cleanup from previous runs
+        if file_path.exists() {
+            let _ = fs::remove_file(&file_path);
+        }
+
+        let mut config = Config::default();
+        config.osd.opacity = 0.5;
+        config.hotkeys.brightness_up = "Alt+Up".to_string();
+        config.brightness.step_percent = 10;
+
+        // Test saving
+        assert!(config.save_to(&file_path).is_ok());
+        assert!(file_path.exists());
+
+        // Test loading
+        let loaded_config = Config::load_from(&file_path).expect("Failed to load config");
+
+        assert!((loaded_config.osd.opacity - 0.5).abs() < f32::EPSILON);
+        assert_eq!(loaded_config.hotkeys.brightness_up, "Alt+Up");
+        assert_eq!(loaded_config.brightness.step_percent, 10);
+
+        // Cleanup
+        let _ = fs::remove_file(file_path);
+    }
+}
