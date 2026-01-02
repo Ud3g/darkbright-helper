@@ -102,18 +102,23 @@ unsafe extern "system" fn wnd_proc(
     unsafe {
         match msg {
             WM_PAINT => {
+                log::debug!("OSD WM_PAINT received");
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &raw mut ps);
 
                 if hdc.0 != 0 {
                     paint_osd(hwnd, hdc);
                     EndPaint(hwnd, &raw const ps);
+                } else {
+                    log::debug!("OSD WM_PAINT: BeginPaint returned null HDC");
                 }
 
                 LRESULT(0)
             }
             WM_TIMER => {
+                log::debug!("OSD WM_TIMER received, wparam={}", wparam.0);
                 if wparam.0 == HIDE_TIMER_ID {
+                    log::debug!("OSD hiding due to timer");
                     let _ = KillTimer(hwnd, HIDE_TIMER_ID);
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
@@ -131,8 +136,10 @@ unsafe extern "system" fn wnd_proc(
 /// Must be called from within a `BeginPaint`/`EndPaint` block.
 unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
     unsafe {
+        log::debug!("OSD paint_osd called, thread={:?}", std::thread::current().id());
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &raw mut rect).is_err() {
+            log::debug!("OSD paint_osd: GetClientRect failed");
             return;
         }
 
@@ -181,6 +188,12 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 /// Must be called with a valid device context.
 unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderState) {
     unsafe {
+        log::debug!(
+            "OSD drawing bars: hardware_brightness={}, overlay_opacity={}, is_error={}",
+            state.hardware_brightness,
+            state.overlay_opacity,
+            state.is_error
+        );
         let width = client_rect.right - client_rect.left;
 
         // Calculate bar dimensions (leave space for icon on left and percentage on right)
@@ -410,10 +423,19 @@ unsafe fn create_osd_font() -> HFONT {
 
 /// Updates the OSD render state from a `MonitorState`.
 fn update_osd_state(state: &MonitorState, is_error: bool) {
+    let hw = state.effective_brightness();
+    let overlay = state.overlay_opacity;
+    log::debug!(
+        "OSD update_osd_state called: hardware_brightness={}, overlay_opacity={}, is_error={}, thread={:?}",
+        hw,
+        overlay,
+        is_error,
+        std::thread::current().id()
+    );
     OSD_STATE.with(|s| {
         let mut render_state = s.borrow_mut();
-        render_state.hardware_brightness = state.effective_brightness();
-        render_state.overlay_opacity = state.overlay_opacity;
+        render_state.hardware_brightness = hw;
+        render_state.overlay_opacity = overlay;
         render_state.is_error = is_error;
     });
 }
