@@ -59,6 +59,7 @@ Dedicated threads for I/O, main thread owns state and UI:
 │  │    - owns MonitorState map                            │  │
 │  │    - updates overlay/OSD (UI always responsive)       │  │
 │  │    - sends DdcCommand to worker                       │  │
+│  │    - checks periodic/inactivity refresh triggers      │  │
 │  └───────────────────────────────────────────────────────┘  │
 │              ▲                              │                │
 │       recv() │                              │ send()         │
@@ -67,25 +68,26 @@ Dedicated threads for I/O, main thread owns state and UI:
                │                              │
       BrightnessMessage                  DdcCommand
                │                              │
-    ┌──────────┴──────────┐                   │
-    │                     │                   │
-┌───────────┐      ┌──────────────────────────┴──────┐
-│  Hotkey   │      │         DDC Worker Thread       │
-│  Thread   │      │  ┌───────────────────────────┐  │
-│           │      │  │  - owns Vec<DdcMonitor>   │  │
-│ send()    │      │  │  - executes DDC I/O       │  │
-│  │        │      │  │  - sends results back     │  │
-│  │        │      │  └───────────────────────────┘  │
-└──┼────────┘      └─────────────────────────────────┘
-   │                              │
-   └──────────────────────────────┘
-          (both send BrightnessMessage)
+    ┌──────────┼──────────┐                   │
+    │          │          │                   │
+┌───────────┐ ┌───────────┐ ┌─────────────────┴───────────────┐
+│  Hotkey   │ │  Power    │ │       DDC Worker Thread         │
+│  Thread   │ │  Thread   │ │  ┌───────────────────────────┐  │
+│           │ │           │ │  │  - owns Vec<DdcMonitor>   │  │
+│ send()    │ │ send()    │ │  │  - executes DDC I/O       │  │
+│  │        │ │  │        │ │  │  - sends results back     │  │
+│  │        │ │  │        │ │  └───────────────────────────┘  │
+└──┼────────┘ └──┼────────┘ └─────────────────────────────────┘
+   │             │                        │
+   └─────────────┴────────────────────────┘
+          (all send BrightnessMessage)
 ```
 
 **Rationale:**
 - No async runtime needed (simpler, smaller binary)
 - DDC/CI operations are inherently blocking (~40-120ms per operation)
 - DDC worker thread keeps main thread responsive for OSD/overlay updates
+- Power thread listens for system resume events (sleep/hibernate wake)
 - Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
@@ -417,7 +419,44 @@ This is acceptable because:
 [ERROR] DDC failed after 3 retries: monitor LG 27UK850 not responding
 ```
 
-### 9. DDC/CI Retry Strategy
+### 9. Refresh Strategy (Cache Synchronization)
+
+The application maintains cached brightness values for instant OSD response. These caches can become stale if brightness is changed externally (physical monitor buttons, other apps, or system events).
+
+**Multi-Trigger Refresh Approach:**
+
+| Trigger | Default | Config Key | Rationale |
+|---------|---------|------------|-----------|
+| **Periodic** | 60s | `refresh.periodic_seconds` | Catches gradual drift from external changes |
+| **Inactivity** | 30s | `refresh.inactivity_seconds` | Resyncs before first adjustment after idle period |
+| **System Resume** | Always | (not configurable) | Monitors may reset brightness after sleep/hibernate |
+
+**Behavior:**
+
+1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead.
+
+2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
+
+3. **System Resume**: Power event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` Windows messages. Triggers immediate refresh since monitors often reset to default brightness after sleep.
+
+**Overlap Protection:**
+
+A `refresh_in_progress` flag prevents multiple concurrent refresh requests. This avoids DDC bus congestion when multiple triggers fire simultaneously (e.g., resume + periodic + inactivity all at once).
+
+**Configuration:**
+
+```json
+{
+  "refresh": {
+    "periodic_seconds": 60,
+    "inactivity_seconds": 30
+  }
+}
+```
+
+Set either to `0` to disable that trigger. System resume refresh cannot be disabled.
+
+### 10. DDC/CI Retry Strategy
 
 **Approach:** Optimistic update with cached values and fixed retry
 
@@ -481,7 +520,7 @@ struct MonitorState {
 - On `DdcSetResult(success)`: `confirm_brightness()` promotes pending to cached
 - On `DdcSetResult(failure)`: `revert_pending()` discards optimistic value
 
-### 10. Error Handling: Strict
+### 11. Error Handling: Strict
 
 If DDC communication fails after retries, the application does **not** fall back to software overlay dimming for values > 0%.
 

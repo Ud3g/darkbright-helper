@@ -21,7 +21,7 @@ use darkbright_helper::platform::windows::hotkey::{
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::show_error_message_box;
-use darkbright_helper::platform::windows::DdcWorker;
+use darkbright_helper::platform::windows::{DdcWorker, PowerEventListener};
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -534,6 +534,21 @@ fn main() {
 
     // Request initial monitor enumeration from DDC worker
     controller.handle_refresh();
+
+    // Spawn power event listener thread (for sleep/resume detection)
+    let power_tx = tx.clone();
+    std::thread::spawn(move || {
+        match PowerEventListener::new(power_tx) {
+            Ok(listener) => {
+                log::info!("Power event listener started");
+                listener.run_message_loop();
+            }
+            Err(e) => {
+                log::error!("Failed to create power event listener: {e}");
+                // Non-fatal: app works without resume detection
+            }
+        }
+    });
 
     // Phase 6, Step 44 & 45: Register hotkeys and start hotkey thread
 
