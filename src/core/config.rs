@@ -366,6 +366,106 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn test_refresh_config_defaults() {
+        let config = RefreshConfig::default();
+        assert_eq!(config.periodic_seconds, DEFAULT_REFRESH_PERIODIC_SECONDS);
+        assert_eq!(config.inactivity_seconds, DEFAULT_REFRESH_INACTIVITY_SECONDS);
+    }
+
+    #[test]
+    fn test_refresh_config_zero_is_valid() {
+        // 0 means disabled, should not be changed by validation
+        let json = r#"{
+            "refresh": {
+                "periodic_seconds": 0,
+                "inactivity_seconds": 0
+            }
+        }"#;
+
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.refresh.periodic_seconds, 0);
+        assert_eq!(config.refresh.inactivity_seconds, 0);
+    }
+
+    #[test]
+    fn test_refresh_config_valid_values() {
+        let json = r#"{
+            "refresh": {
+                "periodic_seconds": 120,
+                "inactivity_seconds": 60
+            }
+        }"#;
+
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.refresh.periodic_seconds, 120);
+        assert_eq!(config.refresh.inactivity_seconds, 60);
+    }
+
+    #[test]
+    fn test_refresh_config_periodic_exceeds_max() {
+        let json = r#"{
+            "refresh": {
+                "periodic_seconds": 9999
+            }
+        }"#;
+
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        // Should be reset to default when exceeding max (3600)
+        assert_eq!(config.refresh.periodic_seconds, DEFAULT_REFRESH_PERIODIC_SECONDS);
+    }
+
+    #[test]
+    fn test_refresh_config_inactivity_exceeds_max() {
+        let json = r#"{
+            "refresh": {
+                "inactivity_seconds": 9999
+            }
+        }"#;
+
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        // Should be reset to default when exceeding max (600)
+        assert_eq!(config.refresh.inactivity_seconds, DEFAULT_REFRESH_INACTIVITY_SECONDS);
+    }
+
+    #[test]
+    fn test_refresh_config_at_max_boundary() {
+        let json = r#"{
+            "refresh": {
+                "periodic_seconds": 3600,
+                "inactivity_seconds": 600
+            }
+        }"#;
+
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        // Max values should be accepted
+        assert_eq!(config.refresh.periodic_seconds, 3600);
+        assert_eq!(config.refresh.inactivity_seconds, 600);
+    }
+
+    #[test]
+    fn test_refresh_config_missing_uses_defaults() {
+        // Config without refresh section should use defaults
+        let json = r#"{
+            "version": 1
+        }"#;
+
+        let config: Config = serde_json::from_str(json).unwrap();
+
+        assert_eq!(config.refresh.periodic_seconds, DEFAULT_REFRESH_PERIODIC_SECONDS);
+        assert_eq!(config.refresh.inactivity_seconds, DEFAULT_REFRESH_INACTIVITY_SECONDS);
+    }
+
+    #[test]
     fn test_save_and_load_config() {
         // Use a subdirectory to verify that save_to() creates missing directories
         let test_dir = std::env::temp_dir().join("darkbright_test_dir");

@@ -531,6 +531,52 @@ If DDC communication fails after retries, the application does **not** fall back
 
 ---
 
+## Testing
+
+### Unit Tests
+
+Run all unit tests with:
+```bash
+cargo test
+```
+
+Key test areas:
+- **Config validation**: Ensures invalid values are clamped to defaults
+- **Brightness calculations**: Tests adjustment logic in `core/brightness.rs`
+- **State management**: Tests `MonitorState` transitions
+
+### Integration Testing (Manual)
+
+Since DDC/CI requires physical monitor hardware, refresh functionality must be tested manually:
+
+#### Periodic Refresh Test
+1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config
+2. Start the application with `RUST_LOG=debug`
+3. Change monitor brightness using physical buttons or another app
+4. Wait for the periodic interval to elapse
+5. **Expected**: Log shows "Periodic refresh triggered" and OSD reflects actual brightness on next adjustment
+
+#### Inactivity Refresh Test
+1. Set `refresh.inactivity_seconds` to a low value (e.g., 5) in config
+2. Start the application with `RUST_LOG=debug`
+3. Adjust brightness, then wait longer than the inactivity threshold
+4. Change monitor brightness externally
+5. Press hotkey to adjust brightness
+6. **Expected**: Log shows "Inactivity refresh triggered" before the adjustment
+
+#### System Resume Test
+1. Start the application with `RUST_LOG=debug`
+2. Put system to sleep (`Win+X` → Sleep)
+3. Wake system
+4. **Expected**: Log shows "System resumed from sleep" followed by refresh
+
+#### Overlap Protection Test
+1. Set both `periodic_seconds` and `inactivity_seconds` to low values
+2. Trigger conditions where multiple refresh triggers fire simultaneously
+3. **Expected**: Only one refresh executes (log shows single "Requesting monitor refresh")
+
+---
+
 ## MVP Scope (v1.0)
 
 ### Included
