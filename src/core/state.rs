@@ -166,6 +166,12 @@ pub enum BrightnessMessage {
     },
     /// Refresh cached brightness values from all monitors.
     Refresh,
+    /// System resumed from sleep/hibernate.
+    ///
+    /// Sent by the power event listener when the system wakes up.
+    /// Triggers a refresh to resync with monitors that may have
+    /// reset their brightness during sleep.
+    SystemResumed,
     /// Shutdown the application gracefully.
     Shutdown,
 }
