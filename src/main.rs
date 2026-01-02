@@ -11,10 +11,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
-use darkbright_helper::core::state::{BrightnessMessage, MonitorId, MonitorState};
-use darkbright_helper::platform::windows::ddc::{
-    DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
-};
+use darkbright_helper::core::state::{BrightnessMessage, DdcCommand, MonitorId, MonitorState};
+use darkbright_helper::platform::windows::ddc::get_monitor_id;
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::hotkey::{
     BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
@@ -43,11 +41,9 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 
 /// Main controller for brightness management.
 ///
-/// This struct manages the detected monitors, their states,
-/// the dimming overlays, and the on-screen display (OSD).
+/// This struct manages monitor states, dimming overlays, and the OSD.
+/// DDC/CI communication is delegated to the DDC worker thread.
 struct BrightnessController {
-    /// List of detected DDC/CI monitors.
-    monitors: Vec<DdcMonitor>,
     /// Current state (brightness, overlay) per monitor.
     states: HashMap<MonitorId, MonitorState>,
     /// Manager for the dimming overlay windows.
@@ -59,23 +55,31 @@ struct BrightnessController {
     config: Config,
     /// Cache for mapping Windows handles to monitor IDs (performance optimization).
     id_cache: HashMap<isize, MonitorId>,
+    /// Channel to send commands to the DDC worker thread.
+    ddc_cmd_tx: mpsc::Sender<DdcCommand>,
 }
 
 impl BrightnessController {
     /// Creates a new `BrightnessController` instance.
     ///
-    /// Initializes the OSD with values from the configuration.
-    /// Monitors and states are populated during application startup (Phase 6).
-    fn new(config: Config) -> Result<Self> {
+    /// # Arguments
+    ///
+    /// * `config` - The loaded configuration.
+    /// * `ddc_cmd_tx` - Channel sender for DDC worker commands.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the OSD window cannot be created.
+    fn new(config: Config, ddc_cmd_tx: mpsc::Sender<DdcCommand>) -> Result<Self> {
         let osd = OsdWindow::new(config.osd.opacity, config.osd.timeout_ms)?;
 
         Ok(Self {
-            monitors: Vec::new(),
             states: HashMap::new(),
             overlay_manager: OverlayManager::default(),
             osd,
             config,
             id_cache: HashMap::new(),
+            ddc_cmd_tx,
         })
     }
 
@@ -96,7 +100,7 @@ impl BrightnessController {
                 self.handle_set_absolute(monitor_id, value)?;
             }
             BrightnessMessage::Refresh => {
-                self.handle_refresh()?;
+                self.handle_refresh();
             }
             BrightnessMessage::DdcSetResult { .. } => {
                 // Will be implemented in Step 6 when DDC worker is integrated
@@ -123,7 +127,8 @@ impl BrightnessController {
     /// Applies a relative brightness adjustment.
     ///
     /// Determines the target monitor (mouse position), calculates new values,
-    /// shows the OSD immediately, and then performs the DDC update.
+    /// shows the OSD immediately with optimistic update, and sends the DDC
+    /// command to the worker thread (non-blocking).
     fn handle_adjust(&mut self, monitor_id: Option<MonitorId>, delta: i8) -> Result<()> {
         // 1. Determine target monitor and handle
         // We need the HMONITOR handle for OSD and overlay positioning.
@@ -144,16 +149,10 @@ impl BrightnessController {
             }
         };
 
-        // 2. Find state and monitor object
+        // 2. Find state for this monitor
         let state = self
             .states
             .get_mut(&target_id)
-            .ok_or_else(|| BrightnessError::MonitorNotFound(target_id.to_string()))?;
-
-        let monitor = self
-            .monitors
-            .iter_mut()
-            .find(|m| m.id() == &target_id)
             .ok_or_else(|| BrightnessError::MonitorNotFound(target_id.to_string()))?;
 
         // 3. Calculate new brightness
@@ -181,64 +180,41 @@ impl BrightnessController {
             "{target_id}: attempting hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
         );
 
-        // 4. Optimistic update
-        state.set_pending(new_hardware);
+        // 4. Optimistic update (only set pending if hardware is changing)
+        if new_hardware != old_hardware {
+            state.set_pending(new_hardware);
+        }
         state.overlay_opacity = new_overlay;
 
-        // Update overlay (software layer is immediately effective)
+        // 5. Update overlay (software layer is immediately effective)
         if new_overlay != old_overlay {
             self.overlay_manager
                 .update(&target_id, hmonitor, new_overlay)?;
         }
 
-        // Show or update OSD
+        // 6. Show or update OSD with optimistic values
         if self.osd.is_visible() {
             self.osd.update(state)?;
         } else {
             self.osd.show(hmonitor, state)?;
         }
 
-        // 5. Hardware update via DDC (blocking in controller thread)
-        if new_hardware == old_hardware {
-            state.confirm_brightness();
+        // 7. Send DDC command to worker (non-blocking)
+        if new_hardware != old_hardware {
             log::debug!(
-                "{target_id}: hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
+                "{target_id}: sending DDC command hw {old_hardware}%→{new_hardware}%"
             );
-            return Ok(());
-        }
-
-        match monitor.set_brightness(u32::from(new_hardware)) {
-            Ok(()) => {
-                state.confirm_brightness();
-                log::debug!(
-                    "{target_id}: hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
-                );
-                // Update OSD to confirm (removes error coloring if present)
-                self.osd.update(state)?;
+            if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::SetBrightness {
+                monitor_id: target_id,
+                value: new_hardware,
+            }) {
+                log::error!("Failed to send DDC command: {e}");
             }
-            Err(e) => {
-                log::error!(
-                    "{target_id}: DDC failed setting hw {old_hardware}%→{new_hardware}%: {e}"
-                );
-                log::debug!("{target_id}: Reverted to hw={old_hardware}%, overlay={old_overlay}%");
-                // 6. Error rollback
-                state.revert_pending();
-                state.overlay_opacity = old_overlay;
-
-                // Revert overlay to old value
-                if let Err(overlay_err) =
-                    self.overlay_manager
-                        .update(&target_id, hmonitor, old_overlay)
-                {
-                    log::error!("{target_id}: Failed to revert overlay: {overlay_err}");
-                }
-
-                // Set OSD to error state
-                if let Err(osd_err) = self.osd.update_error(state) {
-                    log::error!("{target_id}: Failed to show OSD error state: {osd_err}");
-                }
-                // Error is handled (logged, OSD shows error), don't propagate
-            }
+            // Confirmation/revert happens when we receive DdcSetResult
+        } else {
+            log::debug!(
+                "{target_id}: overlay only {old_overlay}%→{new_overlay}%"
+            );
         }
 
         Ok(())
@@ -256,52 +232,20 @@ impl BrightnessController {
         Ok(())
     }
 
-    /// Refreshes the monitor list and re-reads their states.
+    /// Requests a refresh of monitor list and brightness values.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if monitor enumeration or DDC communication fails.
-    fn handle_refresh(&mut self) -> Result<()> {
-        log::info!("Refreshing monitor list and brightness levels...");
+    /// Sends a `RefreshAll` command to the DDC worker. The actual state
+    /// update happens when `DdcRefreshResult` is received.
+    fn handle_refresh(&mut self) {
+        log::info!("Requesting monitor refresh from DDC worker...");
 
-        // 1. Re-enumerate physical monitors
-        let hmonitors = enumerate_monitors()?;
-        let mut new_monitors = Vec::new();
-
-        // Clear ID cache since handles may have changed
+        // Clear ID cache since handles may change after refresh
         self.id_cache.clear();
 
-        for hmonitor in hmonitors {
-            // Determine MonitorId (and cache it)
-            let monitor_id = get_monitor_id(hmonitor)?;
-            self.id_cache.insert(hmonitor.0, monitor_id.clone());
-
-            // Physical handles for DDC/CI
-            let physicals = get_physical_monitors(hmonitor)?;
-
-            for p_mon in physicals {
-                let mut ddc_mon = DdcMonitor::new(p_mon, monitor_id.clone());
-
-                // Read current brightness via DDC
-                match ddc_mon.get_brightness() {
-                    Ok(val) => {
-                        #[allow(clippy::cast_possible_truncation)]
-                        let val_u8 = val as u8;
-                        // Update or create state
-                        self.states
-                            .entry(monitor_id.clone())
-                            .and_modify(|s| s.update_from_ddc(val_u8))
-                            .or_insert_with(|| MonitorState::new(val_u8));
-
-                        new_monitors.push(ddc_mon);
-                    }
-                    Err(e) => log::warn!("Could not read brightness for {monitor_id}: {e}"),
-                }
-            }
+        // Send refresh command to worker (non-blocking)
+        if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::RefreshAll) {
+            log::error!("Failed to send refresh command to DDC worker: {e}");
         }
-
-        self.monitors = new_monitors;
-        Ok(())
     }
 }
 
@@ -398,8 +342,10 @@ fn main() {
         }
     };
 
-    // Phase 6, Step 43: Enumerate monitors and initialize state
-    let mut controller = match BrightnessController::new(config.clone()) {
+    // Phase 6, Step 43: Create DDC command channel and controller
+    let (ddc_cmd_tx, ddc_cmd_rx) = mpsc::channel::<DdcCommand>();
+
+    let mut controller = match BrightnessController::new(config.clone(), ddc_cmd_tx) {
         Ok(c) => c,
         Err(e) => {
             log::error!("Failed to initialize BrightnessController: {e}");
@@ -407,9 +353,10 @@ fn main() {
         }
     };
 
-    if let Err(e) = controller.handle_refresh() {
-        log::error!("Initial monitor enumeration failed: {e}");
-    }
+    // Note: DDC worker will be spawned in Step 7; for now ddc_cmd_rx is unused
+    drop(ddc_cmd_rx);
+
+    controller.handle_refresh();
 
     // Phase 6, Step 44 & 45: Register hotkeys and start hotkey thread
     let (tx, rx) = mpsc::channel();
