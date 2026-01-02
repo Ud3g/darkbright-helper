@@ -21,6 +21,7 @@ use darkbright_helper::platform::windows::hotkey::{
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::show_error_message_box;
+use darkbright_helper::platform::windows::DdcWorker;
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -401,9 +402,22 @@ fn main() {
         }
     };
 
-    // Phase 6, Step 43: Create DDC command channel and controller
+    // Phase 6, Step 43: Create channels
+    // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
+    let (tx, rx) = mpsc::channel();
+
+    // DDC command channel (main -> DDC worker)
     let (ddc_cmd_tx, ddc_cmd_rx) = mpsc::channel::<DdcCommand>();
 
+    // Keep a clone for sending shutdown command on exit
+    let ddc_shutdown_tx = ddc_cmd_tx.clone();
+
+    // Spawn DDC worker thread
+    let ddc_worker = DdcWorker::new(ddc_cmd_rx, tx.clone());
+    std::thread::spawn(move || ddc_worker.run());
+    log::info!("DDC worker thread spawned");
+
+    // Create controller
     let mut controller = match BrightnessController::new(config.clone(), ddc_cmd_tx) {
         Ok(c) => c,
         Err(e) => {
@@ -412,13 +426,10 @@ fn main() {
         }
     };
 
-    // Note: DDC worker will be spawned in Step 7; for now ddc_cmd_rx is unused
-    drop(ddc_cmd_rx);
-
+    // Request initial monitor enumeration from DDC worker
     controller.handle_refresh();
 
     // Phase 6, Step 44 & 45: Register hotkeys and start hotkey thread
-    let (tx, rx) = mpsc::channel();
 
     // Register Ctrl+C handler
     if let Ok(mut guard) = SHUTDOWN_SENDER.lock() {
@@ -481,6 +492,10 @@ fn main() {
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), FALSE);
     }
+
+    // Send shutdown command to DDC worker
+    log::debug!("Sending shutdown command to DDC worker");
+    let _ = ddc_shutdown_tx.send(DdcCommand::Shutdown);
 
     // Explicitly drop controller to ensure windows are destroyed before exit
     drop(controller);
