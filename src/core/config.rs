@@ -303,12 +303,13 @@ mod tests {
 
     #[test]
     fn test_save_and_load_config() {
-        let temp_dir = std::env::temp_dir();
-        let file_path = temp_dir.join("darkbright_test_config.json");
+        // Use a subdirectory to verify that save_to() creates missing directories
+        let test_dir = std::env::temp_dir().join("darkbright_test_dir");
+        let file_path = test_dir.join("config.json");
 
         // Ensure cleanup from previous runs
-        if file_path.exists() {
-            let _ = fs::remove_file(&file_path);
+        if test_dir.exists() {
+            let _ = fs::remove_dir_all(&test_dir);
         }
 
         let mut config = Config::default();
@@ -328,6 +329,6 @@ mod tests {
         assert_eq!(loaded_config.brightness.step_percent, 10);
 
         // Cleanup
-        let _ = fs::remove_file(file_path);
+        let _ = fs::remove_dir_all(test_dir);
     }
 }
