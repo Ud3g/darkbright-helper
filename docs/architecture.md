@@ -379,11 +379,15 @@ This preserves full 0-100% hardware resolution while allowing additional dimming
 
 | Scenario | Overlay Works? | Notes |
 |----------|----------------|-------|
-| Desktop / taskbar | ✅ Yes | `HWND_TOPMOST` covers all system UI |
+| Desktop / taskbar | ⚠️ Partial | `HWND_TOPMOST` covers normal windows; Shell UI (Taskbar, Start Menu) may render on top |
 | Borderless windowed games | ✅ Yes | Rendered through compositor |
 | Fullscreen exclusive games | ❌ No | Game bypasses DWM; writes directly to framebuffer |
 
-**Known Limitation:** Fullscreen exclusive mode games bypass the Windows compositor entirely. The overlay cannot dim these applications. Users must either:
+**Known Limitations:**
+1. **Fullscreen exclusive mode games** bypass the Windows compositor entirely. The overlay cannot dim these applications.
+2. **Windows Shell UI** (Taskbar, Start Menu, Action Center) resides in higher Z-order bands. The overlay will not cover these elements when they are active or focused.
+
+Users must either:
 - Use the monitor's DDC minimum brightness (1%)
 - Switch the game to borderless windowed mode
 

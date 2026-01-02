@@ -10,7 +10,8 @@ Rust (2024 edition) — chosen for cross-platform portability, low resource usag
 
 ### Brightness Below Hardware Minimum
 - Use a black fullscreen overlay with variable opacity
-- Allows "dimming" below what the monitor natively supports (except in exclusive fullscreen games)
+- Allows "dimming" below what the monitor natively supports
+- *Note: Does not cover exclusive fullscreen games or certain Windows system UI (Taskbar, Start Menu).*
 
 ### Brightness Above Hardware Minimum
 - Communicate with monitor via DDC/CI protocol
