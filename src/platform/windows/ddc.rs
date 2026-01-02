@@ -206,15 +206,11 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
             Err(e) => {
                 attempts += 1;
                 if attempts >= DDC_RETRIES {
-                    log::error!("DDC operation failed after {} retries: {}", DDC_RETRIES, e);
+                    log::error!("DDC operation failed after {DDC_RETRIES} retries: {e}");
                     return Err(e);
                 }
                 log::warn!(
-                    "DDC operation failed (attempt {}/{}), retrying in {}ms: {}",
-                    attempts,
-                    DDC_RETRIES,
-                    DDC_RETRY_DELAY_MS,
-                    e
+                    "DDC operation failed (attempt {attempts}/{DDC_RETRIES}), retrying in {DDC_RETRY_DELAY_MS}ms: {e}"
                 );
                 thread::sleep(Duration::from_millis(DDC_RETRY_DELAY_MS));
             }
@@ -417,14 +413,14 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
     let target_driver_key = if let Some(start) = device_key.find('{') {
         device_key[start..].to_string()
     } else {
-        log::warn!("DeviceKey does not contain GUID: '{}'", device_key);
+        log::warn!("DeviceKey does not contain GUID: '{device_key}'");
         // Fallback: try using DeviceID as before, though it likely fails
         String::from_utf16_lossy(&dd.DeviceID)
             .trim_matches(char::from(0))
             .to_string()
     };
 
-    log::debug!("Looking for EDID for Driver Key: '{}'", target_driver_key);
+    log::debug!("Looking for EDID for Driver Key: '{target_driver_key}'");
 
     if target_driver_key.is_empty() {
         return Err(BrightnessError::ddc_communication(
@@ -479,7 +475,8 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
         index += 1;
 
         // Get Driver Key (SPDRP_DRIVER)
-        let mut buffer = [0u8; 512];
+        // Use a u16 buffer for WCHAR alignment
+        let mut buffer = [0u16; 256];
         let mut required_size = 0;
         let mut property_type = 0;
 
@@ -489,7 +486,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
                 &raw const devinfo_data,
                 SPDRP_DRIVER,
                 Some(&raw mut property_type),
-                Some(&mut buffer),
+                Some(buffer.as_mut_ptr().cast::<u8>()),
                 Some(&raw mut required_size),
             )
             .is_ok()
@@ -497,12 +494,10 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
                 // Buffer contains WCHAR string
                 let len = required_size as usize / 2;
                 if len > 0 {
-                    // Convert u8 buffer to u16 slice
-                    let u16_slice = std::slice::from_raw_parts(buffer.as_ptr().cast::<u16>(), len);
                     // Trim null terminator
-                    let driver_key = String::from_utf16_lossy(&u16_slice[..len.saturating_sub(1)]);
+                    let driver_key = String::from_utf16_lossy(&buffer[..len.saturating_sub(1)]);
 
-                    log::trace!("Checking device driver key: '{}'", driver_key);
+                    log::trace!("Checking device driver key: '{driver_key}'");
 
                     if driver_key.eq_ignore_ascii_case(target_driver_key) {
                         // Found it! Read EDID from registry.

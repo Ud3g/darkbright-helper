@@ -426,10 +426,7 @@ fn update_osd_state(state: &MonitorState, is_error: bool) {
     let hw = state.effective_brightness();
     let overlay = state.overlay_opacity;
     log::trace!(
-        "OSD state update: hardware_brightness={}, overlay_opacity={}, is_error={}",
-        hw,
-        overlay,
-        is_error
+        "OSD state update: hardware_brightness={hw}, overlay_opacity={overlay}, is_error={is_error}"
     );
     OSD_STATE.with(|s| {
         let mut render_state = s.borrow_mut();
