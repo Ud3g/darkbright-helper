@@ -97,9 +97,11 @@ impl Drop for MonitorHandle {
 }
 ```
 
-### Separate FFI bindings
+### FFI calls should be wrapped in safe functions as close to their point of use as possible
 
-Put raw Win32 bindings in dedicated modules (e.g., `platform/windows/ffi.rs`).
+FFI calls should be wrapped in safe functions as close to their point of use as possible, typically within the feature module that requires them. This promotes locality of reasoning and keeps domain-specific logic together.
+
+Shared or common FFI wrappers may be extracted into a common module (e.g., `platform/windows/mod.rs` or a dedicated `ffi.rs`) to avoid duplication and provide reusable utilities like RAII handle wrappers.
 
 ### Windows Crate (v0.52+) Specifics
 
