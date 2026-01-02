@@ -15,6 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::error::{BrightnessError, Result};
 
 pub mod ddc;
+pub mod ddc_worker;
 pub mod hotkey;
 pub mod osd;
 pub mod overlay;
