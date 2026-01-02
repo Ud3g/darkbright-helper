@@ -25,6 +25,10 @@ pub const DEFAULT_OSD_TIMEOUT_MS: u32 = 1000;
 pub const DEFAULT_OSD_OPACITY: f32 = 0.8;
 /// Default brightness step percentage.
 pub const DEFAULT_STEP_PERCENT: u8 = 5;
+/// Default periodic refresh interval in seconds (0 = disabled).
+pub const DEFAULT_REFRESH_PERIODIC_SECONDS: u32 = 60;
+/// Default inactivity threshold in seconds before refresh (0 = disabled).
+pub const DEFAULT_REFRESH_INACTIVITY_SECONDS: u32 = 30;
 
 // Validation ranges
 const OSD_TIMEOUT_MIN: u32 = 100;
@@ -33,6 +37,8 @@ const OSD_OPACITY_MIN: f32 = 0.1;
 const OSD_OPACITY_MAX: f32 = 1.0;
 const STEP_PERCENT_MIN: u8 = 1;
 const STEP_PERCENT_MAX: u8 = 50;
+const REFRESH_PERIODIC_MAX: u32 = 3600;
+const REFRESH_INACTIVITY_MAX: u32 = 600;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Configuration Structures
@@ -56,6 +62,9 @@ pub struct Config {
     /// Brightness adjustment settings.
     #[serde(default)]
     pub brightness: BrightnessConfig,
+    /// Refresh/resync settings.
+    #[serde(default)]
+    pub refresh: RefreshConfig,
 }
 
 /// Hotkey configuration.
@@ -99,6 +108,23 @@ pub struct BrightnessConfig {
     pub step_percent: u8,
 }
 
+/// Refresh/resync configuration.
+///
+/// Controls how the application stays in sync with external brightness changes
+/// (e.g., physical monitor buttons, other apps).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshConfig {
+    /// Interval in seconds for periodic background refresh (0 = disabled).
+    /// Range: 0-3600 (1 hour max).
+    #[serde(default = "default_refresh_periodic")]
+    pub periodic_seconds: u32,
+    /// Inactivity threshold in seconds before triggering a refresh on next adjustment.
+    /// When the user adjusts brightness after being inactive for this duration,
+    /// a refresh is triggered first. (0 = disabled). Range: 0-600 (10 min max).
+    #[serde(default = "default_refresh_inactivity")]
+    pub inactivity_seconds: u32,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Default Value Functions (for serde)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,6 +147,12 @@ fn default_osd_opacity() -> f32 {
 fn default_step_percent() -> u8 {
     DEFAULT_STEP_PERCENT
 }
+fn default_refresh_periodic() -> u32 {
+    DEFAULT_REFRESH_PERIODIC_SECONDS
+}
+fn default_refresh_inactivity() -> u32 {
+    DEFAULT_REFRESH_INACTIVITY_SECONDS
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait Implementations
@@ -134,6 +166,7 @@ impl Default for Config {
             monitors: HashMap::new(),
             osd: OsdConfig::default(),
             brightness: BrightnessConfig::default(),
+            refresh: RefreshConfig::default(),
         }
     }
 }
@@ -160,6 +193,15 @@ impl Default for BrightnessConfig {
     fn default() -> Self {
         Self {
             step_percent: default_step_percent(),
+        }
+    }
+}
+
+impl Default for RefreshConfig {
+    fn default() -> Self {
+        Self {
+            periodic_seconds: default_refresh_periodic(),
+            inactivity_seconds: default_refresh_inactivity(),
         }
     }
 }
@@ -292,6 +334,28 @@ impl Config {
                 DEFAULT_STEP_PERCENT
             );
             self.brightness.step_percent = DEFAULT_STEP_PERCENT;
+        }
+
+        // Validate periodic refresh (0 is valid = disabled)
+        if self.refresh.periodic_seconds > REFRESH_PERIODIC_MAX {
+            log::error!(
+                "Invalid config: refresh.periodic_seconds={} exceeds maximum {}, using default {}",
+                self.refresh.periodic_seconds,
+                REFRESH_PERIODIC_MAX,
+                DEFAULT_REFRESH_PERIODIC_SECONDS
+            );
+            self.refresh.periodic_seconds = DEFAULT_REFRESH_PERIODIC_SECONDS;
+        }
+
+        // Validate inactivity refresh (0 is valid = disabled)
+        if self.refresh.inactivity_seconds > REFRESH_INACTIVITY_MAX {
+            log::error!(
+                "Invalid config: refresh.inactivity_seconds={} exceeds maximum {}, using default {}",
+                self.refresh.inactivity_seconds,
+                REFRESH_INACTIVITY_MAX,
+                DEFAULT_REFRESH_INACTIVITY_SECONDS
+            );
+            self.refresh.inactivity_seconds = DEFAULT_REFRESH_INACTIVITY_SECONDS;
         }
     }
 }

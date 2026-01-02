@@ -62,6 +62,10 @@ The configuration file is automatically created at:
   },
   "brightness": {
     "step_percent": 5
+  },
+  "refresh": {
+    "periodic_seconds": 60,
+    "inactivity_seconds": 30
   }
 }
 ```
@@ -71,6 +75,8 @@ The configuration file is automatically created at:
 - **osd.timeout_ms**: How long the OSD remains visible (100-10000 ms).
 - **osd.opacity**: OSD window transparency (0.1-1.0).
 - **brightness.step_percent**: Amount to change per keypress (1-50%).
+- **refresh.periodic_seconds**: Background refresh interval to resync with external changes (0-3600, 0 = disabled).
+- **refresh.inactivity_seconds**: Refresh before adjustment if inactive for this duration (0-600, 0 = disabled).
 
 ## Usage
 

@@ -215,6 +215,10 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   },
   "brightness": {
     "step_percent": 5
+  },
+  "refresh": {
+    "periodic_seconds": 60,
+    "inactivity_seconds": 30
   }
 }
 ```
@@ -255,6 +259,8 @@ When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
 | `osd.timeout_ms` | 100 - 10000 | 1000 |
 | `osd.opacity` | 0.1 - 1.0 | 0.8 |
 | `brightness.step_percent` | 1 - 50 | 5 |
+| `refresh.periodic_seconds` | 0 - 3600 | 60 |
+| `refresh.inactivity_seconds` | 0 - 600 | 30 |
 
 Example log output for invalid config:
 ```
