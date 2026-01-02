@@ -333,7 +333,7 @@ Hardware at 0%, overlay at 60%:
 
 When DDC communication fails after all retries:
 - Progress bar changes to red/error tint
-- Message displayed: "Failed to adjust brightness"
+- Error message footer displayed: "DDC Error - Adjustment failed"
 - Percentage reverts to last confirmed value
 - OSD timeout remains unchanged (1000ms)
 
