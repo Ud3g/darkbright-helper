@@ -32,12 +32,13 @@ src/
 ├── core/                 # Platform-agnostic logic
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
-│   └── state.rs          # Application state
+│   └── state.rs          # Application state, messages, DDC commands
 └── platform/
     ├── mod.rs            # Platform trait definitions
     ├── windows/          # #[cfg(windows)]
     │   ├── mod.rs
-    │   ├── ddc.rs        # DDC/CI communication
+    │   ├── ddc.rs        # DDC/CI communication (monitor handles)
+    │   ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
     │   ├── hotkey.rs     # RegisterHotKey API
     │   ├── overlay.rs    # Dimming overlay window
     │   └── osd.rs        # On-screen display
@@ -47,34 +48,45 @@ src/
 
 ### Threading Model
 
-Dedicated threads for I/O, main thread owns state:
+Dedicated threads for I/O, main thread owns state and UI:
 
 ```
-┌─────────────────────────────────────────┐
-│            Main Thread                  │
-│  ┌───────────────────────────────────┐  │
-│  │    BrightnessController (owner)   │  │
-│  │    - processes adjustment msgs    │  │
-│  │    - owns monitor state           │  │
-│  │    - updates overlay/OSD          │  │
-│  └───────────────────────────────────┘  │
-│                 ▲                        │
-│                 │ recv()                 │
-│                 │                        │
-└─────────────────┼────────────────────────┘
-                  │ MPSC channel
-    ┌─────────────┴─────────────┐
-    │                           │
-┌───────────┐                   │
-│  Hotkey   │ send(Adjustment)  │
-│  Thread   │───────────────────┘
-└───────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                      Main Thread                            │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │           BrightnessController (owner)                │  │
+│  │    - processes messages from all threads              │  │
+│  │    - owns MonitorState map                            │  │
+│  │    - updates overlay/OSD (UI always responsive)       │  │
+│  │    - sends DdcCommand to worker                       │  │
+│  └───────────────────────────────────────────────────────┘  │
+│              ▲                              │                │
+│       recv() │                              │ send()         │
+│              │                              ▼                │
+└──────────────┼──────────────────────────────┼────────────────┘
+               │                              │
+      BrightnessMessage                  DdcCommand
+               │                              │
+    ┌──────────┴──────────┐                   │
+    │                     │                   │
+┌───────────┐      ┌──────────────────────────┴──────┐
+│  Hotkey   │      │         DDC Worker Thread       │
+│  Thread   │      │  ┌───────────────────────────┐  │
+│           │      │  │  - owns Vec<DdcMonitor>   │  │
+│ send()    │      │  │  - executes DDC I/O       │  │
+│  │        │      │  │  - sends results back     │  │
+│  │        │      │  └───────────────────────────┘  │
+└──┼────────┘      └─────────────────────────────────┘
+   │                              │
+   └──────────────────────────────┘
+          (both send BrightnessMessage)
 ```
 
 **Rationale:**
 - No async runtime needed (simpler, smaller binary)
-- DDC/CI operations are inherently blocking (~100-500ms, monitor limitation)
-- Single owner eliminates data races at compile time
+- DDC/CI operations are inherently blocking (~40-120ms per operation)
+- DDC worker thread keeps main thread responsive for OSD/overlay updates
+- Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
 ### State Management
@@ -82,14 +94,22 @@ Dedicated threads for I/O, main thread owns state:
 Message-passing with single ownership:
 
 ```rust
+// Messages TO main thread (from hotkey thread or DDC worker)
 enum BrightnessMessage {
     Adjust { monitor_id: MonitorId, delta: i8 },
     SetAbsolute { monitor_id: MonitorId, value: u8 },
+    DdcSetResult { monitor_id, value, success, error },  // DDC worker → main
+    DdcRefreshResult { monitors: Vec<(MonitorId, u8)> }, // DDC worker → main
     Refresh,
     Shutdown,
 }
 
-// Hotkey thread sends messages, main thread processes them
+// Commands TO DDC worker (from main thread)
+enum DdcCommand {
+    SetBrightness { monitor_id: MonitorId, value: u8 },
+    RefreshAll,
+    Shutdown,
+}
 ```
 
 ---
@@ -397,30 +417,41 @@ This is acceptable because:
 
 **Flow:**
 ```
-[0ms]   Keypress received
+[0ms]   Keypress received (hotkey thread)
+        → Send BrightnessMessage::Adjust to main thread
+
+[<1ms]  Main thread processes adjustment
         → Calculate new value: cached_brightness ± step_percent
-        → Show OSD immediately with new value (optimistic)
-        → Begin DDC write attempt in background
+        → Set pending brightness (optimistic update)
+        → Update overlay immediately (if changed)
+        → Show OSD immediately with new value
+        → Send DdcCommand::SetBrightness to DDC worker
+        → Return immediately (non-blocking)
 
-[~40ms] DDC attempt 1
-        → Success: update cache, done
+[~40ms] DDC worker: attempt 1
+        → Success: send DdcSetResult(success) to main
         → Failure: wait 40ms, retry
 
-[~80ms] DDC attempt 2 (if needed)
-        → Success: update cache, done
+[~80ms] DDC worker: attempt 2 (if needed)
+        → Success: send DdcSetResult(success) to main
         → Failure: wait 40ms, retry
 
-[~120ms] DDC attempt 3 (if needed)
-        → Success: update cache, done
-        → Failure: show error indicator in OSD, revert cache to last confirmed value
+[~120ms] DDC worker: attempt 3 (if needed)
+        → Success: send DdcSetResult(success) to main
+        → Failure: send DdcSetResult(failure) to main
+
+[async] Main thread receives DdcSetResult
+        → Success: confirm_brightness(), update OSD
+        → Failure: revert_pending(), show OSD error state
 ```
 
 | Aspect | Decision | Rationale |
 |--------|----------|-----------|
 | **Update style** | Optimistic | Instant perceived responsiveness; smooth rapid adjustments |
+| **DDC execution** | Dedicated worker thread | Main thread stays responsive; OSD updates without blocking |
 | **Retry count** | 3 attempts | Covers most transient I²C bus hiccups |
 | **Retry delay** | 40ms between attempts | Safe default for slower monitor controllers |
-| **Cache** | Last confirmed DDC value per monitor | Enables instant OSD; refreshed on startup and every 60s |
+| **Cache** | Last confirmed DDC value per monitor | Enables instant OSD; refreshed on startup |
 | **Failure feedback** | Brief error indicator in OSD | User knows something went wrong without modal popups |
 | **Failure recovery** | Revert displayed value to last confirmed | OSD shows accurate state after error |
 
@@ -432,16 +463,17 @@ This is acceptable because:
 **Cache Management:**
 ```rust
 struct MonitorState {
-    cached_brightness: u8,      // Last confirmed DDC value
+    cached_brightness: u8,           // Last confirmed DDC value
     pending_brightness: Option<u8>,  // Optimistic value awaiting confirmation
+    overlay_opacity: u8,             // Current overlay dimming level
     last_refresh: Instant,
 }
 ```
 
-- Cache populated on startup via DDC read
-- Background refresh every 60 seconds (handles external changes)
-- On DDC success: `cached_brightness = pending_brightness`
-- On DDC failure: `pending_brightness` discarded, OSD reverts to `cached_brightness`
+- Cache populated on startup via `DdcCommand::RefreshAll`
+- DDC worker owns all `DdcMonitor` instances
+- On `DdcSetResult(success)`: `confirm_brightness()` promotes pending to cached
+- On `DdcSetResult(failure)`: `revert_pending()` discards optimistic value
 
 ### 10. Error Handling: Strict
 
