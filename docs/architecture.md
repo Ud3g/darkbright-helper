@@ -98,10 +98,10 @@ Message-passing with single ownership:
 ```rust
 // Messages TO main thread (from hotkey thread or DDC worker)
 enum BrightnessMessage {
-    Adjust { monitor_id: MonitorId, delta: i8 },
-    SetAbsolute { monitor_id: MonitorId, value: u8 },
-    DdcSetResult { monitor_id, value, success, error },  // DDC worker → main
-    DdcRefreshResult { monitors: Vec<(MonitorId, u8)> }, // DDC worker → main
+    Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
+    SetAbsolute { monitor_id: Option<MonitorId>, value: u8 }, // None = monitor under cursor
+    DdcSetResult { monitor_id, value, success, error },       // DDC worker → main
+    DdcRefreshResult { monitors: Vec<(MonitorId, u8)> },      // DDC worker → main
     Refresh,
     Shutdown,
 }
@@ -494,8 +494,8 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
 |--------|----------|-----------|
 | **Update style** | Optimistic | Instant perceived responsiveness; smooth rapid adjustments |
 | **DDC execution** | Dedicated worker thread | Main thread stays responsive; OSD updates without blocking |
-| **Retry count** | 3 attempts | Covers most transient I²C bus hiccups |
-| **Retry delay** | 40ms between attempts | Safe default for slower monitor controllers |
+| **Retry count** | Up to 3 attempts | Covers most transient I²C bus hiccups |
+| **Retry delay** | 40ms between retries | Safe default for slower monitor controllers |
 | **Cache** | Last confirmed DDC value per monitor | Enables instant OSD; refreshed on startup |
 | **Failure feedback** | Brief error indicator in OSD | User knows something went wrong without modal popups |
 | **Failure recovery** | Revert displayed value to last confirmed | OSD shows accurate state after error |
