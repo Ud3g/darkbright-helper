@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, mpsc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
@@ -52,12 +52,15 @@ struct BrightnessController {
     /// The on-screen display for showing changes.
     osd: OsdWindow,
     /// The loaded configuration.
-    #[allow(dead_code)]
     config: Config,
     /// Cache for mapping Windows handles to monitor IDs (performance optimization).
     id_cache: HashMap<isize, MonitorId>,
     /// Channel to send commands to the DDC worker thread.
     ddc_cmd_tx: mpsc::Sender<DdcCommand>,
+    /// Timestamp of last user-initiated brightness adjustment.
+    last_activity: Instant,
+    /// Timestamp of last completed DDC refresh.
+    last_refresh: Instant,
 }
 
 impl BrightnessController {
@@ -74,6 +77,7 @@ impl BrightnessController {
     fn new(config: Config, ddc_cmd_tx: mpsc::Sender<DdcCommand>) -> Result<Self> {
         let osd = OsdWindow::new(config.osd.opacity, config.osd.timeout_ms)?;
 
+        let now = Instant::now();
         Ok(Self {
             states: HashMap::new(),
             overlay_manager: OverlayManager::default(),
@@ -81,6 +85,8 @@ impl BrightnessController {
             config,
             id_cache: HashMap::new(),
             ddc_cmd_tx,
+            last_activity: now,
+            last_refresh: now,
         })
     }
 
@@ -182,6 +188,9 @@ impl BrightnessController {
                 .and_modify(|s| s.update_from_ddc(brightness))
                 .or_insert_with(|| MonitorState::new(brightness));
         }
+
+        // Update refresh timestamp for periodic refresh tracking
+        self.last_refresh = Instant::now();
     }
 
     /// Applies a relative brightness adjustment.
@@ -190,6 +199,9 @@ impl BrightnessController {
     /// shows the OSD immediately with optimistic update, and sends the DDC
     /// command to the worker thread (non-blocking).
     fn handle_adjust(&mut self, monitor_id: Option<MonitorId>, delta: i8) -> Result<()> {
+        // Update activity timestamp for inactivity-based refresh tracking
+        self.last_activity = Instant::now();
+
         // 1. Determine target monitor and handle
         // We need the HMONITOR handle for OSD and overlay positioning.
         let hmonitor = get_monitor_under_cursor()?;
