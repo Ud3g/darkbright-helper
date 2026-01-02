@@ -1,7 +1,8 @@
 //! Application state types for the brightness control tool.
 //!
 //! This module defines the core state structures used throughout the application,
-//! including monitor identification, per-monitor state, and inter-thread messages.
+//! including monitor identification, per-monitor state, inter-thread messages,
+//! and DDC worker communication types.
 
 use std::time::Instant;
 
@@ -133,6 +134,22 @@ impl Default for MonitorState {
 /// via an MPSC channel.
 #[derive(Debug, Clone)]
 pub enum BrightnessMessage {
+    /// Result of a DDC brightness set operation (from DDC worker).
+    DdcSetResult {
+        /// Target monitor.
+        monitor_id: MonitorId,
+        /// The brightness value that was attempted.
+        value: u8,
+        /// Success or error message.
+        success: bool,
+        /// Error message if failed.
+        error: Option<String>,
+    },
+    /// Result of a DDC refresh operation (from DDC worker).
+    DdcRefreshResult {
+        /// List of (monitor_id, brightness) pairs for all detected monitors.
+        monitors: Vec<(MonitorId, u8)>,
+    },
     /// Adjust brightness by a relative delta.
     Adjust {
         /// Target monitor (None = monitor under cursor).
@@ -150,5 +167,28 @@ pub enum BrightnessMessage {
     /// Refresh cached brightness values from all monitors.
     Refresh,
     /// Shutdown the application gracefully.
+    Shutdown,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DDC Worker Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Commands sent from the main thread to the DDC worker thread.
+///
+/// The DDC worker executes these commands and sends results back
+/// via `BrightnessMessage::DdcSetResult` or `BrightnessMessage::DdcRefreshResult`.
+#[derive(Debug, Clone)]
+pub enum DdcCommand {
+    /// Set brightness for a specific monitor.
+    SetBrightness {
+        /// Target monitor.
+        monitor_id: MonitorId,
+        /// Brightness value to set (0-100).
+        value: u8,
+    },
+    /// Refresh all monitors: enumerate and read current brightness values.
+    RefreshAll,
+    /// Shutdown the DDC worker thread.
     Shutdown,
 }
