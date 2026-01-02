@@ -102,13 +102,16 @@ impl BrightnessController {
             BrightnessMessage::Refresh => {
                 self.handle_refresh();
             }
-            BrightnessMessage::DdcSetResult { .. } => {
-                // Will be implemented in Step 6 when DDC worker is integrated
-                log::warn!("Received DdcSetResult but DDC worker not yet integrated");
+            BrightnessMessage::DdcSetResult {
+                monitor_id,
+                value,
+                success,
+                error,
+            } => {
+                self.handle_ddc_set_result(&monitor_id, value, success, error)?;
             }
-            BrightnessMessage::DdcRefreshResult { .. } => {
-                // Will be implemented in Step 6 when DDC worker is integrated
-                log::warn!("Received DdcRefreshResult but DDC worker not yet integrated");
+            BrightnessMessage::DdcRefreshResult { monitors } => {
+                self.handle_ddc_refresh_result(monitors);
             }
             BrightnessMessage::Shutdown => {
                 self.handle_shutdown()?;
@@ -122,6 +125,62 @@ impl BrightnessController {
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn handle_shutdown(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    /// Handles the result of a DDC brightness set operation.
+    ///
+    /// On success, confirms the pending brightness. On failure, reverts to
+    /// the cached value and shows an error indicator in the OSD.
+    fn handle_ddc_set_result(
+        &mut self,
+        monitor_id: &MonitorId,
+        value: u8,
+        success: bool,
+        error: Option<String>,
+    ) -> Result<()> {
+        let Some(state) = self.states.get_mut(monitor_id) else {
+            log::warn!("Received DDC result for unknown monitor: {monitor_id}");
+            return Ok(());
+        };
+
+        if success {
+            state.confirm_brightness();
+            log::debug!("{monitor_id}: DDC confirmed brightness at {value}%");
+
+            // Update OSD to confirm (removes any error coloring)
+            if self.osd.is_visible() {
+                self.osd.update(state)?;
+            }
+        } else {
+            let error_msg = error.as_deref().unwrap_or("unknown error");
+            log::error!("{monitor_id}: DDC failed to set brightness to {value}%: {error_msg}");
+
+            state.revert_pending();
+
+            // Show OSD error state
+            if self.osd.is_visible() {
+                self.osd.update_error(state)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handles the result of a DDC refresh operation.
+    ///
+    /// Updates existing monitor states and creates new entries for
+    /// newly detected monitors.
+    fn handle_ddc_refresh_result(&mut self, monitors: Vec<(MonitorId, u8)>) {
+        log::info!("DDC refresh complete, {} monitor(s) found", monitors.len());
+
+        for (monitor_id, brightness) in monitors {
+            log::debug!("{monitor_id}: brightness = {brightness}%");
+
+            self.states
+                .entry(monitor_id)
+                .and_modify(|s| s.update_from_ddc(brightness))
+                .or_insert_with(|| MonitorState::new(brightness));
+        }
     }
 
     /// Applies a relative brightness adjustment.
