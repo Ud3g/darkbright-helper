@@ -480,29 +480,35 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
         let mut required_size = 0;
         let mut property_type = 0;
 
-        unsafe {
-            if SetupDiGetDeviceRegistryPropertyW(
+        let success = unsafe {
+            let buffer_u8 = std::slice::from_raw_parts_mut(
+                buffer.as_mut_ptr().cast::<u8>(),
+                std::mem::size_of_val(&buffer),
+            );
+
+            SetupDiGetDeviceRegistryPropertyW(
                 hdevinfo,
                 &raw const devinfo_data,
                 SPDRP_DRIVER,
                 Some(&raw mut property_type),
-                Some(buffer.as_mut_ptr().cast::<u8>()),
+                Some(buffer_u8),
                 Some(&raw mut required_size),
             )
             .is_ok()
-            {
-                // Buffer contains WCHAR string
-                let len = required_size as usize / 2;
-                if len > 0 {
-                    // Trim null terminator
-                    let driver_key = String::from_utf16_lossy(&buffer[..len.saturating_sub(1)]);
+        };
 
-                    log::trace!("Checking device driver key: '{driver_key}'");
+        if success {
+            // Buffer contains WCHAR string
+            let len = required_size as usize / 2;
+            if len > 0 {
+                // Trim null terminator
+                let driver_key = String::from_utf16_lossy(&buffer[..len.saturating_sub(1)]);
 
-                    if driver_key.eq_ignore_ascii_case(target_driver_key) {
-                        // Found it! Read EDID from registry.
-                        return read_edid_from_registry(hdevinfo, &devinfo_data);
-                    }
+                log::trace!("Checking device driver key: '{driver_key}'");
+
+                if driver_key.eq_ignore_ascii_case(target_driver_key) {
+                    // Found it! Read EDID from registry.
+                    return read_edid_from_registry(hdevinfo, &devinfo_data);
                 }
             }
         }
