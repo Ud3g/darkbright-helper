@@ -98,6 +98,14 @@ impl BrightnessController {
             BrightnessMessage::Refresh => {
                 self.handle_refresh()?;
             }
+            BrightnessMessage::DdcSetResult { .. } => {
+                // Will be implemented in Step 6 when DDC worker is integrated
+                log::warn!("Received DdcSetResult but DDC worker not yet integrated");
+            }
+            BrightnessMessage::DdcRefreshResult { .. } => {
+                // Will be implemented in Step 6 when DDC worker is integrated
+                log::warn!("Received DdcRefreshResult but DDC worker not yet integrated");
+            }
             BrightnessMessage::Shutdown => {
                 self.handle_shutdown()?;
                 return Ok(false);
