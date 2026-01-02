@@ -8,7 +8,6 @@ use std::sync::mpsc::Sender;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Power::{PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND};
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
     HMENU, HWND_MESSAGE, MSG, RegisterClassW, TranslateMessage, WM_POWERBROADCAST, WNDCLASSW,
@@ -19,6 +18,16 @@ use windows::core::w;
 use crate::core::state::BrightnessMessage;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Power broadcast event: System has resumed from suspend (automatic).
+const PBT_APMRESUMEAUTOMATIC: u32 = 0x12;
+
+/// Power broadcast event: System has resumed from suspend (user action).
+const PBT_APMRESUMESUSPEND: u32 = 0x07;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -147,11 +156,11 @@ impl PowerEventListener {
         let event_type = wparam.0 as u32;
 
         match event_type {
-            x if x == PBT_APMRESUMEAUTOMATIC.0 => {
+            PBT_APMRESUMEAUTOMATIC => {
                 log::info!("System resumed from sleep (automatic)");
                 self.send_resume_notification();
             }
-            x if x == PBT_APMRESUMESUSPEND.0 => {
+            PBT_APMRESUMESUSPEND => {
                 log::info!("System resumed from sleep (user action)");
                 self.send_resume_notification();
             }
