@@ -369,7 +369,10 @@ mod tests {
     fn test_refresh_config_defaults() {
         let config = RefreshConfig::default();
         assert_eq!(config.periodic_seconds, DEFAULT_REFRESH_PERIODIC_SECONDS);
-        assert_eq!(config.inactivity_seconds, DEFAULT_REFRESH_INACTIVITY_SECONDS);
+        assert_eq!(
+            config.inactivity_seconds,
+            DEFAULT_REFRESH_INACTIVITY_SECONDS
+        );
     }
 
     #[test]
@@ -417,7 +420,10 @@ mod tests {
         config.validate_and_fix();
 
         // Should be reset to default when exceeding max (3600)
-        assert_eq!(config.refresh.periodic_seconds, DEFAULT_REFRESH_PERIODIC_SECONDS);
+        assert_eq!(
+            config.refresh.periodic_seconds,
+            DEFAULT_REFRESH_PERIODIC_SECONDS
+        );
     }
 
     #[test]
@@ -432,7 +438,10 @@ mod tests {
         config.validate_and_fix();
 
         // Should be reset to default when exceeding max (600)
-        assert_eq!(config.refresh.inactivity_seconds, DEFAULT_REFRESH_INACTIVITY_SECONDS);
+        assert_eq!(
+            config.refresh.inactivity_seconds,
+            DEFAULT_REFRESH_INACTIVITY_SECONDS
+        );
     }
 
     #[test]
@@ -461,8 +470,14 @@ mod tests {
 
         let config: Config = serde_json::from_str(json).unwrap();
 
-        assert_eq!(config.refresh.periodic_seconds, DEFAULT_REFRESH_PERIODIC_SECONDS);
-        assert_eq!(config.refresh.inactivity_seconds, DEFAULT_REFRESH_INACTIVITY_SECONDS);
+        assert_eq!(
+            config.refresh.periodic_seconds,
+            DEFAULT_REFRESH_PERIODIC_SECONDS
+        );
+        assert_eq!(
+            config.refresh.inactivity_seconds,
+            DEFAULT_REFRESH_INACTIVITY_SECONDS
+        );
     }
 
     #[test]

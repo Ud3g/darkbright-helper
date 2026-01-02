@@ -285,9 +285,7 @@ impl BrightnessController {
 
         // 7. Send DDC command to worker (non-blocking)
         if new_hardware != old_hardware {
-            log::debug!(
-                "{target_id}: sending DDC command hw {old_hardware}%→{new_hardware}%"
-            );
+            log::debug!("{target_id}: sending DDC command hw {old_hardware}%→{new_hardware}%");
             if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::SetBrightness {
                 monitor_id: target_id,
                 value: new_hardware,
@@ -296,9 +294,7 @@ impl BrightnessController {
             }
             // Confirmation/revert happens when we receive DdcSetResult
         } else {
-            log::debug!(
-                "{target_id}: overlay only {old_overlay}%→{new_overlay}%"
-            );
+            log::debug!("{target_id}: overlay only {old_overlay}%→{new_overlay}%");
         }
 
         Ok(())
@@ -419,7 +415,8 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> R
     let config_clone = config.clone();
     std::thread::spawn(move || {
         // Create hotkey manager on THIS thread (creates message window here)
-        let mut hotkey_manager = match HotkeyManager::new(tx, config_clone.brightness.step_percent) {
+        let mut hotkey_manager = match HotkeyManager::new(tx, config_clone.brightness.step_percent)
+        {
             Ok(hm) => hm,
             Err(e) => {
                 let _ = result_tx.send(Err(e));
@@ -428,11 +425,9 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> R
         };
 
         // Register primary hotkeys on THIS thread (fatal if they fail)
-        if let Err(e) = hotkey_manager.register_hotkey(
-            BRIGHTNESS_UP_ID,
-            up_hotkey.modifiers,
-            up_hotkey.vk_code,
-        ) {
+        if let Err(e) =
+            hotkey_manager.register_hotkey(BRIGHTNESS_UP_ID, up_hotkey.modifiers, up_hotkey.vk_code)
+        {
             let _ = result_tx.send(Err(BrightnessError::hotkey_registration(
                 config_clone.hotkeys.brightness_up.clone(),
                 e.to_string(),
@@ -477,9 +472,7 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> R
     });
 
     // Wait for registration result from hotkey thread
-    result_rx
-        .recv()
-        .map_err(|_| BrightnessError::ChannelRecv)?
+    result_rx.recv().map_err(|_| BrightnessError::ChannelRecv)?
 }
 
 fn main() {

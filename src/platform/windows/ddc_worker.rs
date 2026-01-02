@@ -174,17 +174,13 @@ impl DdcWorker {
                     #[allow(clippy::cast_possible_truncation)]
                     let brightness_u8 = brightness as u8;
 
-                    log::debug!(
-                        "DDC worker: monitor {monitor_id} brightness = {brightness_u8}%"
-                    );
+                    log::debug!("DDC worker: monitor {monitor_id} brightness = {brightness_u8}%");
 
                     results.push((monitor_id.clone(), brightness_u8));
                     self.monitors.insert(monitor_id.clone(), ddc_mon);
                 }
                 Err(e) => {
-                    log::warn!(
-                        "DDC worker: could not read brightness for {monitor_id}: {e}"
-                    );
+                    log::warn!("DDC worker: could not read brightness for {monitor_id}: {e}");
                 }
             }
         }
