@@ -156,8 +156,10 @@ Hotkeys affect the monitor containing the mouse cursor:
 
 **Implementation:**
 
+Primary hotkey registration failures are fatal. The application displays an error message box explaining the failure and suggesting solutions, then exits.
+
 ```rust
-// Register primary hotkeys (fail = fatal error)
+// Register primary hotkeys (fail = fatal error with message box)
 hotkey_manager.register(BRIGHTNESS_UP_ID, MOD_CTRL | MOD_SHIFT, VK_UP)?;
 hotkey_manager.register(BRIGHTNESS_DOWN_ID, MOD_CTRL | MOD_SHIFT, VK_DOWN)?;
 

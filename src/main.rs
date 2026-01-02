@@ -22,6 +22,7 @@ use darkbright_helper::platform::windows::hotkey::{
 };
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
+use darkbright_helper::platform::windows::show_error_message_box;
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -310,40 +311,36 @@ fn pump_windows_messages() {
     }
 }
 
-fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) {
+fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> Result<()> {
+    // Parse and validate primary hotkeys before spawning thread (fail fast)
+    let up_hotkey = parse_hotkey(&config.hotkeys.brightness_up)
+        .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_up", e.to_string()))?;
+
+    let down_hotkey = parse_hotkey(&config.hotkeys.brightness_down)
+        .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_down", e.to_string()))?;
+
+    // Create hotkey manager and register primary hotkeys (fatal if they fail)
+    let mut hotkey_manager = HotkeyManager::new(tx, config.brightness.step_percent)?;
+
+    hotkey_manager
+        .register_hotkey(BRIGHTNESS_UP_ID, up_hotkey.modifiers, up_hotkey.vk_code)
+        .map_err(|e| {
+            BrightnessError::hotkey_registration(config.hotkeys.brightness_up.clone(), e.to_string())
+        })?;
+
+    hotkey_manager
+        .register_hotkey(BRIGHTNESS_DOWN_ID, down_hotkey.modifiers, down_hotkey.vk_code)
+        .map_err(|e| {
+            BrightnessError::hotkey_registration(
+                config.hotkeys.brightness_down.clone(),
+                e.to_string(),
+            )
+        })?;
+
+    // Spawn thread only after primary hotkeys are successfully registered
     std::thread::spawn(move || {
-        let mut hotkey_manager = match HotkeyManager::new(tx, config.brightness.step_percent) {
-            Ok(hm) => hm,
-            Err(e) => {
-                log::error!("Failed to initialize HotkeyManager: {e}");
-                return;
-            }
-        };
 
-        // Register primary hotkeys from config
-        match parse_hotkey(&config.hotkeys.brightness_up) {
-            Ok(p) => {
-                if let Err(e) =
-                    hotkey_manager.register_hotkey(BRIGHTNESS_UP_ID, p.modifiers, p.vk_code)
-                {
-                    log::error!("Failed to register primary brightness up hotkey: {e}");
-                }
-            }
-            Err(e) => log::error!("Invalid brightness_up hotkey in config: {e}"),
-        }
-
-        match parse_hotkey(&config.hotkeys.brightness_down) {
-            Ok(p) => {
-                if let Err(e) =
-                    hotkey_manager.register_hotkey(BRIGHTNESS_DOWN_ID, p.modifiers, p.vk_code)
-                {
-                    log::error!("Failed to register primary brightness down hotkey: {e}");
-                }
-            }
-            Err(e) => log::error!("Invalid brightness_down hotkey in config: {e}"),
-        }
-
-        // Register secondary (opportunistic) hotkeys
+        // Register secondary (opportunistic) hotkeys - non-fatal
         if let Err(e) = hotkey_manager.register_hotkey(
             BRIGHTNESS_UP_ALT_ID,
             HOT_KEY_MODIFIERS(0),
@@ -363,6 +360,8 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) {
         // Run message loop (blocks until thread ends)
         hotkey_manager.run_message_loop();
     });
+
+    Ok(())
 }
 
 fn main() {
@@ -416,7 +415,22 @@ fn main() {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), TRUE);
     }
 
-    start_hotkey_thread(config, tx);
+    if let Err(e) = start_hotkey_thread(config, tx) {
+        log::error!("Fatal error during hotkey registration: {e}");
+        let config_path = Config::default_path()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| "config file".to_string());
+        let message = format!(
+            "Failed to register hotkeys:\n\n\
+             {e}\n\n\
+             Possible solutions:\n\
+             • Close other applications that might be using these hotkeys\n\
+             • Change the hotkey configuration in:\n  {config_path}\n\
+             • Restart the application after making changes"
+        );
+        show_error_message_box("Brightness Control - Hotkey Error", &message);
+        return;
+    }
 
     // Phase 6, Step 46: Main Loop
     log::info!("Entering main event loop...");

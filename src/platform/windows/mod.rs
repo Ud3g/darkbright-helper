@@ -8,7 +8,9 @@
 
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
-use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetCursorPos};
+use windows::Win32::UI::WindowsAndMessaging::{
+    DestroyWindow, GetCursorPos, MB_ICONERROR, MB_OK, MessageBoxW,
+};
 
 use crate::error::{BrightnessError, Result};
 
@@ -232,6 +234,33 @@ pub trait WindowsResultExt<T> {
 impl<T> WindowsResultExt<T> for windows::core::Result<T> {
     fn to_brightness_result(self, function: &str) -> Result<T> {
         self.map_err(|e| BrightnessError::windows_api(function, e.code().0.cast_unsigned()))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Message Box Helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shows an error message box to the user.
+///
+/// This is a blocking call that waits for the user to dismiss the dialog.
+///
+/// # Arguments
+///
+/// * `title` - The message box title.
+/// * `message` - The error message to display.
+pub fn show_error_message_box(title: &str, message: &str) {
+    let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+    let message_wide: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
+
+    // SAFETY: We pass valid null-terminated wide strings.
+    unsafe {
+        MessageBoxW(
+            HWND::default(),
+            windows::core::PCWSTR(message_wide.as_ptr()),
+            windows::core::PCWSTR(title_wide.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
     }
 }
 
