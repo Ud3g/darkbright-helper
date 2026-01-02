@@ -29,6 +29,56 @@ Rust (2024 edition) — chosen for cross-platform portability, low resource usag
 - **Secondary**: Dedicated brightness keys (`VK_BRIGHTNESS_UP/DOWN`) registered opportunistically
 - Fully configurable via `config.json` (in `%APPDATA%`)
 
+## Installation & Build
+
+### Prerequisites
+- Rust 1.85+ (2024 edition)
+- Windows 10 or 11
+
+### Build
+```bash
+git clone https://github.com/yourusername/darkbright-helper.git
+cd darkbright-helper
+cargo build --release
+```
+The executable will be at `target/release/darkbright-helper.exe`.
+
+## Configuration
+
+The configuration file is automatically created at:
+`%APPDATA%\BrightnessControl\config.json`
+
+### Default Configuration
+```json
+{
+  "version": 1,
+  "hotkeys": {
+    "brightness_up": "Ctrl+Shift+Up",
+    "brightness_down": "Ctrl+Shift+Down"
+  },
+  "osd": {
+    "timeout_ms": 1000,
+    "opacity": 0.8
+  },
+  "brightness": {
+    "step_percent": 5
+  }
+}
+```
+
+### Options
+- **hotkeys**: Combination strings (e.g., "Alt+F1", "Ctrl+Shift+Plus").
+- **osd.timeout_ms**: How long the OSD remains visible (100-10000 ms).
+- **osd.opacity**: OSD window transparency (0.1-1.0).
+- **brightness.step_percent**: Amount to change per keypress (1-50%).
+
+## Usage
+
+1. Run `darkbright-helper.exe`.
+2. Use `Ctrl+Shift+Up` to increase brightness.
+3. Use `Ctrl+Shift+Down` to decrease brightness.
+4. If brightness reaches 0%, continuing to decrease will activate the dimming overlay.
+
 ## Future
 - Linux support (X11/Wayland)
 - System tray icon & Settings GUI
