@@ -178,6 +178,11 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
         // Draw progress bar(s)
         draw_brightness_bars(mem_dc, &rect, &state);
 
+        // Draw error message if in error state
+        if state.is_error {
+            draw_error_message(mem_dc, &rect, ERROR_MESSAGE);
+        }
+
         // Copy to screen
         let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
 
