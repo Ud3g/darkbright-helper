@@ -6,7 +6,7 @@
 //! - `HotkeyManager` construction (without actual registration in CI)
 
 use darkbright_helper::platform::windows::hotkey::{
-    parse_hotkey, ParsedHotkey, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ID,
+    BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ID, ParsedHotkey, parse_hotkey,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY, VK_DOWN, VK_END,
@@ -212,10 +212,7 @@ fn test_parse_only_modifiers_fails() {
     let result = parse_hotkey("Ctrl+Shift");
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(
-        err.contains("no key"),
-        "Error should mention no key: {err}"
-    );
+    assert!(err.contains("no key"), "Error should mention no key: {err}");
 }
 
 #[test]

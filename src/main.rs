@@ -5,7 +5,7 @@ use std::time::Duration;
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MSG, PeekMessageW, PM_REMOVE, TranslateMessage,
+    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
 };
 
 use darkbright_helper::core::brightness::calculate_adjustment;
@@ -14,11 +14,11 @@ use darkbright_helper::core::state::{BrightnessMessage, MonitorId, MonitorState}
 use darkbright_helper::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
 };
+use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::hotkey::{
     BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
-    HotkeyManager, parse_hotkey, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP,
+    HotkeyManager, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP, parse_hotkey,
 };
-use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::{BrightnessError, Result};
@@ -209,17 +209,15 @@ impl BrightnessController {
                 log::error!(
                     "{target_id}: DDC failed setting hw {old_hardware}%→{new_hardware}%: {e}"
                 );
-                log::debug!(
-                    "{target_id}: Reverted to hw={old_hardware}%, overlay={old_overlay}%"
-                );
+                log::debug!("{target_id}: Reverted to hw={old_hardware}%, overlay={old_overlay}%");
                 // 6. Error rollback
                 state.revert_pending();
                 state.overlay_opacity = old_overlay;
 
                 // Revert overlay to old value
-                if let Err(overlay_err) = self
-                    .overlay_manager
-                    .update(&target_id, hmonitor, old_overlay)
+                if let Err(overlay_err) =
+                    self.overlay_manager
+                        .update(&target_id, hmonitor, old_overlay)
                 {
                     log::error!("{target_id}: Failed to revert overlay: {overlay_err}");
                 }

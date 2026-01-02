@@ -45,10 +45,7 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
                             );
                         }
                         Err(e) => {
-                            println!(
-                                "    [Physical #{}] Failed to read brightness: {}",
-                                j, e
-                            );
+                            println!("    [Physical #{}] Failed to read brightness: {}", j, e);
                         }
                     }
                 }
