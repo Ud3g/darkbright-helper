@@ -57,6 +57,8 @@ const BAR_BACKGROUND_COLOR: u32 = 0x0050_5050; // BGR: 80, 80, 80
 const TEXT_COLOR: u32 = 0x00FF_FFFF; // BGR: 255, 255, 255
 /// Error bar color (red).
 const BAR_ERROR_COLOR: u32 = 0x0000_00CC; // BGR: 204, 0, 0
+/// Error text color (light red for visibility on dark background).
+const ERROR_TEXT_COLOR: u32 = 0x0050_50FF; // BGR: 255, 80, 80
 
 /// Font size for percentage text.
 const FONT_SIZE: i32 = 18;
@@ -393,6 +395,41 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
         // Center text vertically with the bar
         let text_y = y + (BAR_HEIGHT - FONT_SIZE).saturating_div(2);
         TextOutW(hdc, x, text_y, &wide_text);
+
+        // Cleanup
+        SelectObject(hdc, old_font);
+        let _ = DeleteObject(font);
+    }
+}
+
+/// Draws the error message centered at the bottom of the OSD.
+///
+/// # Safety
+///
+/// Must be called with a valid device context.
+unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
+    unsafe {
+        // Create font
+        let font = create_osd_font();
+        let old_font = SelectObject(hdc, font);
+
+        // Set text properties - use red color for error visibility
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, COLORREF(ERROR_TEXT_COLOR));
+
+        // Convert message to wide string
+        let wide_text: Vec<u16> = message.encode_utf16().collect();
+
+        // Calculate position - centered horizontally, in footer area at bottom
+        let width = client_rect.right - client_rect.left;
+        // Approximate text width (~7 pixels per character at this font size)
+        let approx_char_width = 7;
+        let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
+        let x = (width - approx_text_width) / 2;
+        // Position in footer area: bottom of window minus footer height, centered vertically
+        let y = client_rect.bottom - FOOTER_HEIGHT + (FOOTER_HEIGHT - FONT_SIZE) / 2;
+
+        TextOutW(hdc, x, y, &wide_text);
 
         // Cleanup
         SelectObject(hdc, old_font);
