@@ -142,18 +142,38 @@ impl BrightnessController {
             .ok_or_else(|| BrightnessError::MonitorNotFound(target_id.to_string()))?;
 
         // 3. Calculate new brightness
-        let adjustment =
-            calculate_adjustment(state.effective_brightness(), state.overlay_opacity, delta);
+        let old_hardware = state.effective_brightness();
+        let old_overlay = state.overlay_opacity;
+
+        let adjustment = calculate_adjustment(old_hardware, old_overlay, delta);
+        let new_hardware = adjustment.hardware_brightness;
+        let new_overlay = adjustment.overlay_opacity;
+
+        let changed = (old_hardware != new_hardware) || (old_overlay != new_overlay);
+
+        if !changed {
+            log::trace!("{target_id}: no change (hw={old_hardware}%, overlay={old_overlay}%)");
+            // Still show/update OSD to reset timer and provide feedback
+            if self.osd.is_visible() {
+                self.osd.update(state)?;
+            } else {
+                self.osd.show(hmonitor, state)?;
+            }
+            return Ok(());
+        }
+
+        log::trace!(
+            "{target_id}: attempting hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
+        );
 
         // 4. Optimistic update
-        state.set_pending(adjustment.hardware_brightness);
-        let old_overlay = state.overlay_opacity;
-        state.overlay_opacity = adjustment.overlay_opacity;
+        state.set_pending(new_hardware);
+        state.overlay_opacity = new_overlay;
 
         // Update overlay (software layer is immediately effective)
-        if state.overlay_opacity != old_overlay {
+        if new_overlay != old_overlay {
             self.overlay_manager
-                .update(&target_id, hmonitor, state.overlay_opacity)?;
+                .update(&target_id, hmonitor, new_overlay)?;
         }
 
         // Show or update OSD
@@ -164,20 +184,27 @@ impl BrightnessController {
         }
 
         // 5. Hardware update via DDC (blocking in controller thread)
-        log::debug!(
-            "Setting DDC brightness for {}: {}%",
-            target_id,
-            adjustment.hardware_brightness
-        );
+        if new_hardware == old_hardware {
+            state.confirm_brightness();
+            log::debug!(
+                "{target_id}: hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
+            );
+            return Ok(());
+        }
 
-        match monitor.set_brightness(u32::from(adjustment.hardware_brightness)) {
+        match monitor.set_brightness(u32::from(new_hardware)) {
             Ok(()) => {
                 state.confirm_brightness();
+                log::debug!(
+                    "{target_id}: hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
+                );
                 // Update OSD to confirm (removes error coloring if present)
                 self.osd.update(state)?;
             }
             Err(e) => {
-                log::error!("DDC error for {target_id}: {e}");
+                log::error!(
+                    "{target_id}: DDC failed setting hw {old_hardware}%→{new_hardware}%, reverted to hw={old_hardware}%, overlay={old_overlay}%"
+                );
                 // 6. Error rollback
                 state.revert_pending();
                 state.overlay_opacity = old_overlay;
