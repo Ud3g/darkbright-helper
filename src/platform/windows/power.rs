@@ -117,7 +117,7 @@ impl PowerEventListener {
             return Err(last_error_as_brightness_error("CreateWindowExW"));
         }
 
-        log::debug!("Power event listener window created");
+        log::debug!(hwnd = hwnd.0; "Power event listener window created");
 
         Ok(Self { hwnd, sender })
     }
@@ -157,16 +157,16 @@ impl PowerEventListener {
 
         match event_type {
             PBT_APMRESUMEAUTOMATIC => {
-                log::info!("System resumed from sleep (automatic)");
+                log::info!(resume_type = "automatic"; "System resumed from sleep");
                 self.send_resume_notification();
             }
             PBT_APMRESUMESUSPEND => {
-                log::info!("System resumed from sleep (user action)");
+                log::info!(resume_type = "user_action"; "System resumed from sleep");
                 self.send_resume_notification();
             }
             _ => {
                 // Other power events we don't care about
-                log::trace!("Power broadcast event: {event_type:#x}");
+                log::trace!(event_type = event_type; "Power broadcast event ignored");
             }
         }
     }
@@ -174,7 +174,7 @@ impl PowerEventListener {
     /// Sends a `SystemResumed` notification to the main thread.
     fn send_resume_notification(&self) {
         if let Err(e) = self.sender.send(BrightnessMessage::SystemResumed) {
-            log::error!("Failed to send SystemResumed message: {e}");
+            log::error!(error = e.to_string(); "Failed to send SystemResumed message");
         }
     }
 }
@@ -185,7 +185,7 @@ impl Drop for PowerEventListener {
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
             }
-            log::debug!("Power event listener window destroyed");
+            log::debug!(hwnd = self.hwnd.0; "Power event listener window destroyed");
         }
     }
 }
