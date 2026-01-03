@@ -167,6 +167,71 @@ pub type Result<T> = std::result::Result<T, BrightnessError>;
 
 ---
 
+## 7. Logging
+
+See `architecture.md` section 8 for what events to log at each level. This section covers **how** to write log statements.
+
+### Level Selection Guidelines
+
+When choosing a log level, ask these questions:
+
+| Question | If Yes → Level |
+|----------|----------------|
+| Has something broken that requires intervention? | `error!` |
+| Is the application unable to continue this operation? | `error!` |
+| Did something unexpected happen, but we recovered? | `warn!` |
+| Is this a deprecated/discouraged code path? | `warn!` |
+| Would an operator find this useful in production? | `info!` |
+| Is this a significant state change or milestone? | `info!` |
+| Is this helpful for debugging during development? | `debug!` |
+| Is this ultra-detailed, stepping-through-code level? | `trace!` |
+
+**Key distinction:** `error!` means "something is broken and needs fixing." `warn!` means "something is unusual but we handled it."
+
+### Structured Logging
+
+Prefer key-value pairs over string interpolation for machine-parseable logs:
+
+```rust
+// Preferred: structured fields
+log::info!(monitor_id = %monitor.id(), brightness = new_value; "Brightness adjusted");
+log::error!(vcp_code = 0x10, attempts = 3; "DDC write failed");
+
+// Acceptable: simple messages without dynamic data
+log::info!("Application started");
+
+// Avoid: embedding structured data in format strings
+log::info!("Brightness adjusted: monitor={}, value={}", monitor.id(), new_value);
+```
+
+### Field Naming
+
+Use `snake_case` for all log field names. Common patterns:
+
+| Field | Usage |
+|-------|-------|
+| `monitor_id` | Monitor identification |
+| `brightness` | Brightness value (0-100) |
+| `vcp_code` | DDC VCP code |
+| `error_code` | Windows API error code |
+| `attempts` | Retry attempt count |
+| `duration_ms` | Operation timing |
+
+### Never Log Sensitive Data
+
+Never log personally identifiable information (PII) or secrets:
+- User paths containing usernames (sanitize or omit)
+- Serial numbers in production logs (use `debug!` level only)
+- Any credentials or API keys
+
+### Antipatterns
+
+- **Don't log the same event at multiple levels** — pick one appropriate level
+- **Don't use `error!` for expected failures** — use `warn!` for recoverable situations
+- **Don't use `debug!`/`trace!` in hot paths without need** — even disabled log macros have some overhead from argument evaluation
+
+---
+
 ## Quick Checklist
 
 - [ ] `cargo fmt` passes
@@ -175,3 +240,5 @@ pub type Result<T> = std::result::Result<T, BrightnessError>;
 - [ ] Public items have doc comments
 - [ ] Unsafe code is isolated with safe wrappers
 - [ ] Windows handles use RAII wrappers
+- [ ] Log statements use appropriate levels (see section 7)
+- [ ] No PII or secrets in log output

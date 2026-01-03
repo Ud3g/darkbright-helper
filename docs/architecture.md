@@ -400,6 +400,8 @@ This is acceptable because:
 
 **Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior)
 
+> **Note:** For guidelines on *how* to write log statements (level selection heuristics, structured fields, avoiding PII), see `code-conventions.md` section 7.
+
 | Level | Events Logged |
 |-------|---------------|
 | **Error** | All failures including recoverable (DDC errors, config parse failures, overlay creation failed) |
