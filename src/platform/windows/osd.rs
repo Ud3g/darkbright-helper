@@ -764,6 +764,34 @@ pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     Ok(())
 }
 
+/// Applies rounded corners to the window using DWM (Windows 11+).
+///
+/// This is a best-effort operation. On Windows 10 or if DWM is unavailable,
+/// the call will fail silently and the window will have square corners.
+///
+/// # Arguments
+///
+/// * `hwnd` - The window handle to apply rounded corners to.
+fn apply_rounded_corners(hwnd: HWND) {
+    let preference = DWMWCP_ROUND;
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            (&raw const preference).cast(),
+            u32::try_from(std::mem::size_of_val(&preference)).unwrap_or(0),
+        )
+    };
+
+    match result {
+        Ok(()) => log::debug!("Applied rounded corners to OSD window"),
+        Err(e) => log::debug!(
+            error_code = e.code().0;
+            "Rounded corners not available (expected on Windows 10)"
+        ),
+    }
+}
+
 /// Manages the On-Screen Display (OSD) window.
 ///
 /// Provides methods to show, hide, and update the brightness indicator
