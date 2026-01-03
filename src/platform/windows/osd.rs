@@ -219,8 +219,10 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             "Drawing bidirectional brightness bar"
         );
 
-        // Calculate vertical center for the single bar row
-        let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT) / 2;
+        // Use fixed bar position based on compact height (OSD_HEIGHT).
+        // This keeps the bar in the same position whether or not the error row is visible.
+        // When expanded for errors, the extra space is at the bottom for the error message.
+        let bar_top = (OSD_HEIGHT - BAR_HEIGHT) / 2;
 
         // Draw left side (overlay section)
         draw_overlay_section(hdc, client_rect, bar_top, state.overlay_opacity);
@@ -479,7 +481,10 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
     }
 }
 
-/// Draws the error message centered at the bottom of the OSD.
+/// Draws the error message centered in the error row at the bottom of the OSD.
+///
+/// The error row occupies the bottom `ERROR_ROW_HEIGHT` pixels of the expanded window.
+/// This function should only be called when the window is in expanded (error) mode.
 ///
 /// # Safety
 ///
