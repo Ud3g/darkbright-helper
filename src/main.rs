@@ -29,7 +29,7 @@ static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>>
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
-        log::info!("Shutdown signal received.");
+        log::info!("Shutdown signal received");
         if let Ok(guard) = SHUTDOWN_SENDER.lock()
             && let Some(tx) = &*guard
         {
@@ -113,7 +113,7 @@ impl BrightnessController {
                 self.handle_refresh();
             }
             BrightnessMessage::SystemResumed => {
-                log::info!("System resumed from sleep/hibernate, triggering refresh");
+                log::info!(reason = "system_resume"; "Triggering refresh");
                 self.handle_refresh();
             }
             BrightnessMessage::DdcSetResult {
@@ -153,13 +153,13 @@ impl BrightnessController {
         error: Option<String>,
     ) -> Result<()> {
         let Some(state) = self.states.get_mut(monitor_id) else {
-            log::warn!("Received DDC result for unknown monitor: {monitor_id}");
+            log::warn!(monitor_id = monitor_id.to_string(); "Received DDC result for unknown monitor");
             return Ok(());
         };
 
         if success {
             state.confirm_brightness();
-            log::debug!("{monitor_id}: DDC confirmed brightness at {value}%");
+            log::debug!(monitor_id = monitor_id.to_string(), brightness = value; "DDC confirmed brightness");
 
             // Update OSD to confirm (removes any error coloring)
             if self.osd.is_visible() {
@@ -167,7 +167,7 @@ impl BrightnessController {
             }
         } else {
             let error_msg = error.as_deref().unwrap_or("unknown error");
-            log::error!("{monitor_id}: DDC failed to set brightness to {value}%: {error_msg}");
+            log::error!(monitor_id = monitor_id.to_string(), target_brightness = value, error = error_msg; "DDC failed to set brightness");
 
             state.revert_pending();
 
@@ -185,10 +185,10 @@ impl BrightnessController {
     /// Updates existing monitor states and creates new entries for
     /// newly detected monitors.
     fn handle_ddc_refresh_result(&mut self, monitors: Vec<(MonitorId, u8)>) {
-        log::info!("DDC refresh complete, {} monitor(s) found", monitors.len());
+        log::info!(count = monitors.len(); "DDC refresh complete");
 
         for (monitor_id, brightness) in monitors {
-            log::debug!("{monitor_id}: brightness = {brightness}%");
+            log::debug!(monitor_id = monitor_id.to_string(), brightness = brightness; "Monitor found during refresh");
 
             self.states
                 .entry(monitor_id)
@@ -250,7 +250,7 @@ impl BrightnessController {
         let changed = (old_hardware != new_hardware) || (old_overlay != new_overlay);
 
         if !changed {
-            log::trace!("{target_id}: no change (hw={old_hardware}%, overlay={old_overlay}%)");
+            log::trace!(monitor_id = target_id.to_string(), hardware = old_hardware, overlay = old_overlay; "No brightness change needed");
             // Still show/update OSD to reset timer and provide feedback
             if self.osd.is_visible() {
                 self.osd.update(state)?;
@@ -261,7 +261,12 @@ impl BrightnessController {
         }
 
         log::trace!(
-            "{target_id}: attempting hw {old_hardware}%→{new_hardware}%, overlay {old_overlay}%→{new_overlay}%"
+            monitor_id = target_id.to_string(),
+            old_hw = old_hardware,
+            new_hw = new_hardware,
+            old_overlay = old_overlay,
+            new_overlay = new_overlay;
+            "Attempting brightness adjustment"
         );
 
         // 4. Optimistic update (only set pending if hardware is changing)
@@ -285,16 +290,16 @@ impl BrightnessController {
 
         // 7. Send DDC command to worker (non-blocking)
         if new_hardware != old_hardware {
-            log::debug!("{target_id}: sending DDC command hw {old_hardware}%→{new_hardware}%");
+            log::debug!(monitor_id = target_id.to_string(), old_hw = old_hardware, new_hw = new_hardware; "Sending DDC command");
             if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::SetBrightness {
                 monitor_id: target_id,
                 value: new_hardware,
             }) {
-                log::error!("Failed to send DDC command: {e}");
+                log::error!(error = e.to_string(); "Failed to send DDC command");
             }
             // Confirmation/revert happens when we receive DdcSetResult
         } else {
-            log::debug!("{target_id}: overlay only {old_overlay}%→{new_overlay}%");
+            log::debug!(monitor_id = target_id.to_string(), old_overlay = old_overlay, new_overlay = new_overlay; "Adjusting overlay only");
         }
 
         Ok(())
@@ -317,7 +322,7 @@ impl BrightnessController {
     /// Sends a `RefreshAll` command to the DDC worker. The actual state
     /// update happens when `DdcRefreshResult` is received.
     fn handle_refresh(&mut self) {
-        log::info!("Requesting monitor refresh from DDC worker...");
+        log::info!("Requesting monitor refresh from DDC worker");
 
         // Clear ID cache since handles may change after refresh
         self.id_cache.clear();
@@ -327,7 +332,7 @@ impl BrightnessController {
 
         // Send refresh command to worker (non-blocking)
         if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::RefreshAll) {
-            log::error!("Failed to send refresh command to DDC worker: {e}");
+            log::error!(error = e.to_string(); "Failed to send refresh command to DDC worker");
             self.refresh_in_progress = false;
         }
     }
@@ -348,10 +353,7 @@ impl BrightnessController {
         let interval = Duration::from_secs(u64::from(periodic_seconds));
 
         if elapsed >= interval {
-            log::debug!(
-                "Periodic refresh triggered ({}s since last refresh)",
-                elapsed.as_secs()
-            );
+            log::debug!(elapsed_seconds = elapsed.as_secs(); "Periodic refresh triggered");
             self.handle_refresh();
         }
     }
@@ -376,10 +378,7 @@ impl BrightnessController {
         let threshold = Duration::from_secs(u64::from(inactivity_seconds));
 
         if elapsed >= threshold {
-            log::debug!(
-                "Inactivity refresh triggered ({}s since last activity)",
-                elapsed.as_secs()
-            );
+            log::debug!(elapsed_seconds = elapsed.as_secs(); "Inactivity refresh triggered");
             self.handle_refresh();
         }
     }
@@ -456,7 +455,7 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> R
             HOT_KEY_MODIFIERS(0),
             VK_BRIGHTNESS_UP,
         ) {
-            log::debug!("Secondary brightness up hotkey not registered: {e}");
+            log::debug!(error = e.to_string(); "Secondary brightness up hotkey not registered");
         }
 
         if let Err(e) = hotkey_manager.register_hotkey(
@@ -464,7 +463,7 @@ fn start_hotkey_thread(config: Config, tx: mpsc::Sender<BrightnessMessage>) -> R
             HOT_KEY_MODIFIERS(0),
             VK_BRIGHTNESS_DOWN,
         ) {
-            log::debug!("Secondary brightness down hotkey not registered: {e}");
+            log::debug!(error = e.to_string(); "Secondary brightness down hotkey not registered");
         }
 
         // Run message loop (blocks until thread ends)
@@ -487,16 +486,16 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
         .init();
 
-    log::info!("Brightness Control Tool Starting...");
+    log::info!("Brightness Control Tool Starting");
 
     // Phase 6, Step 42: Load configuration
     let config = match Config::load() {
         Ok(cfg) => {
-            log::info!("Configuration loaded successfully.");
+            log::info!("Configuration loaded successfully");
             cfg
         }
         Err(e) => {
-            log::error!("Failed to load configuration: {e}. Using defaults.");
+            log::error!(error = e.to_string(); "Failed to load configuration, using defaults");
             Config::default()
         }
     };
@@ -520,7 +519,7 @@ fn main() {
     let mut controller = match BrightnessController::new(config.clone(), ddc_cmd_tx) {
         Ok(c) => c,
         Err(e) => {
-            log::error!("Failed to initialize BrightnessController: {e}");
+            log::error!(error = e.to_string(); "Failed to initialize BrightnessController");
             return;
         }
     };
@@ -537,7 +536,7 @@ fn main() {
                 listener.run_message_loop();
             }
             Err(e) => {
-                log::error!("Failed to create power event listener: {e}");
+                log::error!(error = e.to_string(); "Failed to create power event listener");
                 // Non-fatal: app works without resume detection
             }
         }
@@ -555,7 +554,7 @@ fn main() {
     }
 
     if let Err(e) = start_hotkey_thread(config, tx) {
-        log::error!("Fatal error during hotkey registration: {e}");
+        log::error!(error = e.to_string(); "Fatal error during hotkey registration");
         let config_path = Config::default_path()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "config file".to_string());
@@ -572,7 +571,7 @@ fn main() {
     }
 
     // Phase 6, Step 46: Main Loop
-    log::info!("Entering main event loop...");
+    log::info!("Entering main event loop");
     loop {
         // Pump Windows messages (for OSD WM_PAINT, WM_TIMER, etc.)
         pump_windows_messages();
@@ -583,7 +582,7 @@ fn main() {
         // Check for brightness messages with a short timeout
         match rx.recv_timeout(Duration::from_millis(16)) {
             Ok(msg) => {
-                log::debug!("Main loop received message: {msg:?}");
+                log::debug!(message = format!("{msg:?}"); "Main loop received message");
                 match controller.handle_message(msg) {
                     Ok(should_continue) => {
                         if !should_continue {
@@ -591,7 +590,7 @@ fn main() {
                         }
                     }
                     Err(e) => {
-                        log::error!("Error processing message: {e}");
+                        log::error!(error = e.to_string(); "Error processing message");
                     }
                 }
             }
@@ -599,7 +598,7 @@ fn main() {
                 // No message received, continue pumping Windows messages
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                log::info!("Channel disconnected, shutting down.");
+                log::info!("Channel disconnected, shutting down");
                 break;
             }
         }
@@ -617,5 +616,5 @@ fn main() {
     // Explicitly drop controller to ensure windows are destroyed before exit
     drop(controller);
 
-    log::info!("Brightness Control Tool Stopped.");
+    log::info!("Brightness Control Tool Stopped");
 }
