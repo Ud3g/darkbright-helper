@@ -27,15 +27,17 @@ use crate::error::{BrightnessError, Result};
 /// The class name for the OSD window.
 const OSD_CLASS_NAME: PCWSTR = w!("DarkBrightOSDClass");
 
-/// OSD window width in pixels.
-const OSD_WIDTH: i32 = 300;
-/// OSD window height in pixels (includes space for error footer).
-const OSD_HEIGHT: i32 = 110;
+/// OSD window width in pixels (wider for bidirectional bar with two labels).
+const OSD_WIDTH: i32 = 360;
+/// OSD window height in pixels (compact single-row layout).
+const OSD_HEIGHT: i32 = 50;
+/// OSD window height when displaying an error message (expanded).
+const OSD_HEIGHT_WITH_ERROR: i32 = 75;
 /// Margin from the bottom of the monitor in pixels.
 const OSD_BOTTOM_MARGIN: i32 = 100;
 
-/// Height reserved for the error message footer area.
-const FOOTER_HEIGHT: i32 = 25;
+/// Height reserved for the error message row (when expanded).
+const ERROR_ROW_HEIGHT: i32 = 25;
 /// Error message displayed when DDC communication fails.
 const ERROR_MESSAGE: &str = "DDC Error - Adjustment failed";
 
@@ -46,11 +48,13 @@ const OSD_BACKGROUND_COLOR: u32 = 0x0030_3030; // RGB: 48, 48, 48
 const OSD_PADDING: i32 = 10;
 /// Height of the progress bar.
 const BAR_HEIGHT: i32 = 20;
-/// Spacing between bars (when two bars are shown).
-const BAR_SPACING: i32 = 8;
+/// Gap between the left (overlay) and right (hardware) bar sections.
+const BAR_GAP: i32 = 4;
 
-/// Progress bar fill color (bright blue).
-const BAR_FILL_COLOR: u32 = 0x00D0_A030; // BGR: 48, 160, 208 (golden/orange)
+/// Hardware brightness bar fill color (golden/orange).
+const BAR_FILL_COLOR: u32 = 0x00D0_A030; // BGR: 48, 160, 208
+/// Overlay dimming bar fill color (purple/violet).
+const OVERLAY_FILL_COLOR: u32 = 0x00CC_6699; // BGR: 153, 102, 204
 /// Progress bar background color (dark gray).
 const BAR_BACKGROUND_COLOR: u32 = 0x0050_5050; // BGR: 80, 80, 80
 /// Text color (white).
@@ -67,8 +71,10 @@ const FONT_SIZE: i32 = 18;
 const ICON_HARDWARE: &str = "🔆";
 /// Icon for overlay/dimming (sunglasses symbol).
 const ICON_OVERLAY: &str = "🕶";
-/// Width reserved for the icon on the left side.
-const ICON_WIDTH: i32 = 30;
+/// Width reserved for each icon.
+const ICON_WIDTH: i32 = 25;
+/// Width reserved for percentage text (e.g., "100%").
+const PERCENT_TEXT_WIDTH: i32 = 45;
 
 /// Timer ID for the auto-hide functionality.
 const HIDE_TIMER_ID: usize = 1;
