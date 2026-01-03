@@ -1,4 +1,18 @@
 //! On-Screen Display (OSD) implementation for Windows.
+//!
+//! ## Layout (F.6 Bidirectional Bar)
+//!
+//! ```text
+//! ┌──────────────────────────────────────────────────────────┐
+//! │  pct 🕶 ░░░░░░░░██████████ ██████████░░░░░░░░ 🔆 pct     │
+//! │       └─ overlay (left) ─┘ └─ hardware (right) ─┘        │
+//! └──────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! - Left half: overlay dimming (fills right-to-left, purple)
+//! - Right half: hardware brightness (fills left-to-right, gold)
+//! - Small gap separates the two halves
+//! - Compact height (50px) normally; expands to 75px for error messages
 
 use std::cell::RefCell;
 use std::sync::OnceLock;

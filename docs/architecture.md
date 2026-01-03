@@ -332,10 +332,11 @@ Hardware at 0%, overlay at 60%:
 **Error Indicator:**
 
 When DDC communication fails after all retries:
-- Progress bar changes to red/error tint
-- Error message footer displayed: "DDC Error - Adjustment failed"
+- Hardware (right) progress bar changes to red/error tint
+- OSD expands to show error message row: "DDC Error - Adjustment failed"
 - Percentage reverts to last confirmed value
 - OSD timeout remains unchanged (1000ms)
+- On next successful adjustment, OSD shrinks back to compact height
 
 ### 7. Dimming Overlay Implementation
 
