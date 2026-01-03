@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
+use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
@@ -497,6 +498,12 @@ fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> 
 }
 
 fn main() {
+    // Declare DPI awareness before creating any windows.
+    // This prevents Windows from bitmap-stretching our UI at non-100% scaling.
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+
     // Phase 6, Step 41: Initialize logging
     // Default to "info" in release and "debug" in debug builds if RUST_LOG is not set.
     let default_level = if cfg!(debug_assertions) {
