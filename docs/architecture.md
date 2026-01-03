@@ -297,37 +297,58 @@ Example log output for invalid config:
 | **Animation** | None (MVP) | Simplicity; animations deferred to future release |
 | **Error state** | Red-tinted bar + message | Clear feedback when DDC fails; see below |
 
-**Two-Bar Layout:**
+**Bidirectional Bar Layout (F.6):**
 
-The OSD displays one or two bars depending on overlay state:
+The OSD displays a single compact bar with two halves separated by a small gap:
 
-| State | Display |
-|-------|---------|
-| Hardware brightness only (overlay inactive) | Single bar with 🔆 icon |
-| Hardware at 0%, overlay active | Two bars: 🔆 at 0% + 🕶 showing overlay level |
+| Section | Position | Fills | Shows |
+|---------|----------|-------|-------|
+| Overlay (🕶) | Left half | Right-to-left | Dimming level (0-100%) |
+| Hardware (🔆) | Right half | Left-to-right | DDC brightness (0-100%) |
 
 ```
-Hardware brightness at 50%, overlay inactive:
-┌────────────────────────────────────┐
-│  🔆 ████████████░░░░░░░░░░  50%   │
-└────────────────────────────────────┘
+Layout: |pad| pct 🕶 ░░░░██████ | gap | ██████░░░░ 🔆 pct |pad|
 
-Hardware at 0%, overlay at 60%:
-┌────────────────────────────────────┐
-│  🔆 ░░░░░░░░░░░░░░░░░░░░░░   0%   │
-│  🕶 ████████████████░░░░░░  60%   │
-└────────────────────────────────────┘
+Hardware at 100%, overlay inactive:
+┌──────────────────────────────────────────────────────────┐
+│  0% 🕶 ░░░░░░░░░░░░░░░░░░░░ ████████████████████ 🔆 100% │
+└──────────────────────────────────────────────────────────┘
+
+Hardware at 50%, overlay inactive:
+┌──────────────────────────────────────────────────────────┐
+│  0% 🕶 ░░░░░░░░░░░░░░░░░░░░ ██████████░░░░░░░░░░ 🔆  50% │
+└──────────────────────────────────────────────────────────┘
+
+Hardware at 0%, overlay inactive:
+┌──────────────────────────────────────────────────────────┐
+│  0% 🕶 ░░░░░░░░░░░░░░░░░░░░ ░░░░░░░░░░░░░░░░░░░░ 🔆   0% │
+└──────────────────────────────────────────────────────────┘
+
+Hardware at 0%, overlay at 30%:
+┌──────────────────────────────────────────────────────────┐
+│ 30% 🕶 ░░░░░░░░░░░░░░██████ ░░░░░░░░░░░░░░░░░░░░ 🔆   0% │
+└──────────────────────────────────────────────────────────┘
+
+Hardware at 0%, overlay at 100%:
+┌──────────────────────────────────────────────────────────┐
+│100% 🕶 ████████████████████ ░░░░░░░░░░░░░░░░░░░░ 🔆   0% │
+└──────────────────────────────────────────────────────────┘
 ```
 
 **Symbols:**
-- 🔆 (U+1F506 High Brightness) — hardware/DDC brightness
-- 🕶 (U+1F576 Sunglasses) — dimming overlay
+- 🔆 (U+1F506 High Brightness) — hardware/DDC brightness (right side, gold fill)
+- 🕶 (U+1F576 Sunglasses) — dimming overlay (left side, purple fill)
 
 **Behavior:**
-1. Brightness down: hardware decreases until 0%
-2. At hardware 0%, continued presses increase overlay opacity (second bar appears)
-3. Brightness up: overlay decreases until 0% (second bar disappears), then hardware increases
-4. Full hardware resolution (0-100%) is preserved
+1. Brightness down: hardware decreases until 0% (right bar shrinks)
+2. At hardware 0%, continued presses increase overlay opacity (left bar fills toward center)
+3. Brightness up: overlay decreases until 0% (left bar empties), then hardware increases
+4. Both values always visible—no mode switching or bar appearance/disappearance
+5. Pressing brightness-down always moves the "active" region leftward; brightness-up moves it rightward
+
+**Dynamic Height:**
+- Normal state: Compact 50px height (single bar row)
+- Error state: Expands to 75px to show error message row below the bar
 
 **Error Indicator:**
 
