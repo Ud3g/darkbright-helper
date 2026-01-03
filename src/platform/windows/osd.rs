@@ -199,7 +199,13 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
     }
 }
 
-/// Draws the brightness progress bar(s).
+/// Draws the bidirectional brightness bar (F.6 layout).
+///
+/// Layout: `|pad|pct 🕶 ░░░░██████|gap|██████░░░░ 🔆 pct|pad|`
+///
+/// - Left half: overlay dimming (fills right-to-left)
+/// - Right half: hardware brightness (fills left-to-right)
+/// - Small gap separates the two halves
 ///
 /// # Safety
 ///
@@ -210,78 +216,23 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
             hardware_brightness = state.hardware_brightness,
             overlay_opacity = state.overlay_opacity,
             is_error = state.is_error;
-            "Drawing brightness bars"
+            "Drawing bidirectional brightness bar"
         );
-        let width = client_rect.right - client_rect.left;
 
-        // Calculate bar dimensions (leave space for icon on left and percentage on right)
-        let bar_width = width - (OSD_PADDING * 2) - ICON_WIDTH - 50;
-        let bar_left = OSD_PADDING + ICON_WIDTH;
+        // Calculate vertical center for the single bar row
+        let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT) / 2;
 
-        // Determine if we show one or two bars
-        let show_overlay_bar = state.overlay_opacity > 0;
+        // Draw left side (overlay section)
+        draw_overlay_section(hdc, client_rect, bar_top, state.overlay_opacity);
 
-        if show_overlay_bar {
-            // Two-bar mode: hardware bar on top, overlay bar below
-            let bar1_top = OSD_PADDING;
-            let bar2_top = OSD_PADDING + BAR_HEIGHT + BAR_SPACING;
-
-            // Hardware brightness bar with icon
-            draw_icon(hdc, OSD_PADDING, bar1_top, ICON_HARDWARE);
-            draw_single_bar(
-                hdc,
-                bar_left,
-                bar1_top,
-                bar_width,
-                BAR_HEIGHT,
-                state.hardware_brightness,
-                state.is_error,
-            );
-            draw_percentage_text(
-                hdc,
-                bar_left + bar_width + 8,
-                bar1_top,
-                state.hardware_brightness,
-            );
-
-            // Overlay bar with icon
-            draw_icon(hdc, OSD_PADDING, bar2_top, ICON_OVERLAY);
-            draw_single_bar(
-                hdc,
-                bar_left,
-                bar2_top,
-                bar_width,
-                BAR_HEIGHT,
-                state.overlay_opacity,
-                false, // Overlay doesn't show error state
-            );
-            draw_percentage_text(
-                hdc,
-                bar_left + bar_width + 8,
-                bar2_top,
-                state.overlay_opacity,
-            );
-        } else {
-            // Single-bar mode: centered vertically
-            let bar_top = (client_rect.bottom - client_rect.top - BAR_HEIGHT).saturating_div(2);
-
-            draw_icon(hdc, OSD_PADDING, bar_top, ICON_HARDWARE);
-            draw_single_bar(
-                hdc,
-                bar_left,
-                bar_top,
-                bar_width,
-                BAR_HEIGHT,
-                state.hardware_brightness,
-                state.is_error,
-            );
-            draw_percentage_text(
-                hdc,
-                bar_left + bar_width + 8,
-                bar_top,
-                state.hardware_brightness,
-            );
-        }
+        // Draw right side (hardware section)
+        draw_hardware_section(
+            hdc,
+            client_rect,
+            bar_top,
+            state.hardware_brightness,
+            state.is_error,
+        );
     }
 }
 
@@ -552,8 +503,8 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
         let approx_char_width = 7;
         let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
         let x = (width - approx_text_width) / 2;
-        // Position in footer area: bottom of window minus footer height, centered vertically
-        let y = client_rect.bottom - FOOTER_HEIGHT + (FOOTER_HEIGHT - FONT_SIZE) / 2;
+        // Position in error row area: bottom of window minus row height, centered vertically
+        let y = client_rect.bottom - ERROR_ROW_HEIGHT + (ERROR_ROW_HEIGHT - FONT_SIZE) / 2;
 
         TextOutW(hdc, x, y, &wide_text);
 
