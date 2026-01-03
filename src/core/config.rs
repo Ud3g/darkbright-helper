@@ -301,11 +301,12 @@ impl Config {
         // Validate OSD timeout
         if self.osd.timeout_ms < OSD_TIMEOUT_MIN || self.osd.timeout_ms > OSD_TIMEOUT_MAX {
             log::error!(
-                "Invalid config: osd.timeout_ms={} outside range {}-{}, using default {}",
-                self.osd.timeout_ms,
-                OSD_TIMEOUT_MIN,
-                OSD_TIMEOUT_MAX,
-                DEFAULT_OSD_TIMEOUT_MS
+                field = "osd.timeout_ms",
+                value = self.osd.timeout_ms,
+                min = OSD_TIMEOUT_MIN,
+                max = OSD_TIMEOUT_MAX,
+                default = DEFAULT_OSD_TIMEOUT_MS;
+                "Invalid config value, using default"
             );
             self.osd.timeout_ms = DEFAULT_OSD_TIMEOUT_MS;
         }
@@ -313,11 +314,12 @@ impl Config {
         // Validate OSD opacity
         if self.osd.opacity < OSD_OPACITY_MIN || self.osd.opacity > OSD_OPACITY_MAX {
             log::error!(
-                "Invalid config: osd.opacity={} outside range {}-{}, using default {}",
-                self.osd.opacity,
-                OSD_OPACITY_MIN,
-                OSD_OPACITY_MAX,
-                DEFAULT_OSD_OPACITY
+                field = "osd.opacity",
+                value = self.osd.opacity,
+                min = OSD_OPACITY_MIN,
+                max = OSD_OPACITY_MAX,
+                default = DEFAULT_OSD_OPACITY;
+                "Invalid config value, using default"
             );
             self.osd.opacity = DEFAULT_OSD_OPACITY;
         }
@@ -327,11 +329,12 @@ impl Config {
             || self.brightness.step_percent > STEP_PERCENT_MAX
         {
             log::error!(
-                "Invalid config: brightness.step_percent={} outside range {}-{}, using default {}",
-                self.brightness.step_percent,
-                STEP_PERCENT_MIN,
-                STEP_PERCENT_MAX,
-                DEFAULT_STEP_PERCENT
+                field = "brightness.step_percent",
+                value = self.brightness.step_percent,
+                min = STEP_PERCENT_MIN,
+                max = STEP_PERCENT_MAX,
+                default = DEFAULT_STEP_PERCENT;
+                "Invalid config value, using default"
             );
             self.brightness.step_percent = DEFAULT_STEP_PERCENT;
         }
@@ -339,10 +342,11 @@ impl Config {
         // Validate periodic refresh (0 is valid = disabled)
         if self.refresh.periodic_seconds > REFRESH_PERIODIC_MAX {
             log::error!(
-                "Invalid config: refresh.periodic_seconds={} exceeds maximum {}, using default {}",
-                self.refresh.periodic_seconds,
-                REFRESH_PERIODIC_MAX,
-                DEFAULT_REFRESH_PERIODIC_SECONDS
+                field = "refresh.periodic_seconds",
+                value = self.refresh.periodic_seconds,
+                max = REFRESH_PERIODIC_MAX,
+                default = DEFAULT_REFRESH_PERIODIC_SECONDS;
+                "Invalid config value exceeds maximum, using default"
             );
             self.refresh.periodic_seconds = DEFAULT_REFRESH_PERIODIC_SECONDS;
         }
@@ -350,10 +354,11 @@ impl Config {
         // Validate inactivity refresh (0 is valid = disabled)
         if self.refresh.inactivity_seconds > REFRESH_INACTIVITY_MAX {
             log::error!(
-                "Invalid config: refresh.inactivity_seconds={} exceeds maximum {}, using default {}",
-                self.refresh.inactivity_seconds,
-                REFRESH_INACTIVITY_MAX,
-                DEFAULT_REFRESH_INACTIVITY_SECONDS
+                field = "refresh.inactivity_seconds",
+                value = self.refresh.inactivity_seconds,
+                max = REFRESH_INACTIVITY_MAX,
+                default = DEFAULT_REFRESH_INACTIVITY_SECONDS;
+                "Invalid config value exceeds maximum, using default"
             );
             self.refresh.inactivity_seconds = DEFAULT_REFRESH_INACTIVITY_SECONDS;
         }
