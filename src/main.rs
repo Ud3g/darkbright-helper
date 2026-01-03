@@ -185,7 +185,11 @@ impl BrightnessController {
     /// Updates existing monitor states and creates new entries for
     /// newly detected monitors.
     fn handle_ddc_refresh_result(&mut self, monitors: Vec<(MonitorId, u8)>) {
-        log::info!(count = monitors.len(); "DDC refresh complete");
+        if monitors.is_empty() {
+            log::warn!("DDC refresh completed with no monitors found");
+        } else {
+            log::info!(count = monitors.len(); "DDC refresh complete");
+        }
 
         for (monitor_id, brightness) in monitors {
             log::debug!(monitor_id:% = monitor_id, brightness = brightness; "Monitor found during refresh");

@@ -141,8 +141,6 @@ impl DdcWorker {
             }
         }
 
-        log::info!(monitor_count = results.len(); "Refresh complete");
-
         self.send_refresh_result(results);
     }
 
