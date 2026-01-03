@@ -138,7 +138,7 @@ unsafe extern "system" fn wnd_proc(
                     paint_osd(hwnd, hdc);
                     EndPaint(hwnd, &raw const ps);
                 } else {
-                    log::trace!("BeginPaint returned null HDC");
+                    log::warn!("BeginPaint returned null HDC");
                 }
 
                 LRESULT(0)
@@ -167,7 +167,7 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
         log::trace!("Painting OSD");
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &raw mut rect).is_err() {
-            log::trace!("GetClientRect failed");
+            log::warn!("GetClientRect failed");
             return;
         }
 
