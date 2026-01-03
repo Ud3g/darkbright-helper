@@ -206,11 +206,14 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
             Err(e) => {
                 attempts += 1;
                 if attempts >= DDC_RETRIES {
-                    log::error!("DDC operation failed after {DDC_RETRIES} retries: {e}");
                     return Err(e);
                 }
                 log::warn!(
-                    "DDC operation failed (attempt {attempts}/{DDC_RETRIES}), retrying in {DDC_RETRY_DELAY_MS}ms: {e}"
+                    attempt = attempts,
+                    max_attempts = DDC_RETRIES,
+                    retry_delay_ms = DDC_RETRY_DELAY_MS,
+                    error:% = e;
+                    "DDC operation failed, retrying"
                 );
                 thread::sleep(Duration::from_millis(DDC_RETRY_DELAY_MS));
             }
@@ -420,14 +423,14 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
     let target_driver_key = if let Some(start) = device_key.find('{') {
         device_key[start..].to_string()
     } else {
-        log::warn!("DeviceKey does not contain GUID: '{device_key}'");
+        log::warn!(device_key:% = device_key; "DeviceKey does not contain GUID, using fallback");
         // Fallback: try using DeviceID as before, though it likely fails
         String::from_utf16_lossy(&dd.DeviceID)
             .trim_matches(char::from(0))
             .to_string()
     };
 
-    log::debug!("Looking for EDID for Driver Key: '{target_driver_key}'");
+    log::debug!(driver_key:% = target_driver_key; "Looking for EDID");
 
     if target_driver_key.is_empty() {
         return Err(BrightnessError::ddc_communication(
@@ -511,7 +514,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
                 // Trim null terminator
                 let driver_key = String::from_utf16_lossy(&buffer[..len.saturating_sub(1)]);
 
-                log::trace!("Checking device driver key: '{driver_key}'");
+                log::trace!(driver_key:% = driver_key; "Checking device driver key");
 
                 if driver_key.eq_ignore_ascii_case(target_driver_key) {
                     // Found it! Read EDID from registry.
