@@ -153,6 +153,8 @@ impl PowerEventListener {
         // wparam contains the power event type
         // PBT_APMRESUMEAUTOMATIC: Resume from suspend (automatic)
         // PBT_APMRESUMESUSPEND: Resume from suspend (user action)
+        // Power event types fit in u32; truncation is acceptable on 64-bit
+        #[allow(clippy::cast_possible_truncation)]
         let event_type = wparam.0 as u32;
 
         match event_type {
@@ -174,7 +176,7 @@ impl PowerEventListener {
     /// Sends a `SystemResumed` notification to the main thread.
     fn send_resume_notification(&self) {
         if let Err(e) = self.sender.send(BrightnessMessage::SystemResumed) {
-            log::error!(error = log::as_display!(e); "Failed to send SystemResumed message");
+            log::error!(error:% = e; "Failed to send SystemResumed message");
         }
     }
 }

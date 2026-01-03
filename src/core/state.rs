@@ -147,7 +147,7 @@ pub enum BrightnessMessage {
     },
     /// Result of a DDC refresh operation (from DDC worker).
     DdcRefreshResult {
-        /// List of (monitor_id, brightness) pairs for all detected monitors.
+        /// List of (`monitor_id`, brightness) pairs for all detected monitors.
         monitors: Vec<(MonitorId, u8)>,
     },
     /// Adjust brightness by a relative delta.
