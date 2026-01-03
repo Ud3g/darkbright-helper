@@ -23,7 +23,8 @@ use windows::Win32::Graphics::Gdi::{
     CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteDC, DeleteObject,
     EndPaint, FF_DONTCARE, FW_NORMAL, FillRect, GetMonitorInfoW, HDC, HFONT, HMONITOR,
     InvalidateRect, MONITORINFO, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
+    PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextAlign, SetTextColor, TA_LEFT, TA_RIGHT,
+    TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -297,9 +298,9 @@ unsafe fn draw_hardware_section(
         let icon_x = bar_left + single_bar_width + 2;
         draw_icon(hdc, icon_x, bar_top, ICON_HARDWARE);
 
-        // Percentage text position: right of icon
+        // Percentage text position: right of icon (left-aligned)
         let percent_x = icon_x + ICON_WIDTH;
-        draw_percentage_text(hdc, percent_x, bar_top, hardware_brightness);
+        draw_percentage_text(hdc, percent_x, bar_top, hardware_brightness, false);
     }
 }
 
@@ -358,8 +359,9 @@ unsafe fn draw_overlay_section(
             let _ = DeleteObject(fill_brush);
         }
 
-        // Percentage text position: far left after padding
-        draw_percentage_text(hdc, OSD_PADDING, bar_top, overlay_opacity);
+        // Percentage text position: right-aligned so "%" stays at fixed position
+        let percent_right_x = OSD_PADDING + PERCENT_TEXT_WIDTH;
+        draw_percentage_text(hdc, percent_right_x, bar_top, overlay_opacity, true);
 
         // Icon position: left of bar with small padding
         let icon_x = OSD_PADDING + PERCENT_TEXT_WIDTH;
@@ -468,10 +470,18 @@ unsafe fn draw_single_bar(
 
 /// Draws the percentage text next to a bar.
 ///
+/// # Arguments
+///
+/// * `hdc` - Device context to draw on.
+/// * `x` - X coordinate (left edge if `right_align` is false, right edge if true).
+/// * `y` - Y coordinate (top of bar area, text is centered vertically).
+/// * `percent` - Percentage value to display.
+/// * `right_align` - If true, text is right-aligned (x is the right edge).
+///
 /// # Safety
 ///
 /// Must be called with a valid device context.
-unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
+unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_align: bool) {
     unsafe {
         // Create font
         let font = create_osd_font();
@@ -481,6 +491,10 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(TEXT_COLOR));
 
+        // Set text alignment
+        let align = if right_align { TA_RIGHT } else { TA_LEFT };
+        SetTextAlign(hdc, align);
+
         // Format and draw text
         let text = format!("{percent}%");
         let wide_text: Vec<u16> = text.encode_utf16().collect();
@@ -489,7 +503,8 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8) {
         let text_y = y + (BAR_HEIGHT - FONT_SIZE).saturating_div(2);
         TextOutW(hdc, x, text_y, &wide_text);
 
-        // Cleanup
+        // Restore default alignment and cleanup
+        SetTextAlign(hdc, TA_LEFT);
         SelectObject(hdc, old_font);
         let _ = DeleteObject(font);
     }
