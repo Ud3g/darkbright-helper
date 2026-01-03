@@ -153,7 +153,7 @@ impl HotkeyManager {
                 BrightnessError::windows_api("RegisterHotKey", e.code().0.cast_unsigned())
             })?;
         }
-        log::debug!("Successfully registered hotkey ID {id}");
+        log::debug!(hotkey_id = id; "Registered hotkey");
         self.registered_ids.push(id);
         Ok(())
     }
@@ -189,7 +189,7 @@ impl HotkeyManager {
                     // Cast is safe as we only register small positive IDs (1-4).
                     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                     let id = msg.wParam.0 as i32;
-                    log::debug!("Received WM_HOTKEY with ID: {id}");
+                    log::debug!(hotkey_id = id; "Received WM_HOTKEY");
 
                     let delta = match id {
                         BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => self.step_percent,
@@ -198,7 +198,7 @@ impl HotkeyManager {
                     };
 
                     if delta != 0 {
-                        log::debug!("Sending adjustment delta: {delta}");
+                        log::debug!(delta = delta; "Sending brightness adjustment");
                         let _ = self.sender.send(BrightnessMessage::Adjust {
                             monitor_id: None, // None = monitor under cursor
                             delta,
