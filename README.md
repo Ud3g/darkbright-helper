@@ -87,6 +87,5 @@ The configuration file is automatically created at:
 4. If brightness reaches 0%, continuing to decrease will activate the dimming overlay.
 
 ## Future
-- Linux support (X11/Wayland)
-- System tray icon & Settings GUI
-- OSD animations (fade in/out transitions)
+
+See [docs/improvement-ideas.md](docs/improvement-ideas.md) for planned features and potential enhancements.

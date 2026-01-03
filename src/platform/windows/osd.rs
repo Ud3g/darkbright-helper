@@ -843,6 +843,12 @@ impl OsdWindow {
             self.reset_timer();
         }
 
+        log::debug!(
+            hardware = state.effective_brightness(),
+            overlay = state.overlay_opacity;
+            "OSD shown"
+        );
+
         Ok(())
     }
 
@@ -868,6 +874,12 @@ impl OsdWindow {
             self.reset_timer();
         }
 
+        log::debug!(
+            hardware = state.effective_brightness(),
+            overlay = state.overlay_opacity;
+            "OSD shown with error state"
+        );
+
         Ok(())
     }
 
@@ -880,6 +892,7 @@ impl OsdWindow {
         unsafe {
             let _ = ShowWindow(self.hwnd.as_raw(), SW_HIDE);
         }
+        log::debug!("OSD hidden");
         Ok(())
     }
 
