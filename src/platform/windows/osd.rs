@@ -285,6 +285,57 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
     }
 }
 
+/// Draws the hardware brightness section (right half of the bidirectional bar).
+///
+/// Layout: `|...|gap|████████░░░░░░░░░░ 🔆 100%|pad|`
+///
+/// The bar fills from left to right based on hardware brightness percentage.
+///
+/// # Safety
+///
+/// Must be called with a valid device context.
+unsafe fn draw_hardware_section(
+    hdc: HDC,
+    client_rect: &RECT,
+    bar_top: i32,
+    hardware_brightness: u8,
+    is_error: bool,
+) {
+    unsafe {
+        let width = client_rect.right - client_rect.left;
+
+        // Calculate layout positions
+        // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
+        let content_width = width - (OSD_PADDING * 2);
+        let total_bar_width =
+            content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
+        let single_bar_width = total_bar_width / 2;
+
+        // Right bar starts after: pad + pct + ico + left_bar + gap
+        let bar_left =
+            OSD_PADDING + PERCENT_TEXT_WIDTH + ICON_WIDTH + single_bar_width + BAR_GAP;
+
+        // Draw the bar (fills left-to-right)
+        draw_single_bar(
+            hdc,
+            bar_left,
+            bar_top,
+            single_bar_width,
+            BAR_HEIGHT,
+            hardware_brightness,
+            is_error,
+        );
+
+        // Icon position: right of bar with small padding
+        let icon_x = bar_left + single_bar_width + 2;
+        draw_icon(hdc, icon_x, bar_top, ICON_HARDWARE);
+
+        // Percentage text position: right of icon
+        let percent_x = icon_x + ICON_WIDTH;
+        draw_percentage_text(hdc, percent_x, bar_top, hardware_brightness);
+    }
+}
+
 /// Draws an icon (emoji) at the specified position.
 ///
 /// # Safety
