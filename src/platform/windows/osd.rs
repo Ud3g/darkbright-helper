@@ -672,6 +672,8 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
             return Err(last_error_as_brightness_error("CreateWindowExW"));
         }
 
+        apply_rounded_corners(hwnd);
+
         Ok(SafeHwnd::new_owned(hwnd))
     }
 }
