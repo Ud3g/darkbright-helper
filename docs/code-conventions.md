@@ -227,6 +227,10 @@ Never log personally identifiable information (PII) or secrets:
 ### Antipatterns
 
 - **Don't log the same event at multiple levels** — pick one appropriate level
+- **Don't log the same event in multiple places** — this often happens when both a function and its caller log the same error. Follow the "log at handling, not occurrence" rule:
+  - Functions returning `Result` should *not* log errors — just return `Err(...)`
+  - The *caller* who handles/recovers from the error should log it
+  - Exception: Final error handlers (e.g., `main()`, message loop) should always log unhandled errors
 - **Don't use `error!` for expected failures** — use `warn!` for recoverable situations
 - **Don't use `debug!`/`trace!` in hot paths without need** — even disabled log macros have some overhead from argument evaluation
 
