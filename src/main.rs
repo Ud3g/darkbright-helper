@@ -63,6 +63,8 @@ struct BrightnessController {
     last_refresh: Instant,
     /// Flag to prevent overlapping refresh requests.
     refresh_in_progress: bool,
+    /// Whether the last refresh found any monitors.
+    last_refresh_successful: bool,
 }
 
 impl BrightnessController {
@@ -90,6 +92,7 @@ impl BrightnessController {
             last_activity: now,
             last_refresh: now,
             refresh_in_progress: false,
+            last_refresh_successful: true,
         })
     }
 
@@ -200,9 +203,10 @@ impl BrightnessController {
                 .or_insert_with(|| MonitorState::new(brightness));
         }
 
-        // Update refresh timestamp and clear in-progress flag
+        // Update refresh tracking state
         self.last_refresh = Instant::now();
         self.refresh_in_progress = false;
+        self.last_refresh_successful = !monitors.is_empty();
     }
 
     /// Applies a relative brightness adjustment.
@@ -214,6 +218,12 @@ impl BrightnessController {
         // Check if we need an inactivity-based refresh before processing
         // (must be checked BEFORE updating last_activity)
         self.check_inactivity_refresh();
+
+        // If last refresh failed, trigger a new one (user activity indicates they're back)
+        if !self.last_refresh_successful && !self.refresh_in_progress {
+            log::debug!("Triggering refresh on user activity (last refresh found no monitors)");
+            self.handle_refresh();
+        }
 
         // Update activity timestamp for inactivity-based refresh tracking
         self.last_activity = Instant::now();
@@ -350,6 +360,12 @@ impl BrightnessController {
 
         // Skip if periodic refresh is disabled (0) or refresh already in progress
         if periodic_seconds == 0 || self.refresh_in_progress {
+            return;
+        }
+
+        // Skip if last refresh found no monitors (will retry on user activity or resume)
+        if !self.last_refresh_successful {
+            log::debug!("Skipping periodic refresh (last refresh found no monitors)");
             return;
         }
 
