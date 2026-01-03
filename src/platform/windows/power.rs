@@ -174,7 +174,7 @@ impl PowerEventListener {
     /// Sends a `SystemResumed` notification to the main thread.
     fn send_resume_notification(&self) {
         if let Err(e) = self.sender.send(BrightnessMessage::SystemResumed) {
-            log::error!(error = e.to_string(); "Failed to send SystemResumed message");
+            log::error!(error = log::as_display!(e); "Failed to send SystemResumed message");
         }
     }
 }

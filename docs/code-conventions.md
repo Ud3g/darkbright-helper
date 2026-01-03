@@ -194,7 +194,8 @@ Prefer key-value pairs over string interpolation for machine-parseable logs:
 
 ```rust
 // Preferred: structured fields
-log::info!(monitor_id = %monitor.id(), brightness = new_value; "Brightness adjusted");
+// Note: Strings/objects need `log::as_display!` or `log::as_debug!` as `String` does not implement ToValue
+log::info!(monitor_id = log::as_display!(monitor.id()), brightness = new_value; "Brightness adjusted");
 log::error!(vcp_code = 0x10, attempts = 3; "DDC write failed");
 
 // Acceptable: simple messages without dynamic data
