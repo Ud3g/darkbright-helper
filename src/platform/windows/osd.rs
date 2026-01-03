@@ -109,7 +109,7 @@ unsafe extern "system" fn wnd_proc(
     unsafe {
         match msg {
             WM_PAINT => {
-                log::trace!("OSD WM_PAINT received");
+                log::trace!("WM_PAINT received");
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &raw mut ps);
 
@@ -117,15 +117,15 @@ unsafe extern "system" fn wnd_proc(
                     paint_osd(hwnd, hdc);
                     EndPaint(hwnd, &raw const ps);
                 } else {
-                    log::trace!("OSD WM_PAINT: BeginPaint returned null HDC");
+                    log::trace!("BeginPaint returned null HDC");
                 }
 
                 LRESULT(0)
             }
             WM_TIMER => {
-                log::trace!("OSD WM_TIMER received, wparam={}", wparam.0);
+                log::trace!(timer_id = wparam.0; "WM_TIMER received");
                 if wparam.0 == HIDE_TIMER_ID {
-                    log::debug!("OSD auto-hiding after timeout");
+                    log::debug!("Auto-hiding after timeout");
                     let _ = KillTimer(hwnd, HIDE_TIMER_ID);
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
@@ -143,10 +143,10 @@ unsafe extern "system" fn wnd_proc(
 /// Must be called from within a `BeginPaint`/`EndPaint` block.
 unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
     unsafe {
-        log::trace!("OSD paint_osd called");
+        log::trace!("Painting OSD");
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &raw mut rect).is_err() {
-            log::trace!("OSD paint_osd: GetClientRect failed");
+            log::trace!("GetClientRect failed");
             return;
         }
 
@@ -201,10 +201,10 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderState) {
     unsafe {
         log::trace!(
-            "OSD drawing bars: hardware_brightness={}, overlay_opacity={}, is_error={}",
-            state.hardware_brightness,
-            state.overlay_opacity,
-            state.is_error
+            hardware_brightness = state.hardware_brightness,
+            overlay_opacity = state.overlay_opacity,
+            is_error = state.is_error;
+            "Drawing brightness bars"
         );
         let width = client_rect.right - client_rect.left;
 
@@ -473,7 +473,10 @@ fn update_osd_state(state: &MonitorState, is_error: bool) {
     let hw = state.effective_brightness();
     let overlay = state.overlay_opacity;
     log::trace!(
-        "OSD state update: hardware_brightness={hw}, overlay_opacity={overlay}, is_error={is_error}"
+        hardware_brightness = hw,
+        overlay_opacity = overlay,
+        is_error = is_error;
+        "Updating OSD state"
     );
     OSD_STATE.with(|s| {
         let mut render_state = s.borrow_mut();
