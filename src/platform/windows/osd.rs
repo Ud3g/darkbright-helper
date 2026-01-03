@@ -8,8 +8,8 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteDC, DeleteObject,
     EndPaint, FF_DONTCARE, FW_NORMAL, FillRect, GetMonitorInfoW, HDC, HFONT, HMONITOR,
-    InvalidateRect, MONITORINFO, OUT_DEFAULT_PRECIS, PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode,
-    SetTextColor, TRANSPARENT, TextOutW,
+    InvalidateRect, MONITORINFO, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -645,14 +645,21 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
 ///
 /// * `hwnd` - The `HWND` of the OSD window.
 /// * `hmonitor` - The `HMONITOR` to position the OSD on.
+/// * `with_error` - If true, use expanded height for error message row.
 ///
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
-pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
+pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> Result<()> {
     let mut mi = MONITORINFO {
         cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
         ..Default::default()
+    };
+
+    let height = if with_error {
+        OSD_HEIGHT_WITH_ERROR
+    } else {
+        OSD_HEIGHT
     };
 
     unsafe {
@@ -665,7 +672,7 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
 
         // Calculate center-x and bottom-y position
         let x = rect.left + (monitor_width - OSD_WIDTH) / 2;
-        let y = rect.bottom - OSD_HEIGHT - OSD_BOTTOM_MARGIN;
+        let y = rect.bottom - height - OSD_BOTTOM_MARGIN;
 
         SetWindowPos(
             hwnd,
@@ -673,13 +680,30 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
             x,
             y,
             OSD_WIDTH,
-            OSD_HEIGHT,
+            height,
             SWP_NOACTIVATE,
         )
         .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned()))?;
     }
 
     Ok(())
+}
+
+/// Resizes the OSD window for compact or expanded (error) mode.
+///
+/// Uses `MonitorFromWindow` to determine the current monitor.
+///
+/// # Arguments
+///
+/// * `hwnd` - The `HWND` of the OSD window.
+/// * `with_error` - If true, use expanded height for error message row.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if positioning fails.
+fn resize_osd_window(hwnd: HWND, with_error: bool) -> Result<()> {
+    let hmonitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+    position_osd_window(hwnd, hmonitor, with_error)
 }
 
 /// Sets the overall opacity of the OSD window.
@@ -732,6 +756,8 @@ impl OsdWindow {
 
     /// Shows the OSD for a specific monitor with the given state.
     ///
+    /// Uses compact height (single bar row).
+    ///
     /// # Arguments
     ///
     /// * `hmonitor` - The monitor to display the OSD on.
@@ -741,7 +767,7 @@ impl OsdWindow {
     ///
     /// Returns an error if window positioning fails.
     pub fn show(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
-        position_osd_window(self.hwnd.as_raw(), hmonitor)?;
+        position_osd_window(self.hwnd.as_raw(), hmonitor, false)?;
         update_osd_state(state, false);
 
         unsafe {
@@ -753,7 +779,9 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Shows the OSD with an error indicator (red progress bar).
+    /// Shows the OSD with an error indicator (red progress bar + error message).
+    ///
+    /// Uses expanded height to show error message row.
     ///
     /// # Arguments
     ///
@@ -764,7 +792,7 @@ impl OsdWindow {
     ///
     /// Returns an error if window positioning fails.
     pub fn show_error(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
-        position_osd_window(self.hwnd.as_raw(), hmonitor)?;
+        position_osd_window(self.hwnd.as_raw(), hmonitor, true)?;
         update_osd_state(state, true);
 
         unsafe {
@@ -790,7 +818,7 @@ impl OsdWindow {
 
     /// Triggers a redraw of the OSD with updated state.
     ///
-    /// Also resets the auto-hide timer.
+    /// Resizes to compact height (no error row) and resets the auto-hide timer.
     ///
     /// # Arguments
     ///
@@ -798,9 +826,11 @@ impl OsdWindow {
     ///
     /// # Errors
     ///
-    /// This method is currently infallible but returns `Result` for consistency.
+    /// Returns an error if window resizing fails.
     pub fn update(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, false);
+        // Resize to compact height (in case we were showing an error before)
+        resize_osd_window(self.hwnd.as_raw(), false)?;
         unsafe {
             // Invalidate the entire window to trigger WM_PAINT
             let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
@@ -809,9 +839,9 @@ impl OsdWindow {
         Ok(())
     }
 
-    /// Triggers a redraw of the OSD with error state (red progress bar).
+    /// Triggers a redraw of the OSD with error state (red progress bar + message).
     ///
-    /// Also resets the auto-hide timer.
+    /// Resizes to expanded height (with error row) and resets the auto-hide timer.
     ///
     /// # Arguments
     ///
@@ -819,9 +849,11 @@ impl OsdWindow {
     ///
     /// # Errors
     ///
-    /// This method is currently infallible but returns `Result` for consistency.
+    /// Returns an error if window resizing fails.
     pub fn update_error(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, true);
+        // Resize to expanded height to show error message
+        resize_osd_window(self.hwnd.as_raw(), true)?;
         unsafe {
             let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
             self.reset_timer();
