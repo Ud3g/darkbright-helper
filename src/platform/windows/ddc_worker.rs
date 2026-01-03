@@ -53,24 +53,21 @@ impl DdcWorker {
         log::info!("DDC worker thread started");
 
         loop {
-            match self.cmd_rx.recv() {
-                Ok(cmd) => {
-                    log::trace!("DDC worker received command: {cmd:?}");
-                    match cmd {
-                        DdcCommand::SetBrightness { monitor_id, value } => {
-                            self.handle_set_brightness(&monitor_id, value);
-                        }
-                        DdcCommand::RefreshAll => {
-                            self.handle_refresh_all();
-                        }
-                        DdcCommand::Shutdown => {
-                            log::info!("DDC worker received shutdown command");
-                            break;
-                        }
-                    }
+            let Ok(cmd) = self.cmd_rx.recv() else {
+                log::info!("DDC worker command channel disconnected, shutting down");
+                break;
+            };
+
+            log::trace!("DDC worker received command: {cmd:?}");
+            match cmd {
+                DdcCommand::SetBrightness { monitor_id, value } => {
+                    self.handle_set_brightness(&monitor_id, value);
                 }
-                Err(_) => {
-                    log::info!("DDC worker command channel disconnected, shutting down");
+                DdcCommand::RefreshAll => {
+                    self.handle_refresh_all();
+                }
+                DdcCommand::Shutdown => {
+                    log::info!("DDC worker received shutdown command");
                     break;
                 }
             }
