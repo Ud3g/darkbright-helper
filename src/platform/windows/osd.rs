@@ -336,6 +336,70 @@ unsafe fn draw_hardware_section(
     }
 }
 
+/// Draws the overlay dimming section (left half of the bidirectional bar).
+///
+/// Layout: `|pad|30% 🕶 ░░░░░░░░░░░░░░██████|gap|...|`
+///
+/// The bar fills from right to left based on overlay opacity percentage.
+///
+/// # Safety
+///
+/// Must be called with a valid device context.
+unsafe fn draw_overlay_section(
+    hdc: HDC,
+    client_rect: &RECT,
+    bar_top: i32,
+    overlay_opacity: u8,
+) {
+    unsafe {
+        let width = client_rect.right - client_rect.left;
+
+        // Calculate layout positions
+        // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
+        let content_width = width - (OSD_PADDING * 2);
+        let total_bar_width =
+            content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
+        let single_bar_width = total_bar_width / 2;
+
+        // Left bar starts after: pad + pct + ico
+        let bar_left = OSD_PADDING + PERCENT_TEXT_WIDTH + ICON_WIDTH;
+
+        // Draw the bar background
+        let bg_rect = RECT {
+            left: bar_left,
+            top: bar_top,
+            right: bar_left + single_bar_width,
+            bottom: bar_top + BAR_HEIGHT,
+        };
+        let bg_brush = CreateSolidBrush(COLORREF(BAR_BACKGROUND_COLOR));
+        FillRect(hdc, &raw const bg_rect, bg_brush);
+        let _ = DeleteObject(bg_brush);
+
+        // Draw filled portion (fills from right to left)
+        let fill_width =
+            i32::try_from(i64::from(single_bar_width) * i64::from(overlay_opacity) / 100)
+                .unwrap_or(0);
+        if fill_width > 0 {
+            let fill_rect = RECT {
+                left: bar_left + single_bar_width - fill_width, // Start from right side
+                top: bar_top,
+                right: bar_left + single_bar_width,
+                bottom: bar_top + BAR_HEIGHT,
+            };
+            let fill_brush = CreateSolidBrush(COLORREF(OVERLAY_FILL_COLOR));
+            FillRect(hdc, &raw const fill_rect, fill_brush);
+            let _ = DeleteObject(fill_brush);
+        }
+
+        // Percentage text position: far left after padding
+        draw_percentage_text(hdc, OSD_PADDING, bar_top, overlay_opacity);
+
+        // Icon position: left of bar with small padding
+        let icon_x = OSD_PADDING + PERCENT_TEXT_WIDTH;
+        draw_icon(hdc, icon_x, bar_top, ICON_OVERLAY);
+    }
+}
+
 /// Draws an icon (emoji) at the specified position.
 ///
 /// # Safety
