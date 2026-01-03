@@ -58,7 +58,7 @@ impl DdcWorker {
                 break;
             };
 
-            log::trace!("DDC worker received command: {cmd:?}");
+            log::trace!(command:? = cmd; "Received command");
             match cmd {
                 DdcCommand::SetBrightness { monitor_id, value } => {
                     self.handle_set_brightness(&monitor_id, value);
@@ -81,7 +81,7 @@ impl DdcWorker {
         let result = if let Some(monitor) = self.monitors.get_mut(monitor_id) {
             monitor.set_brightness(u32::from(value))
         } else {
-            log::warn!("DDC worker: monitor not found: {monitor_id}");
+            log::warn!(monitor_id:% = monitor_id; "Monitor not found");
             Err(crate::BrightnessError::MonitorNotFound(
                 monitor_id.to_string(),
             ))
@@ -89,11 +89,11 @@ impl DdcWorker {
 
         let (success, error) = match result {
             Ok(()) => {
-                log::debug!("DDC worker: set brightness to {value}% for {monitor_id}");
+                log::debug!(monitor_id:% = monitor_id, brightness = value; "Set brightness");
                 (true, None)
             }
             Err(e) => {
-                log::error!("DDC worker: failed to set brightness for {monitor_id}: {e}");
+                log::error!(monitor_id:% = monitor_id, error:% = e; "Failed to set brightness");
                 (false, Some(e.to_string()))
             }
         };
@@ -107,7 +107,7 @@ impl DdcWorker {
         };
 
         if let Err(e) = self.resp_tx.send(msg) {
-            log::error!("DDC worker: failed to send result: {e}");
+            log::error!(error:% = e; "Failed to send DDC result");
         }
     }
 
@@ -116,7 +116,7 @@ impl DdcWorker {
     /// Enumerates all monitors, reads their brightness values,
     /// and sends the results back to the main thread.
     fn handle_refresh_all(&mut self) {
-        log::debug!("DDC worker: refreshing all monitors");
+        log::debug!("Refreshing all monitors");
 
         // Clear existing state
         self.monitors.clear();
@@ -128,7 +128,7 @@ impl DdcWorker {
         let hmonitors = match enumerate_monitors() {
             Ok(h) => h,
             Err(e) => {
-                log::error!("DDC worker: failed to enumerate monitors: {e}");
+                log::error!(error:% = e; "Failed to enumerate monitors");
                 // Send empty result
                 self.send_refresh_result(results);
                 return;
@@ -137,14 +137,11 @@ impl DdcWorker {
 
         for hmonitor in hmonitors {
             if let Err(e) = self.process_monitor(hmonitor, &mut results) {
-                log::warn!("DDC worker: failed to process monitor: {e}");
+                log::warn!(error:% = e; "Failed to process monitor");
             }
         }
 
-        log::info!(
-            "DDC worker: refresh complete, found {} monitors",
-            results.len()
-        );
+        log::info!(monitor_count = results.len(); "Refresh complete");
 
         self.send_refresh_result(results);
     }
@@ -171,13 +168,13 @@ impl DdcWorker {
                     #[allow(clippy::cast_possible_truncation)]
                     let brightness_u8 = brightness as u8;
 
-                    log::debug!("DDC worker: monitor {monitor_id} brightness = {brightness_u8}%");
+                    log::debug!(monitor_id:% = monitor_id, brightness = brightness_u8; "Read monitor brightness");
 
                     results.push((monitor_id.clone(), brightness_u8));
                     self.monitors.insert(monitor_id.clone(), ddc_mon);
                 }
                 Err(e) => {
-                    log::warn!("DDC worker: could not read brightness for {monitor_id}: {e}");
+                    log::warn!(monitor_id:% = monitor_id, error:% = e; "Could not read brightness");
                 }
             }
         }
@@ -190,7 +187,7 @@ impl DdcWorker {
         let msg = BrightnessMessage::DdcRefreshResult { monitors };
 
         if let Err(e) = self.resp_tx.send(msg) {
-            log::error!("DDC worker: failed to send refresh result: {e}");
+            log::error!(error:% = e; "Failed to send refresh result");
         }
     }
 }
