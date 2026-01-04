@@ -176,11 +176,11 @@ fn request_menu_data() -> Option<TrayMenuData> {
 // Tooltip Support
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// TOOLINFOW structure for tooltip operations.
+/// `TOOLINFOW` structure for tooltip operations.
 /// Using raw struct since windows crate may not expose it directly.
 #[repr(C)]
-#[allow(non_snake_case)]
-struct TOOLINFOW {
+#[allow(non_snake_case, clippy::upper_case_acronyms)]
+struct Toolinfow {
     cbSize: u32,
     uFlags: u32,
     hwnd: HWND,
@@ -240,11 +240,11 @@ fn create_tooltip(parent: HWND) -> Option<HWND> {
         );
 
         // Add a tool for the parent window
-        let mut ti = TOOLINFOW {
-            cbSize: u32::try_from(std::mem::size_of::<TOOLINFOW>()).unwrap_or(0),
+        let mut ti = Toolinfow {
+            cbSize: u32::try_from(std::mem::size_of::<Toolinfow>()).unwrap_or(0),
             uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
             hwnd: parent,
-            uId: parent.0 as usize,
+            uId: parent.0.cast_unsigned(),
             rect: RECT::default(),
             hinst: windows::Win32::Foundation::HINSTANCE::default(),
             lpszText: std::ptr::null_mut(),
@@ -287,11 +287,11 @@ fn show_tooltip_at(tooltip_hwnd: HWND, parent: HWND, x: i32, y: i32) {
 
         unsafe {
             // Update the tooltip text
-            let mut ti = TOOLINFOW {
-                cbSize: u32::try_from(std::mem::size_of::<TOOLINFOW>()).unwrap_or(0),
+            let mut ti = Toolinfow {
+                cbSize: u32::try_from(std::mem::size_of::<Toolinfow>()).unwrap_or(0),
                 uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
                 hwnd: parent,
-                uId: parent.0 as usize,
+                uId: parent.0.cast_unsigned(),
                 rect: RECT::default(),
                 hinst: windows::Win32::Foundation::HINSTANCE::default(),
                 lpszText: text_wide.as_mut_ptr(),
@@ -306,13 +306,15 @@ fn show_tooltip_at(tooltip_hwnd: HWND, parent: HWND, x: i32, y: i32) {
                 LPARAM(&raw mut ti as isize),
             );
 
-            // Position the tooltip
-            let coords = ((y as u32) << 16) | (x as u32 & 0xFFFF);
+            // Position the tooltip (pack x,y into LPARAM)
+            let coords = (y.cast_unsigned() << 16) | (x.cast_unsigned() & 0xFFFF);
+            #[allow(clippy::cast_possible_wrap)]
+            let coords_lparam = coords as isize;
             SendMessageW(
                 tooltip_hwnd,
                 TTM_TRACKPOSITION,
                 WPARAM(0),
-                LPARAM(coords as isize),
+                LPARAM(coords_lparam),
             );
 
             // Activate tracking
@@ -335,11 +337,11 @@ fn show_tooltip_at(tooltip_hwnd: HWND, parent: HWND, x: i32, y: i32) {
 /// * `parent` - Parent window handle.
 fn hide_tooltip(tooltip_hwnd: HWND, parent: HWND) {
     unsafe {
-        let ti = TOOLINFOW {
-            cbSize: u32::try_from(std::mem::size_of::<TOOLINFOW>()).unwrap_or(0),
+        let ti = Toolinfow {
+            cbSize: u32::try_from(std::mem::size_of::<Toolinfow>()).unwrap_or(0),
             uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
             hwnd: parent,
-            uId: parent.0 as usize,
+            uId: parent.0.cast_unsigned(),
             rect: RECT::default(),
             hinst: windows::Win32::Foundation::HINSTANCE::default(),
             lpszText: std::ptr::null_mut(),
@@ -848,8 +850,9 @@ fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
     use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONUP, WM_RBUTTONUP};
 
     // The low word of lparam contains the mouse message
+    // Masking with 0xFFFF ensures the value fits in u32
     #[allow(clippy::cast_possible_truncation)]
-    let mouse_msg = (lparam.0 & 0xFFFF) as u32;
+    let mouse_msg = (lparam.0 & 0xFFFF).cast_unsigned() as u32;
 
     match mouse_msg {
         WM_RBUTTONUP => {
