@@ -9,15 +9,15 @@
 //! with the main thread via `BrightnessMessage` channels.
 
 use std::cell::RefCell;
-use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
+use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
-    NOTIFY_ICON_DATA_FLAGS, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFY_ICON_DATA_FLAGS,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -28,7 +28,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_DESTROY, WM_EXITMENULOOP, WM_MENUSELECT, WM_NULL, WM_USER, WNDCLASSEXW,
     WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP,
 };
-use windows::Win32::Foundation::RECT;
 use windows::core::{PCWSTR, w};
 
 use crate::core::state::{BrightnessMessage, TrayMenuData};
@@ -203,15 +202,24 @@ struct TOOLINFOW {
 ///
 /// The tooltip window handle, or `None` if creation failed.
 fn create_tooltip(parent: HWND) -> Option<HWND> {
-    let class_wide: Vec<u16> = TOOLTIPS_CLASS.encode_utf16().chain(std::iter::once(0)).collect();
+    let class_wide: Vec<u16> = TOOLTIPS_CLASS
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
 
     unsafe {
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST,
             PCWSTR(class_wide.as_ptr()),
             PCWSTR::null(),
-            WS_POPUP | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
-            0, 0, 0, 0,
+            WS_POPUP
+                | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                    TTS_ALWAYSTIP | TTS_NOPREFIX,
+                ),
+            0,
+            0,
+            0,
+            0,
             parent,
             None,
             GetModuleHandleW(None).ok()?,
@@ -224,7 +232,12 @@ fn create_tooltip(parent: HWND) -> Option<HWND> {
         }
 
         // Set maximum width to enable multi-line tooltips
-        SendMessageW(hwnd, TTM_SETMAXTIPWIDTH, WPARAM(0), LPARAM(TOOLTIP_MAX_WIDTH as isize));
+        SendMessageW(
+            hwnd,
+            TTM_SETMAXTIPWIDTH,
+            WPARAM(0),
+            LPARAM(TOOLTIP_MAX_WIDTH as isize),
+        );
 
         // Add a tool for the parent window
         let mut ti = TOOLINFOW {
@@ -239,12 +252,7 @@ fn create_tooltip(parent: HWND) -> Option<HWND> {
             lpReserved: std::ptr::null_mut(),
         };
 
-        SendMessageW(
-            hwnd,
-            TTM_ADDTOOLW,
-            WPARAM(0),
-            LPARAM(&raw mut ti as isize),
-        );
+        SendMessageW(hwnd, TTM_ADDTOOLW, WPARAM(0), LPARAM(&raw mut ti as isize));
 
         log::debug!("Tooltip window created");
         Some(hwnd)
@@ -519,7 +527,11 @@ fn load_icon_from_file() -> Result<HICON> {
 /// * `hwnd` - Window handle for receiving tray messages.
 /// * `icon` - Icon handle to display in the tray.
 /// * `flags` - Which fields are valid in the structure.
-fn create_notify_icon_data(hwnd: HWND, icon: HICON, flags: NOTIFY_ICON_DATA_FLAGS) -> NOTIFYICONDATAW {
+fn create_notify_icon_data(
+    hwnd: HWND,
+    icon: HICON,
+    flags: NOTIFY_ICON_DATA_FLAGS,
+) -> NOTIFYICONDATAW {
     let mut nid = NOTIFYICONDATAW {
         cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
         hWnd: hwnd,
@@ -550,11 +562,7 @@ fn create_notify_icon_data(hwnd: HWND, icon: HICON, flags: NOTIFY_ICON_DATA_FLAG
 ///
 /// Returns `BrightnessError::TrayIconCreation` if `Shell_NotifyIconW` fails.
 fn add_tray_icon(hwnd: HWND, icon: HICON) -> Result<()> {
-    let nid = create_notify_icon_data(
-        hwnd,
-        icon,
-        NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
-    );
+    let nid = create_notify_icon_data(hwnd, icon, NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP);
 
     unsafe {
         if !Shell_NotifyIconW(NIM_ADD, &raw const nid).as_bool() {
@@ -665,7 +673,12 @@ fn show_context_menu(hwnd: HWND) {
         // Quit item
         let quit_text = format!("Quit {APP_NAME}\0");
         let quit_wide: Vec<u16> = quit_text.encode_utf16().collect();
-        let _ = AppendMenuW(hmenu, MF_STRING, MENU_ID_QUIT as usize, PCWSTR(quit_wide.as_ptr()));
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            MENU_ID_QUIT as usize,
+            PCWSTR(quit_wide.as_ptr()),
+        );
 
         // Get cursor position for menu placement
         let mut cursor_pos = POINT::default();
@@ -776,7 +789,9 @@ fn ensure_tray_class_registered() -> Result<PCWSTR> {
             Ok(())
         })
         .as_ref()
-        .map_err(|e| BrightnessError::tray_icon_creation(format!("Class registration failed: {e}")))?;
+        .map_err(|e| {
+            BrightnessError::tray_icon_creation(format!("Class registration failed: {e}"))
+        })?;
 
     Ok(w!("BrightnessControlTrayWindow"))
 }
