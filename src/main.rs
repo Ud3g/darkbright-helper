@@ -124,6 +124,24 @@ impl BrightnessController {
                 log::info!(reason = "system_resume"; "Triggering refresh");
                 self.handle_refresh();
             }
+            // ── Tray Icon Messages (placeholders for Steps 12, 14, 15) ───
+            BrightnessMessage::TrayOpenSettings => {
+                log::debug!("TrayOpenSettings received (not yet implemented)");
+            }
+            BrightnessMessage::TrayRequestQuit => {
+                log::info!("Quit requested from tray menu");
+                self.handle_shutdown()?;
+                return Ok(false);
+            }
+            BrightnessMessage::TrayMenuOpening { reply_tx } => {
+                log::debug!("TrayMenuOpening received (not yet implemented)");
+                // Send empty data for now to unblock the tray thread
+                let _ = reply_tx.send(darkbright_helper::core::state::TrayMenuData {
+                    monitors: Vec::new(),
+                    hotkey_up: String::new(),
+                    hotkey_down: String::new(),
+                });
+            }
             BrightnessMessage::DdcSetResult {
                 monitor_id,
                 value,
