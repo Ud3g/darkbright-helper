@@ -55,7 +55,8 @@ The configuration file is automatically created at:
   "version": 1,
   "hotkeys": {
     "brightness_up": "Ctrl+Shift+Up",
-    "brightness_down": "Ctrl+Shift+Down"
+    "brightness_down": "Ctrl+Shift+Down",
+    "intercept_brightness_keys": false
   },
   "osd": {
     "timeout_ms": 1000,
@@ -72,7 +73,8 @@ The configuration file is automatically created at:
 ```
 
 ### Options
-- **hotkeys**: Combination strings (e.g., "Alt+F1", "Ctrl+Shift+Plus").
+- **hotkeys.brightness_up/down**: Combination strings (e.g., "Alt+F1", "Ctrl+Shift+Plus").
+- **hotkeys.intercept_brightness_keys**: Enable low-level keyboard hook to capture dedicated brightness keys (default: false). Enable if your keyboard has brightness keys and you want them to use this tool instead of the Windows default. Note: Some antivirus software may flag this behavior.
 - **osd.timeout_ms**: How long the OSD remains visible (100-10000 ms).
 - **osd.opacity**: OSD window transparency (0.1-1.0).
 - **brightness.step_percent**: Amount to change per keypress (1-50%).

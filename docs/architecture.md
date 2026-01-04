@@ -197,7 +197,11 @@ if let Err(e) = hotkey_manager.register(BRIGHTNESS_DOWN_ALT_ID, 0, VK_BRIGHTNESS
 **Technical Details:**
 - Dedicated listener thread calls `RegisterHotKey()` API
 - Receives `WM_HOTKEY` messages in thread message loop
-- **Avoid** `SetWindowsHookEx()` (kernel-mode, antivirus concerns)
+- Secondary brightness keys (`VK_BRIGHTNESS_UP`/`DOWN`) use `SetWindowsHookExW(WH_KEYBOARD_LL)`
+  to intercept before Shell handling (user-mode hook, not kernel-mode)
+- Hook is **opt-in** via `hotkeys.intercept_brightness_keys` config option (default: `false`)
+- Rationale for opt-in: Some antivirus software may flag low-level keyboard hooks;
+  disabled by default to avoid false positives for users who don't need the feature
 
 ### 4. Configuration: JSON in AppData
 
@@ -208,7 +212,8 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   "version": 1,
   "hotkeys": {
     "brightness_up": "Ctrl+Shift+Up",
-    "brightness_down": "Ctrl+Shift+Down"
+    "brightness_down": "Ctrl+Shift+Down",
+    "intercept_brightness_keys": false
   },
   "monitors": {},
   "osd": {
@@ -257,7 +262,9 @@ When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
 
 | Field | Valid Range | Default |
 |-------|-------------|---------|
-| `hotkeys.*` | Valid hotkey string (see format above) | `Ctrl+Shift+Up` / `Down` |
+| `hotkeys.brightness_up` | Valid hotkey string (see format above) | `Ctrl+Shift+Up` |
+| `hotkeys.brightness_down` | Valid hotkey string (see format above) | `Ctrl+Shift+Down` |
+| `hotkeys.intercept_brightness_keys` | `true` / `false` | `false` |
 | `osd.timeout_ms` | 100 - 10000 | 1000 |
 | `osd.opacity` | 0.1 - 1.0 | 0.8 |
 | `brightness.step_percent` | 1 - 50 | 5 |
