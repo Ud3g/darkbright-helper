@@ -653,8 +653,14 @@ fn main() {
             }
         },
         Some(path) => {
-            log::info!(path:% = path.display(); "Config file not found, using defaults");
-            Config::default()
+            log::info!(path:% = path.display(); "Config file not found, creating default");
+            let config = Config::default();
+            if let Err(e) = config.save_to(path) {
+                log::warn!(path:% = path.display(), error:% = e; "Failed to save default config file");
+            } else {
+                log::info!(path:% = path.display(); "Default config file created");
+            }
+            config
         }
         None => {
             log::warn!("Could not determine config directory, using defaults");
