@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex, mpsc};
 use std::time::{Duration, Instant};
