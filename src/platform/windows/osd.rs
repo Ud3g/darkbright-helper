@@ -123,10 +123,15 @@ impl OsdMetrics {
     /// Base values are designed for 96 DPI (100% scaling).
     #[must_use]
     pub fn for_dpi(dpi: u32) -> Self {
+        #[allow(clippy::cast_precision_loss)]
         let scale = dpi as f32 / 96.0;
 
         // Helper to scale and round
-        let s = |val: i32| (val as f32 * scale).round() as i32;
+        let s = |val: i32| {
+            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            let scaled = (val as f32 * scale).round() as i32;
+            scaled
+        };
 
         Self {
             width: s(BASE_OSD_WIDTH),
@@ -607,6 +612,7 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
         let width = client_rect.right - client_rect.left;
         // Approximate text width (~7 pixels per character at this font size)
         // Scaling approximation: original was 7px for 18pt font. Ratio ~0.38
+        #[allow(clippy::cast_possible_truncation)]
         let approx_char_width = (f64::from(font_size) * 0.38).round() as i32;
         let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
 
@@ -675,7 +681,7 @@ fn update_osd_metrics(dpi: u32) {
 
 /// Executes a closure with the current OSD metrics.
 fn with_metrics<R>(f: impl FnOnce(&OsdMetrics) -> R) -> R {
-    OSD_METRICS.with(|m| f(&*m.borrow()))
+    OSD_METRICS.with(|m| f(&m.borrow()))
 }
 
 /// Registers the window class for the OSD window if not already registered.
