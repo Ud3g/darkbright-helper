@@ -17,7 +17,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
-use darkbright_helper::core::state::{BrightnessMessage, DdcCommand, MonitorId, MonitorState};
+use darkbright_helper::core::state::{
+    BrightnessMessage, DdcCommand, MonitorId, MonitorState, TrayMenuData, TrayMonitorInfo,
+};
 use darkbright_helper::platform::windows::ddc::get_monitor_id;
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
 use darkbright_helper::platform::windows::hotkey::{
@@ -190,13 +192,11 @@ impl BrightnessController {
                 return Ok(false);
             }
             BrightnessMessage::TrayMenuOpening { reply_tx } => {
-                log::debug!("TrayMenuOpening received (not yet implemented)");
-                // Send empty data for now to unblock the tray thread
-                let _ = reply_tx.send(darkbright_helper::core::state::TrayMenuData {
-                    monitors: Vec::new(),
-                    hotkey_up: String::new(),
-                    hotkey_down: String::new(),
-                });
+                log::debug!("TrayMenuOpening received");
+                let menu_data = self.build_tray_menu_data();
+                if let Err(e) = reply_tx.send(menu_data) {
+                    log::warn!(error:? = e; "Failed to send tray menu data");
+                }
             }
             BrightnessMessage::DdcSetResult {
                 monitor_id,
@@ -456,6 +456,50 @@ impl BrightnessController {
         if elapsed >= interval {
             log::debug!(elapsed_seconds = elapsed.as_secs(); "Periodic refresh triggered");
             self.handle_refresh();
+        }
+    }
+
+    /// Builds the data needed to populate the tray menu.
+    ///
+    /// Generates display names with duplicate suffixes (e.g., "Dell U2722D #1")
+    /// when multiple monitors with identical manufacturer and model are connected.
+    fn build_tray_menu_data(&self) -> TrayMenuData {
+        // Count occurrences of each base display name to detect duplicates
+        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        for monitor_id in self.states.keys() {
+            let base_name = monitor_id.base_display_name();
+            *name_counts.entry(base_name).or_insert(0) += 1;
+        }
+
+        // Track current index for each duplicate name
+        let mut name_indices: HashMap<String, usize> = HashMap::new();
+
+        let monitors: Vec<TrayMonitorInfo> = self
+            .states
+            .iter()
+            .map(|(monitor_id, state)| {
+                let base_name = monitor_id.base_display_name();
+                let display_name = if name_counts.get(&base_name).copied().unwrap_or(0) > 1 {
+                    // Multiple monitors with same name — append index suffix
+                    let index = name_indices.entry(base_name.clone()).or_insert(0);
+                    *index += 1;
+                    format!("{base_name} #{index}")
+                } else {
+                    base_name
+                };
+
+                TrayMonitorInfo {
+                    display_name,
+                    hardware_brightness: state.effective_brightness(),
+                    overlay_opacity: state.overlay_opacity,
+                }
+            })
+            .collect();
+
+        TrayMenuData {
+            monitors,
+            hotkey_up: self.config.hotkeys.brightness_up.clone(),
+            hotkey_down: self.config.hotkeys.brightness_down.clone(),
         }
     }
 
