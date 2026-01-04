@@ -9,8 +9,9 @@
 //! with the main thread via `BrightnessMessage` channels.
 
 use std::cell::RefCell;
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::sync::OnceLock;
+use std::time::Duration;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -21,14 +22,14 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, GetMessageW, HICON, HMENU, HWND_MESSAGE, IMAGE_ICON, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
+    LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
     PostQuitMessage, RegisterClassExW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY,
     WM_NULL, WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, w};
 
-use crate::core::state::BrightnessMessage;
+use crate::core::state::{BrightnessMessage, TrayMenuData};
 use crate::error::{BrightnessError, Result};
 
 use super::{SafeHwnd, last_error_as_brightness_error};
@@ -71,6 +72,9 @@ const IDI_APP_ICON: u16 = 1;
 /// Application name displayed in the tray menu.
 const APP_NAME: &str = "Brightness Control";
 
+/// Timeout for waiting for menu data from the main thread.
+const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Thread-Local Sender Storage
 // ─────────────────────────────────────────────────────────────────────────────
@@ -91,6 +95,34 @@ fn set_tray_sender(sender: Sender<BrightnessMessage>) {
 /// Executes a closure with access to the thread-local sender.
 fn with_tray_sender<R>(f: impl FnOnce(&Sender<BrightnessMessage>) -> R) -> Option<R> {
     TRAY_SENDER.with(|s| s.borrow().as_ref().map(f))
+}
+
+/// Requests menu data from the main thread.
+///
+/// Sends a `TrayMenuOpening` message and waits for the response with a timeout.
+/// Returns `None` if the request times out or fails.
+fn request_menu_data() -> Option<TrayMenuData> {
+    let (reply_tx, reply_rx) = mpsc::channel();
+
+    let sent = with_tray_sender(|sender| {
+        sender
+            .send(BrightnessMessage::TrayMenuOpening { reply_tx })
+            .is_ok()
+    })
+    .unwrap_or(false);
+
+    if !sent {
+        log::warn!("Failed to send TrayMenuOpening message");
+        return None;
+    }
+
+    match reply_rx.recv_timeout(MENU_DATA_TIMEOUT) {
+        Ok(data) => Some(data),
+        Err(e) => {
+            log::warn!("Failed to receive menu data: {e}");
+            None
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -281,11 +313,34 @@ fn show_context_menu(hwnd: HWND) {
             return;
         };
 
-        // Build menu items (bottom to top since menu appears above cursor)
-        // Quit item
-        let quit_text = format!("Quit {APP_NAME}\0");
-        let quit_wide: Vec<u16> = quit_text.encode_utf16().collect();
-        let _ = AppendMenuW(hmenu, MF_STRING, MENU_ID_QUIT as usize, PCWSTR(quit_wide.as_ptr()));
+        // Request current monitor data from main thread
+        let menu_data = request_menu_data();
+
+        // Add monitor info rows at the top (disabled/non-clickable)
+        if let Some(ref data) = menu_data {
+            for (index, monitor) in data.monitors.iter().enumerate() {
+                let monitor_text = format!(
+                    "{}: 🔆{}% 🕶{}%\0",
+                    monitor.display_name, monitor.hardware_brightness, monitor.overlay_opacity
+                );
+                let monitor_wide: Vec<u16> = monitor_text.encode_utf16().collect();
+
+                #[allow(clippy::cast_possible_truncation)]
+                let menu_id = MENU_ID_MONITOR_BASE + index as u32;
+
+                let _ = AppendMenuW(
+                    hmenu,
+                    MF_STRING | MF_GRAYED,
+                    menu_id as usize,
+                    PCWSTR(monitor_wide.as_ptr()),
+                );
+            }
+
+            // Add separator after monitors (only if we have monitors)
+            if !data.monitors.is_empty() {
+                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+            }
+        }
 
         // Settings item
         let settings_wide: Vec<u16> = "Settings\0".encode_utf16().collect();
@@ -296,10 +351,10 @@ fn show_context_menu(hwnd: HWND) {
             PCWSTR(settings_wide.as_ptr()),
         );
 
-        // Separator before static items
-        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
-
-        // TODO: Step 10 - Add dynamic monitor info rows here
+        // Quit item
+        let quit_text = format!("Quit {APP_NAME}\0");
+        let quit_wide: Vec<u16> = quit_text.encode_utf16().collect();
+        let _ = AppendMenuW(hmenu, MF_STRING, MENU_ID_QUIT as usize, PCWSTR(quit_wide.as_ptr()));
 
         // Get cursor position for menu placement
         let mut cursor_pos = POINT::default();
