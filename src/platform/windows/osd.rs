@@ -291,7 +291,7 @@ unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderSt
         // Use fixed bar position based on compact height (OSD_HEIGHT).
         // This keeps the bar in the same position whether or not the error row is visible.
         // When expanded for errors, the extra space is at the bottom for the error message.
-        let bar_top = (OSD_HEIGHT - BAR_HEIGHT) / 2;
+        let bar_top = with_metrics(|m| (m.height - m.bar_height) / 2);
 
         // Draw left side (overlay section)
         draw_overlay_section(hdc, client_rect, bar_top, state.overlay_opacity);
@@ -327,13 +327,29 @@ unsafe fn draw_hardware_section(
         let width = client_rect.right - client_rect.left;
 
         // Calculate layout positions
+        let (
+            padding,
+            percent_text_width,
+            icon_width,
+            bar_gap,
+            bar_height,
+        ) = with_metrics(|m| {
+            (
+                m.padding,
+                m.percent_text_width,
+                m.icon_width,
+                m.bar_gap,
+                m.bar_height,
+            )
+        });
+
         // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
-        let content_width = width - (OSD_PADDING * 2);
-        let total_bar_width = content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
+        let content_width = width - (padding * 2);
+        let total_bar_width = content_width - (percent_text_width * 2) - (icon_width * 2) - bar_gap;
         let single_bar_width = total_bar_width / 2;
 
         // Right bar starts after: pad + pct + ico + left_bar + gap
-        let bar_left = OSD_PADDING + PERCENT_TEXT_WIDTH + ICON_WIDTH + single_bar_width + BAR_GAP;
+        let bar_left = padding + percent_text_width + icon_width + single_bar_width + bar_gap;
 
         // Draw the bar (fills left-to-right)
         draw_single_bar(
@@ -341,7 +357,7 @@ unsafe fn draw_hardware_section(
             bar_left,
             bar_top,
             single_bar_width,
-            BAR_HEIGHT,
+            bar_height,
             hardware_brightness,
             is_error,
         );
@@ -351,7 +367,7 @@ unsafe fn draw_hardware_section(
         draw_icon(hdc, icon_x, bar_top, ICON_HARDWARE);
 
         // Percentage text position: right of icon (left-aligned)
-        let percent_x = icon_x + ICON_WIDTH;
+        let percent_x = icon_x + icon_width;
         draw_percentage_text(hdc, percent_x, bar_top, hardware_brightness, false);
     }
 }
@@ -370,20 +386,36 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
         let width = client_rect.right - client_rect.left;
 
         // Calculate layout positions
+        let (
+            padding,
+            percent_text_width,
+            icon_width,
+            bar_gap,
+            bar_height,
+        ) = with_metrics(|m| {
+            (
+                m.padding,
+                m.percent_text_width,
+                m.icon_width,
+                m.bar_gap,
+                m.bar_height,
+            )
+        });
+
         // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
-        let content_width = width - (OSD_PADDING * 2);
-        let total_bar_width = content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
+        let content_width = width - (padding * 2);
+        let total_bar_width = content_width - (percent_text_width * 2) - (icon_width * 2) - bar_gap;
         let single_bar_width = total_bar_width / 2;
 
         // Left bar starts after: pad + pct + ico
-        let bar_left = OSD_PADDING + PERCENT_TEXT_WIDTH + ICON_WIDTH;
+        let bar_left = padding + percent_text_width + icon_width;
 
         // Draw the bar background
         let bg_rect = RECT {
             left: bar_left,
             top: bar_top,
             right: bar_left + single_bar_width,
-            bottom: bar_top + BAR_HEIGHT,
+            bottom: bar_top + bar_height,
         };
         let bg_brush = CreateSolidBrush(COLORREF(BAR_BACKGROUND_COLOR));
         FillRect(hdc, &raw const bg_rect, bg_brush);
@@ -398,7 +430,7 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
                 left: bar_left + single_bar_width - fill_width, // Start from right side
                 top: bar_top,
                 right: bar_left + single_bar_width,
-                bottom: bar_top + BAR_HEIGHT,
+                bottom: bar_top + bar_height,
             };
             let fill_brush = CreateSolidBrush(COLORREF(OVERLAY_FILL_COLOR));
             FillRect(hdc, &raw const fill_rect, fill_brush);
@@ -406,11 +438,11 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
         }
 
         // Percentage text position: right-aligned so "%" stays at fixed position
-        let percent_right_x = OSD_PADDING + PERCENT_TEXT_WIDTH;
+        let percent_right_x = padding + percent_text_width;
         draw_percentage_text(hdc, percent_right_x, bar_top, overlay_opacity, true);
 
         // Icon position: left of bar with small padding
-        let icon_x = OSD_PADDING + PERCENT_TEXT_WIDTH;
+        let icon_x = padding + percent_text_width;
         draw_icon(hdc, icon_x, bar_top, ICON_OVERLAY);
     }
 }
