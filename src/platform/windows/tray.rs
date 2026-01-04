@@ -13,9 +13,14 @@ use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Shell::{
+    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    NOTIFY_ICON_DATA_FLAGS, Shell_NotifyIconW,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HICON, HWND_MESSAGE, MSG,
-    PostQuitMessage, RegisterClassExW, TranslateMessage, WM_DESTROY, WNDCLASSEXW, WS_OVERLAPPED,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HICON, HWND_MESSAGE,
+    IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MSG, PostQuitMessage,
+    RegisterClassExW, TranslateMessage, WM_DESTROY, WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, w};
 
@@ -51,6 +56,184 @@ const MENU_ID_QUIT: u32 = 1002;
 /// Base ID for monitor info rows (non-clickable).
 /// Each monitor uses MENU_ID_MONITOR_BASE + index.
 const MENU_ID_MONITOR_BASE: u32 = 2000;
+
+/// Tooltip text shown when hovering over the tray icon.
+const TRAY_TOOLTIP: &str = "Brightness Control";
+
+/// Resource ID for the embedded application icon.
+/// Must match the ID defined in build.rs when embedding resources.
+const IDI_APP_ICON: u16 = 1;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Icon Loading
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Loads the application icon for the tray.
+///
+/// Tries to load from embedded resource first (for release builds),
+/// then falls back to loading from file (for development).
+///
+/// # Errors
+///
+/// Returns `BrightnessError::TrayIconCreation` if the icon cannot be loaded
+/// from either source.
+fn load_tray_icon() -> Result<HICON> {
+    // Try loading from embedded resource first
+    if let Ok(icon) = load_icon_from_resource() {
+        log::debug!("Loaded tray icon from embedded resource");
+        return Ok(icon);
+    }
+
+    // Fall back to loading from file (development mode)
+    if let Ok(icon) = load_icon_from_file() {
+        log::debug!("Loaded tray icon from file");
+        return Ok(icon);
+    }
+
+    Err(BrightnessError::tray_icon_creation(
+        "Failed to load icon from resource or file",
+    ))
+}
+
+/// Attempts to load the icon from embedded Windows resource.
+fn load_icon_from_resource() -> Result<HICON> {
+    unsafe {
+        let hinstance = GetModuleHandleW(None).map_err(|e| {
+            BrightnessError::tray_icon_creation(format!("GetModuleHandleW failed: {}", e.code().0))
+        })?;
+
+        // Load icon from resource by ID
+        let handle = LoadImageW(
+            hinstance,
+            PCWSTR(IDI_APP_ICON as *const u16),
+            IMAGE_ICON,
+            0, // Use default width
+            0, // Use default height
+            LR_DEFAULTSIZE | LR_SHARED,
+        )
+        .map_err(|e| {
+            BrightnessError::tray_icon_creation(format!("LoadImageW (resource) failed: {}", e))
+        })?;
+
+        Ok(HICON(handle.0))
+    }
+}
+
+/// Attempts to load the icon from the res/icon.ico file.
+fn load_icon_from_file() -> Result<HICON> {
+    use std::path::PathBuf;
+
+    // Try to find the icon file relative to the executable
+    let icon_path = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+        .map(|dir| dir.join("res").join("icon.ico"))
+        .or_else(|| Some(PathBuf::from("res/icon.ico")))
+        .unwrap();
+
+    // Convert path to wide string
+    let path_str = icon_path.to_string_lossy();
+    let wide_path: Vec<u16> = path_str.encode_utf16().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let handle = LoadImageW(
+            None,
+            PCWSTR(wide_path.as_ptr()),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_LOADFROMFILE | LR_DEFAULTSIZE,
+        )
+        .map_err(|e| {
+            BrightnessError::tray_icon_creation(format!(
+                "LoadImageW (file '{}') failed: {}",
+                path_str, e
+            ))
+        })?;
+
+        Ok(HICON(handle.0))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shell Notification Icon
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Creates the `NOTIFYICONDATAW` structure for tray icon operations.
+///
+/// # Arguments
+///
+/// * `hwnd` - Window handle for receiving tray messages.
+/// * `icon` - Icon handle to display in the tray.
+/// * `flags` - Which fields are valid in the structure.
+fn create_notify_icon_data(hwnd: HWND, icon: HICON, flags: NOTIFY_ICON_DATA_FLAGS) -> NOTIFYICONDATAW {
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        uFlags: flags,
+        uCallbackMessage: WM_TRAY_CALLBACK,
+        hIcon: icon,
+        ..Default::default()
+    };
+
+    // Set tooltip text (szTip is a fixed-size array)
+    let tooltip_wide: Vec<u16> = TRAY_TOOLTIP.encode_utf16().collect();
+    let copy_len = tooltip_wide.len().min(nid.szTip.len() - 1);
+    nid.szTip[..copy_len].copy_from_slice(&tooltip_wide[..copy_len]);
+    // Null terminator is already set by Default
+
+    nid
+}
+
+/// Adds the tray icon to the system notification area.
+///
+/// # Arguments
+///
+/// * `hwnd` - Window handle for receiving tray messages.
+/// * `icon` - Icon handle to display.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::TrayIconCreation` if `Shell_NotifyIconW` fails.
+fn add_tray_icon(hwnd: HWND, icon: HICON) -> Result<()> {
+    let nid = create_notify_icon_data(
+        hwnd,
+        icon,
+        NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
+    );
+
+    unsafe {
+        if !Shell_NotifyIconW(NIM_ADD, &raw const nid).as_bool() {
+            return Err(last_error_as_brightness_error("Shell_NotifyIconW(NIM_ADD)"));
+        }
+    }
+
+    log::debug!("Tray icon added to notification area");
+    Ok(())
+}
+
+/// Removes the tray icon from the system notification area.
+///
+/// # Arguments
+///
+/// * `hwnd` - Window handle associated with the tray icon.
+fn remove_tray_icon(hwnd: HWND) {
+    let nid = NOTIFYICONDATAW {
+        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        ..Default::default()
+    };
+
+    unsafe {
+        if !Shell_NotifyIconW(NIM_DELETE, &raw const nid).as_bool() {
+            log::warn!("Failed to remove tray icon");
+        } else {
+            log::debug!("Tray icon removed from notification area");
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Window Class Registration
@@ -225,12 +408,16 @@ impl TrayIcon {
 
         log::debug!("Tray message window created");
 
-        // TODO: Step 7 - Load icon and register with shell
+        // Load the application icon
+        let icon_handle = load_tray_icon()?;
+
+        // Register the tray icon with the shell
+        add_tray_icon(hwnd, icon_handle)?;
 
         Ok(Self {
             hwnd: unsafe { SafeHwnd::new_owned(hwnd) },
             sender,
-            icon_handle: HICON::default(),
+            icon_handle,
         })
     }
 
@@ -288,7 +475,8 @@ impl TrayIcon {
 
 impl Drop for TrayIcon {
     fn drop(&mut self) {
-        // TODO: Step 7 - Remove tray icon with Shell_NotifyIconW(NIM_DELETE)
+        // Remove tray icon from notification area
+        remove_tray_icon(self.hwnd.as_raw());
         log::debug!("TrayIcon dropped");
     }
 }
