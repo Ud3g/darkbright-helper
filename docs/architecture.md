@@ -429,6 +429,21 @@ This is acceptable because:
 
 ### 8. Logging Strategy
 
+**Console Window Behavior:**
+
+The application uses conditional compilation to control console visibility:
+
+```rust
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+```
+
+| Build | Console | Rationale |
+|-------|---------|-----------|
+| Debug (`cargo build`) | Visible | Developers can see log output directly |
+| Release (`cargo build --release`) | Hidden | Clean GUI experience for end users |
+
+This means panics and log output in release builds won't be visible in a console. For release debugging, consider integrating a file-based logging backend (future enhancement).
+
 **Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior)
 
 > **Note:** For guidelines on *how* to write log statements (level selection heuristics, structured fields, avoiding PII), see `code-conventions.md` section 7.

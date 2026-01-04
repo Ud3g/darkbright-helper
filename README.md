@@ -44,6 +44,17 @@ cargo build --release
 ```
 The executable will be at `target/release/darkbright-helper.exe`.
 
+### Debug vs Release Builds
+
+| Build Type | Command | Console Window | Use Case |
+|------------|---------|----------------|----------|
+| **Debug** | `cargo build` | ✅ Visible | Development, viewing log output |
+| **Release** | `cargo build --release` | ❌ Hidden | End-user distribution |
+
+- **Debug builds** show a console window where log messages appear (controlled by `RUST_LOG` environment variable)
+- **Release builds** use `windows_subsystem = "windows"` to hide the console, providing a clean GUI-only experience
+- To debug release-specific issues, use `RUST_LOG=debug cargo run --release` (note: output goes to debug logging, not console)
+
 ## Configuration
 
 The configuration file is automatically created at:
