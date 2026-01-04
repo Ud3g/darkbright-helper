@@ -75,7 +75,8 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
         Ok(())
     } else {
         // The return value can be interpreted as an error code for low values
-        #[allow(clippy::cast_possible_wrap)]
+        // ShellExecuteW error codes fit in i32; truncation is safe here
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let error_code = result.0 as i32;
         Err(BrightnessError::config_file_open(
             path.display().to_string(),
@@ -533,6 +534,40 @@ fn pump_windows_messages() {
     }
 }
 
+/// Loads the application configuration.
+///
+/// Attempts to load from the default path. If the file doesn't exist,
+/// creates a default config file. If parsing fails, uses defaults.
+fn load_config() -> Config {
+    let config_path = Config::default_path();
+    match &config_path {
+        Some(path) if path.exists() => match Config::load_from(path) {
+            Ok(cfg) => {
+                log::info!(path:% = path.display(); "Configuration loaded from file");
+                cfg
+            }
+            Err(e) => {
+                log::error!(path:% = path.display(), error:% = e; "Failed to parse config, using defaults");
+                Config::default()
+            }
+        },
+        Some(path) => {
+            log::info!(path:% = path.display(); "Config file not found, creating default");
+            let config = Config::default();
+            if let Err(e) = config.save_to(path) {
+                log::warn!(path:% = path.display(), error:% = e; "Failed to save default config file");
+            } else {
+                log::info!(path:% = path.display(); "Default config file created");
+            }
+            config
+        }
+        None => {
+            log::warn!("Could not determine config directory, using defaults");
+            Config::default()
+        }
+    }
+}
+
 /// Initializes the logging subsystem.
 ///
 /// Uses `RUST_LOG` environment variable if set, otherwise defaults to
@@ -699,33 +734,7 @@ fn main() {
     init_logging();
 
     // Load configuration
-    let config_path = Config::default_path();
-    let config = match &config_path {
-        Some(path) if path.exists() => match Config::load_from(path) {
-            Ok(cfg) => {
-                log::info!(path:% = path.display(); "Configuration loaded from file");
-                cfg
-            }
-            Err(e) => {
-                log::error!(path:% = path.display(), error:% = e; "Failed to parse config, using defaults");
-                Config::default()
-            }
-        },
-        Some(path) => {
-            log::info!(path:% = path.display(); "Config file not found, creating default");
-            let config = Config::default();
-            if let Err(e) = config.save_to(path) {
-                log::warn!(path:% = path.display(), error:% = e; "Failed to save default config file");
-            } else {
-                log::info!(path:% = path.display(); "Default config file created");
-            }
-            config
-        }
-        None => {
-            log::warn!("Could not determine config directory, using defaults");
-            Config::default()
-        }
-    };
+    let config = load_config();
 
     // Phase 6, Step 43: Create channels
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
