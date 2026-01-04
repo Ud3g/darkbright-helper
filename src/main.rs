@@ -18,8 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{
-    generate_display_names, BrightnessMessage, DdcCommand, MonitorId, MonitorState, TrayMenuData,
-    TrayMonitorInfo,
+    BrightnessMessage, DdcCommand, MonitorId, MonitorState, TrayMenuData, TrayMonitorInfo,
+    generate_display_names,
 };
 use darkbright_helper::platform::windows::ddc::get_monitor_id;
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
