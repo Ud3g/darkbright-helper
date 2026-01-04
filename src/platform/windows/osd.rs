@@ -18,6 +18,7 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::Graphics::Dwm::{
     DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
@@ -791,6 +792,25 @@ fn apply_rounded_corners(hwnd: HWND) {
             error_code = e.code().0;
             "Rounded corners not available (expected on Windows 10)"
         ),
+    }
+}
+
+/// Returns the effective DPI for the specified monitor.
+///
+/// Falls back to the default system DPI (96) if the API fails.
+fn get_monitor_dpi(hmonitor: HMONITOR) -> u32 {
+    let mut dpi_x = 96;
+    let mut dpi_y = 96;
+
+    unsafe {
+        // MDT_EFFECTIVE_DPI returns the effective DPI for the monitor, which takes into account
+        // the user's scaling settings and any system overrides.
+        if GetDpiForMonitor(hmonitor, MDT_EFFECTIVE_DPI, &raw mut dpi_x, &raw mut dpi_y).is_ok() {
+            dpi_x
+        } else {
+            log::warn!("GetDpiForMonitor failed, falling back to 96 DPI");
+            96
+        }
     }
 }
 
