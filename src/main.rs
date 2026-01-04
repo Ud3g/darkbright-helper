@@ -564,13 +564,24 @@ fn main() {
     init_logging();
 
     // Load configuration
-    let config = match Config::load() {
-        Ok(cfg) => {
-            log::info!("Configuration loaded successfully");
-            cfg
+    let config_path = Config::default_path();
+    let config = match &config_path {
+        Some(path) if path.exists() => match Config::load_from(path) {
+            Ok(cfg) => {
+                log::info!(path:% = path.display(); "Configuration loaded from file");
+                cfg
+            }
+            Err(e) => {
+                log::error!(path:% = path.display(), error:% = e; "Failed to parse config, using defaults");
+                Config::default()
+            }
+        },
+        Some(path) => {
+            log::info!(path:% = path.display(); "Config file not found, using defaults");
+            Config::default()
         }
-        Err(e) => {
-            log::error!(error:% = e; "Failed to load configuration, using defaults");
+        None => {
+            log::warn!("Could not determine config directory, using defaults");
             Config::default()
         }
     };
