@@ -18,7 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{
-    BrightnessMessage, DdcCommand, MonitorId, MonitorState, TrayMenuData, TrayMonitorInfo,
+    generate_display_names, BrightnessMessage, DdcCommand, MonitorId, MonitorState, TrayMenuData,
+    TrayMonitorInfo,
 };
 use darkbright_helper::platform::windows::ddc::get_monitor_id;
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
@@ -464,29 +465,18 @@ impl BrightnessController {
     /// Generates display names with duplicate suffixes (e.g., "Dell U2722D #1")
     /// when multiple monitors with identical manufacturer and model are connected.
     fn build_tray_menu_data(&self) -> TrayMenuData {
-        // Count occurrences of each base display name to detect duplicates
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
-        for monitor_id in self.states.keys() {
-            let base_name = monitor_id.base_display_name();
-            *name_counts.entry(base_name).or_insert(0) += 1;
-        }
-
-        // Track current index for each duplicate name
-        let mut name_indices: HashMap<String, usize> = HashMap::new();
+        // Collect monitor IDs and generate unique display names
+        let monitor_ids: Vec<MonitorId> = self.states.keys().cloned().collect();
+        let display_names = generate_display_names(&monitor_ids);
 
         let monitors: Vec<TrayMonitorInfo> = self
             .states
             .iter()
             .map(|(monitor_id, state)| {
-                let base_name = monitor_id.base_display_name();
-                let display_name = if name_counts.get(&base_name).copied().unwrap_or(0) > 1 {
-                    // Multiple monitors with same name — append index suffix
-                    let index = name_indices.entry(base_name.clone()).or_insert(0);
-                    *index += 1;
-                    format!("{base_name} #{index}")
-                } else {
-                    base_name
-                };
+                let display_name = display_names
+                    .get(monitor_id)
+                    .cloned()
+                    .unwrap_or_else(|| monitor_id.base_display_name());
 
                 TrayMonitorInfo {
                     display_name,
