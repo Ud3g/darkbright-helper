@@ -514,21 +514,36 @@ fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> 
         // Signal success to main thread
         let _ = result_tx.send(Ok(()));
 
-        // Register secondary (opportunistic) hotkeys - non-fatal
-        if let Err(e) = hotkey_manager.register_hotkey(
-            BRIGHTNESS_UP_ALT_ID,
-            HOT_KEY_MODIFIERS(0),
-            VK_BRIGHTNESS_UP,
-        ) {
-            log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
-        }
+        // Brightness key interception: either via low-level hook or RegisterHotKey
+        if config_clone.hotkeys.intercept_brightness_keys {
+            // Use low-level keyboard hook to intercept brightness keys before Shell
+            match hotkey_manager.install_brightness_hook() {
+                Ok(()) => {
+                    log::info!("Low-level keyboard hook installed for brightness keys");
+                }
+                Err(e) => {
+                    log::warn!(error:% = e; "Failed to install brightness key hook");
+                }
+            }
+        } else {
+            log::debug!("Brightness key interception disabled by config");
 
-        if let Err(e) = hotkey_manager.register_hotkey(
-            BRIGHTNESS_DOWN_ALT_ID,
-            HOT_KEY_MODIFIERS(0),
-            VK_BRIGHTNESS_DOWN,
-        ) {
-            log::debug!(error:% = e; "Secondary brightness down hotkey not registered");
+            // Register secondary (opportunistic) hotkeys - non-fatal
+            if let Err(e) = hotkey_manager.register_hotkey(
+                BRIGHTNESS_UP_ALT_ID,
+                HOT_KEY_MODIFIERS(0),
+                VK_BRIGHTNESS_UP,
+            ) {
+                log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
+            }
+
+            if let Err(e) = hotkey_manager.register_hotkey(
+                BRIGHTNESS_DOWN_ALT_ID,
+                HOT_KEY_MODIFIERS(0),
+                VK_BRIGHTNESS_DOWN,
+            ) {
+                log::debug!(error:% = e; "Secondary brightness down hotkey not registered");
+            }
         }
 
         // Run message loop (blocks until thread ends)
