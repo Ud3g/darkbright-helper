@@ -39,10 +39,26 @@ pub enum BrightnessError {
     #[error("Failed to create OSD window: {0}")]
     OsdCreation(String),
 
+    // ── Tray Icon Errors ─────────────────────────────────────────────────
+    /// Failed to create or register the system tray icon.
+    #[error("Failed to create tray icon: {0}")]
+    TrayIconCreation(String),
+
+    /// Failed to create the tray popup menu.
+    #[error("Failed to create tray menu: {0}")]
+    TrayMenuCreation(String),
+
     // ── Configuration Errors ─────────────────────────────────────────────
     /// Failed to read the configuration file.
     #[error("Failed to read config file '{path}': {source}")]
     ConfigRead {
+        path: String,
+        source: std::io::Error,
+    },
+
+    /// Failed to open the configuration file with the system default application.
+    #[error("Failed to open config file '{path}': {source}")]
+    ConfigFileOpen {
         path: String,
         source: std::io::Error,
     },
@@ -109,9 +125,27 @@ impl BrightnessError {
         }
     }
 
+    /// Creates a new tray icon creation error.
+    pub fn tray_icon_creation(message: impl Into<String>) -> Self {
+        Self::TrayIconCreation(message.into())
+    }
+
+    /// Creates a new tray menu creation error.
+    pub fn tray_menu_creation(message: impl Into<String>) -> Self {
+        Self::TrayMenuCreation(message.into())
+    }
+
     /// Creates a new config read error.
     pub fn config_read(path: impl Into<String>, source: std::io::Error) -> Self {
         Self::ConfigRead {
+            path: path.into(),
+            source,
+        }
+    }
+
+    /// Creates a new config file open error.
+    pub fn config_file_open(path: impl Into<String>, source: std::io::Error) -> Self {
+        Self::ConfigFileOpen {
             path: path.into(),
             source,
         }
