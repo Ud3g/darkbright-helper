@@ -327,13 +327,7 @@ unsafe fn draw_hardware_section(
         let width = client_rect.right - client_rect.left;
 
         // Calculate layout positions
-        let (
-            padding,
-            percent_text_width,
-            icon_width,
-            bar_gap,
-            bar_height,
-        ) = with_metrics(|m| {
+        let (padding, percent_text_width, icon_width, bar_gap, bar_height) = with_metrics(|m| {
             (
                 m.padding,
                 m.percent_text_width,
@@ -386,13 +380,7 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
         let width = client_rect.right - client_rect.left;
 
         // Calculate layout positions
-        let (
-            padding,
-            percent_text_width,
-            icon_width,
-            bar_gap,
-            bar_height,
-        ) = with_metrics(|m| {
+        let (padding, percent_text_width, icon_width, bar_gap, bar_height) = with_metrics(|m| {
             (
                 m.padding,
                 m.percent_text_width,
