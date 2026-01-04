@@ -378,7 +378,7 @@ fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
     let is_valid_selection = (flags & MF_HILITE) != 0 && (flags & MF_POPUP) == 0 && flags != 0xFFFF;
 
     // Get the actual menu item ID by checking if it's in the monitor range
-    let menu_id = item_index as u32;
+    let menu_id = u32::from(item_index);
     let is_monitor = menu_id >= MENU_ID_MONITOR_BASE && menu_id < MENU_ID_MONITOR_BASE + 100;
 
     TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
@@ -398,7 +398,7 @@ fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
                 // Get menu item rectangle
                 let mut rect = RECT::default();
                 unsafe {
-                    if GetMenuItemRect(hwnd, hmenu, item_index as u32, &raw mut rect).is_ok() {
+                    if GetMenuItemRect(hwnd, hmenu, u32::from(item_index), &raw mut rect).is_ok() {
                         // Position tooltip to the right of the menu item
                         show_tooltip_at(tooltip_hwnd, hwnd, rect.right + 5, rect.top);
                     }
@@ -644,8 +644,9 @@ fn show_context_menu(hwnd: HWND) {
                 );
                 let monitor_wide: Vec<u16> = monitor_text.encode_utf16().collect();
 
+                // Menu IDs are u32; index won't exceed monitor count (typically < 10)
                 #[allow(clippy::cast_possible_truncation)]
-                let menu_id = MENU_ID_MONITOR_BASE + index as u32;
+                let menu_id = MENU_ID_MONITOR_BASE + (index as u32);
 
                 let _ = AppendMenuW(
                     hmenu,
@@ -709,8 +710,10 @@ fn show_context_menu(hwnd: HWND) {
         // This is a Windows quirk required for proper tray menu behavior
         let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
 
-        // Handle selection
-        handle_menu_selection(cmd.0 as u32);
+        // Handle selection (menu item IDs are non-negative)
+        #[allow(clippy::cast_sign_loss)]
+        let menu_cmd = cmd.0 as u32;
+        handle_menu_selection(menu_cmd);
     }
 }
 
