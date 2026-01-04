@@ -25,7 +25,7 @@ pub const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 /// Used in low-level keyboard hook callbacks.
 const HC_ACTION: i32 = 0;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    CW_USEDEFAULT, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GetMessageW, HHOOK, HMENU, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG,
     RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
@@ -368,10 +368,9 @@ impl HotkeyManager {
         // SAFETY: We pass a valid callback function. The hook handle will be
         // stored in SafeHook which ensures cleanup on drop.
         let hook = unsafe {
-            SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0)
-                .map_err(|e| {
-                    BrightnessError::windows_api("SetWindowsHookExW", e.code().0.cast_unsigned())
-                })?
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0).map_err(
+                |e| BrightnessError::windows_api("SetWindowsHookExW", e.code().0.cast_unsigned()),
+            )?
         };
 
         // SAFETY: The hook handle is valid as SetWindowsHookExW succeeded.
