@@ -4,6 +4,11 @@ This document tracks potential future enhancements for the Brightness Control To
 
 ---
 
+## Tray menu: unexpected behavior
+- Tooltip not showing
+- weird duplication in the name of monitor manufacturer
+- order of dimming and HW brightness wrong
+
 ## Settings GUI
 - Graphical configuration interface
 - Real-time hotkey capture for easy customization
