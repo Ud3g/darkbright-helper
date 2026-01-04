@@ -112,6 +112,7 @@ pub struct OsdMetrics {
 }
 
 impl Default for OsdMetrics {
+    #[must_use]
     fn default() -> Self {
         Self::for_dpi(96)
     }
