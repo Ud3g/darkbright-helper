@@ -128,7 +128,7 @@ thread_local! {
     static TRAY_SENDER: RefCell<Option<Sender<BrightnessMessage>>> = const { RefCell::new(None) };
 
     /// Thread-local storage for the tooltip window handle.
-    static TRAY_TOOLTIP: RefCell<Option<HWND>> = const { RefCell::new(None) };
+    static TRAY_TOOLTIP_HWND: RefCell<Option<HWND>> = const { RefCell::new(None) };
 
     /// Thread-local storage for the tooltip text (built from hotkeys).
     static TRAY_TOOLTIP_TEXT: RefCell<String> = const { RefCell::new(String::new()) };
@@ -381,7 +381,7 @@ fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
     let menu_id = item_index as u32;
     let is_monitor = menu_id >= MENU_ID_MONITOR_BASE && menu_id < MENU_ID_MONITOR_BASE + 100;
 
-    TRAY_TOOLTIP.with(|tooltip_cell| {
+    TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
         let tooltip_opt = tooltip_cell.borrow();
         let Some(tooltip_hwnd) = *tooltip_opt else {
             return;
@@ -413,7 +413,7 @@ fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
 
 /// Cleans up tooltip when menu closes.
 fn handle_menu_exit(hwnd: HWND) {
-    TRAY_TOOLTIP.with(|tooltip_cell| {
+    TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
         let tooltip_opt = tooltip_cell.borrow();
         if let Some(tooltip_hwnd) = *tooltip_opt {
             hide_tooltip(tooltip_hwnd, hwnd);
@@ -622,7 +622,7 @@ fn show_context_menu(hwnd: HWND) {
             set_tooltip_text(&data.hotkey_up, &data.hotkey_down);
 
             // Create tooltip window if not exists
-            TRAY_TOOLTIP.with(|tooltip_cell| {
+            TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
                 let mut tooltip_opt = tooltip_cell.borrow_mut();
                 if tooltip_opt.is_none() {
                     *tooltip_opt = create_tooltip(hwnd);
