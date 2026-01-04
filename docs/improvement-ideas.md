@@ -4,11 +4,6 @@ This document tracks potential future enhancements for the Brightness Control To
 
 ---
 
-## System Tray Icon
-- Info row on current brightness / overlay level
-- Link to open the settings.json file in an editor
-- Ability to quit the application
-
 ## Settings GUI
 - Graphical configuration interface
 - Real-time hotkey capture for easy customization
