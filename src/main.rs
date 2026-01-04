@@ -10,8 +10,9 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
+use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
+    DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOWNORMAL, TranslateMessage,
 };
 
 use darkbright_helper::core::brightness::calculate_adjustment;
@@ -31,6 +32,54 @@ use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
     LazyLock::new(|| Mutex::new(None));
+
+/// Opens a file with the system's default application.
+///
+/// Uses `ShellExecuteW` with the "open" verb to launch the default handler
+/// for the file type (e.g., Notepad or VS Code for `.json` files).
+///
+/// # Arguments
+///
+/// * `path` - Path to the file to open.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::ConfigFileOpen` if the shell operation fails.
+fn open_with_default_app(path: &std::path::Path) -> Result<()> {
+    use windows::core::w;
+
+    let path_wide: Vec<u16> = path
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            windows::core::PCWSTR(path_wide.as_ptr()),
+            None,
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+
+    // ShellExecuteW returns a value > 32 on success.
+    // Values <= 32 indicate various error conditions.
+    if result.0 as isize > 32 {
+        log::debug!(path:% = path.display(); "Opened file with default application");
+        Ok(())
+    } else {
+        // The return value can be interpreted as an error code for low values
+        #[allow(clippy::cast_possible_wrap)]
+        let error_code = result.0 as i32;
+        Err(BrightnessError::config_file_open(
+            path.display().to_string(),
+            std::io::Error::from_raw_os_error(error_code),
+        ))
+    }
+}
 
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
@@ -124,9 +173,16 @@ impl BrightnessController {
                 log::info!(reason = "system_resume"; "Triggering refresh");
                 self.handle_refresh();
             }
-            // ── Tray Icon Messages (placeholders for Steps 12, 14, 15) ───
+            // ── Tray Icon Messages ───────────────────────────────────────
             BrightnessMessage::TrayOpenSettings => {
-                log::debug!("TrayOpenSettings received (not yet implemented)");
+                log::debug!("TrayOpenSettings received");
+                if let Some(path) = Config::default_path() {
+                    if let Err(e) = open_with_default_app(&path) {
+                        log::error!(error:% = e; "Failed to open config file");
+                    }
+                } else {
+                    log::error!("Could not determine config file path");
+                }
             }
             BrightnessMessage::TrayRequestQuit => {
                 log::info!("Quit requested from tray menu");
