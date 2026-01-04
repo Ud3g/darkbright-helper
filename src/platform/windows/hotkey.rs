@@ -19,10 +19,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 // Standard Windows Virtual Key codes for brightness (not always in windows crate)
 pub const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
 pub const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
+
+/// Hook code indicating the hook procedure must process the message.
+/// Used in low-level keyboard hook callbacks.
+const HC_ACTION: i32 = 0;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    HMENU, HWND_MESSAGE, MSG, RegisterClassW, TranslateMessage, WM_HOTKEY, WNDCLASSW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    CallNextHookEx, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GetMessageW, HHOOK, HMENU, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG,
+    RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
 
