@@ -3,6 +3,7 @@
 //! This module provides functionality to parse hotkey strings (e.g., "Ctrl+Shift+Up")
 //! and register them as global hotkeys using the Windows `RegisterHotKey` API.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::mpsc::Sender;
@@ -50,6 +51,49 @@ pub const BRIGHTNESS_UP_ALT_ID: i32 = 3;
 
 /// Hotkey ID for the secondary (dedicated key) brightness down command.
 pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Low-Level Keyboard Hook Support
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Context data for the low-level keyboard hook callback.
+///
+/// Since the hook callback is a static `extern "system" fn` that cannot capture
+/// state, we use thread-local storage to pass context to the callback.
+struct HookContext {
+    /// Channel sender to transmit brightness adjustment events.
+    sender: Sender<BrightnessMessage>,
+    /// Brightness step percentage (signed for directional adjustment).
+    step_percent: i8,
+}
+
+thread_local! {
+    /// Thread-local storage for hook callback context.
+    ///
+    /// Initialized by `set_hook_context()` before installing the hook,
+    /// accessed by `with_hook_context()` from the callback.
+    static HOOK_CONTEXT: RefCell<Option<HookContext>> = const { RefCell::new(None) };
+}
+
+/// Initializes the thread-local hook context.
+///
+/// Must be called on the same thread where the hook will be installed,
+/// before calling `SetWindowsHookExW`.
+fn set_hook_context(sender: Sender<BrightnessMessage>, step_percent: i8) {
+    HOOK_CONTEXT.with(|ctx| {
+        *ctx.borrow_mut() = Some(HookContext {
+            sender,
+            step_percent,
+        });
+    });
+}
+
+/// Executes a closure with access to the hook context.
+///
+/// Returns `None` if the context has not been initialized.
+fn with_hook_context<R>(f: impl FnOnce(&HookContext) -> R) -> Option<R> {
+    HOOK_CONTEXT.with(|ctx| ctx.borrow().as_ref().map(f))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
