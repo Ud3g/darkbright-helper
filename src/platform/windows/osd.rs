@@ -753,15 +753,25 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
 pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> Result<()> {
+    // Get DPI for the target monitor and update thread-local metrics
+    let dpi = get_monitor_dpi(hmonitor);
+    update_osd_metrics(dpi);
+
+    // Retrieve scaled metrics
+    let (width, height, bottom_margin) = with_metrics(|m| {
+        let height = if with_error {
+            m.height_with_error
+        } else {
+            m.height
+        };
+        (m.width, height, m.bottom_margin)
+    });
+
+    log::trace!(dpi, width, height; "Positioning OSD window with scaled metrics");
+
     let mut mi = MONITORINFO {
         cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
         ..Default::default()
-    };
-
-    let height = if with_error {
-        OSD_HEIGHT_WITH_ERROR
-    } else {
-        OSD_HEIGHT
     };
 
     unsafe {
@@ -773,15 +783,15 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> 
         let monitor_width = rect.right - rect.left;
 
         // Calculate center-x and bottom-y position
-        let x = rect.left + (monitor_width - OSD_WIDTH) / 2;
-        let y = rect.bottom - height - OSD_BOTTOM_MARGIN;
+        let x = rect.left + (monitor_width - width) / 2;
+        let y = rect.bottom - height - bottom_margin;
 
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
             x,
             y,
-            OSD_WIDTH,
+            width,
             height,
             SWP_NOACTIVATE,
         )
