@@ -141,6 +141,80 @@ impl Drop for SafeHook {
     }
 }
 
+/// Low-level keyboard hook callback procedure.
+///
+/// This function is called by Windows for every keyboard event when the hook is installed.
+/// It intercepts `VK_BRIGHTNESS_UP` and `VK_BRIGHTNESS_DOWN` keys, sends brightness
+/// adjustment messages, and suppresses the native Windows brightness OSD.
+///
+/// # Safety
+///
+/// This is a Windows callback function. It must:
+/// - Be called only by Windows as part of the hook chain
+/// - Have a valid `KBDLLHOOKSTRUCT` pointer in `lparam` when `code == HC_ACTION`
+unsafe extern "system" fn low_level_keyboard_proc(
+    code: i32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    // If code < 0, we must pass to next hook without processing
+    if code < 0 {
+        return unsafe { CallNextHookEx(HHOOK::default(), code, wparam, lparam) };
+    }
+
+    // Only process if code indicates we should (HC_ACTION = 0)
+    if code == HC_ACTION {
+        // Check for key-down events only (ignore key-up to avoid double-firing)
+        let msg_type = wparam.0 as u32;
+        if msg_type == WM_KEYDOWN || msg_type == WM_SYSKEYDOWN {
+            // SAFETY: When code == HC_ACTION, lparam points to a valid KBDLLHOOKSTRUCT
+            let kb_struct = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+            let vk_code = VIRTUAL_KEY(kb_struct.vkCode as u16);
+
+            // Check if this is a brightness key we want to intercept
+            let delta = if vk_code == VK_BRIGHTNESS_UP {
+                Some(true) // Increase brightness
+            } else if vk_code == VK_BRIGHTNESS_DOWN {
+                Some(false) // Decrease brightness
+            } else {
+                None
+            };
+
+            if let Some(is_increase) = delta {
+                // Try to send brightness adjustment via thread-local context
+                let sent = with_hook_context(|ctx| {
+                    let adjustment = if is_increase {
+                        ctx.step_percent
+                    } else {
+                        -ctx.step_percent
+                    };
+
+                    log::debug!(
+                        vk_code = vk_code.0,
+                        delta = adjustment;
+                        "Brightness key intercepted by hook"
+                    );
+
+                    if let Err(e) = ctx.sender.send(BrightnessMessage::Adjust {
+                        monitor_id: None,
+                        delta: adjustment,
+                    }) {
+                        log::error!(error:% = e; "Failed to send brightness adjustment from hook");
+                    }
+                });
+
+                // If we successfully processed the key, suppress it (don't pass to Shell)
+                if sent.is_some() {
+                    return LRESULT(1);
+                }
+            }
+        }
+    }
+
+    // Pass unhandled keys to the next hook in the chain
+    unsafe { CallNextHookEx(HHOOK::default(), code, wparam, lparam) }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
