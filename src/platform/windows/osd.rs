@@ -442,8 +442,10 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
 /// Must be called with a valid device context.
 unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
     unsafe {
+        let (font_size, bar_height) = with_metrics(|m| (m.font_size, m.bar_height));
+
         // Create font (use Segoe UI Emoji for proper emoji rendering)
-        let font = create_icon_font();
+        let font = create_icon_font(font_size);
         let old_font = SelectObject(hdc, font);
 
         // Set text properties
@@ -452,7 +454,7 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
 
         // Draw icon
         let wide_text: Vec<u16> = icon.encode_utf16().collect();
-        let text_y = y + (BAR_HEIGHT - FONT_SIZE) / 2;
+        let text_y = y + (bar_height - font_size) / 2;
         TextOutW(hdc, x, text_y, &wide_text);
 
         // Cleanup
@@ -466,10 +468,10 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
 /// # Safety
 ///
 /// The returned `HFONT` must be deleted with `DeleteObject` when no longer needed.
-unsafe fn create_icon_font() -> HFONT {
+unsafe fn create_icon_font(font_size: i32) -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,                 // Height
+            font_size,                 // Height
             0,                         // Width (0 = auto)
             0,                         // Escapement
             0,                         // Orientation
@@ -549,8 +551,10 @@ unsafe fn draw_single_bar(
 /// Must be called with a valid device context.
 unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_align: bool) {
     unsafe {
+        let (font_size, bar_height) = with_metrics(|m| (m.font_size, m.bar_height));
+
         // Create font
-        let font = create_osd_font();
+        let font = create_osd_font(font_size);
         let old_font = SelectObject(hdc, font);
 
         // Set text properties
@@ -566,7 +570,7 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_alig
         let wide_text: Vec<u16> = text.encode_utf16().collect();
 
         // Center text vertically with the bar
-        let text_y = y + (BAR_HEIGHT - FONT_SIZE).saturating_div(2);
+        let text_y = y + (bar_height - font_size).saturating_div(2);
         TextOutW(hdc, x, text_y, &wide_text);
 
         // Restore default alignment and cleanup
@@ -586,8 +590,10 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_alig
 /// Must be called with a valid device context.
 unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
     unsafe {
+        let (font_size, error_row_height) = with_metrics(|m| (m.font_size, m.error_row_height));
+
         // Create font
-        let font = create_osd_font();
+        let font = create_osd_font(font_size);
         let old_font = SelectObject(hdc, font);
 
         // Set text properties - use red color for error visibility
@@ -600,11 +606,13 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
         // Calculate position - centered horizontally, in footer area at bottom
         let width = client_rect.right - client_rect.left;
         // Approximate text width (~7 pixels per character at this font size)
-        let approx_char_width = 7;
+        // Scaling approximation: original was 7px for 18pt font. Ratio ~0.38
+        let approx_char_width = (f64::from(font_size) * 0.38).round() as i32;
         let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
+
         let x = (width - approx_text_width) / 2;
         // Position in error row area: bottom of window minus row height, centered vertically
-        let y = client_rect.bottom - ERROR_ROW_HEIGHT + (ERROR_ROW_HEIGHT - FONT_SIZE) / 2;
+        let y = client_rect.bottom - error_row_height + (error_row_height - font_size) / 2;
 
         TextOutW(hdc, x, y, &wide_text);
 
@@ -619,10 +627,10 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
 /// # Safety
 ///
 /// The returned `HFONT` must be deleted with `DeleteObject` when no longer needed.
-unsafe fn create_osd_font() -> HFONT {
+unsafe fn create_osd_font(font_size: i32) -> HFONT {
     unsafe {
         CreateFontW(
-            FONT_SIZE,                 // Height
+            font_size,                 // Height
             0,                         // Width (0 = auto)
             0,                         // Escapement
             0,                         // Orientation
