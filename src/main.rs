@@ -423,6 +423,46 @@ fn pump_windows_messages() {
     }
 }
 
+/// Initializes the logging subsystem.
+///
+/// Uses `RUST_LOG` environment variable if set, otherwise defaults to
+/// "debug" for debug builds and "info" for release builds.
+fn init_logging() {
+    let default_level = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "info"
+    };
+
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
+        .init();
+
+    log::info!("Brightness Control Tool Starting");
+}
+
+/// Spawns the power event listener thread.
+///
+/// The listener detects system sleep/resume events and sends
+/// `BrightnessMessage::SystemResumed` to trigger a monitor refresh.
+///
+/// # Arguments
+///
+/// * `tx` - Channel sender to notify the main thread of power events.
+fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
+    std::thread::spawn(move || {
+        match PowerEventListener::new(tx) {
+            Ok(listener) => {
+                log::info!("Power event listener started");
+                listener.run_message_loop();
+            }
+            Err(e) => {
+                log::error!(error:% = e; "Failed to create power event listener");
+                // Non-fatal: app works without resume detection
+            }
+        }
+    });
+}
+
 fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> Result<()> {
     // Parse and validate primary hotkeys before spawning thread (fail fast on parse errors)
     let up_hotkey = parse_hotkey(&config.hotkeys.brightness_up)
@@ -506,20 +546,9 @@ fn main() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    // Phase 6, Step 41: Initialize logging
-    // Default to "info" in release and "debug" in debug builds if RUST_LOG is not set.
-    let default_level = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "info"
-    };
+    init_logging();
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
-        .init();
-
-    log::info!("Brightness Control Tool Starting");
-
-    // Phase 6, Step 42: Load configuration
+    // Load configuration
     let config = match Config::load() {
         Ok(cfg) => {
             log::info!("Configuration loaded successfully");
@@ -559,21 +588,9 @@ fn main() {
     controller.handle_refresh();
 
     // Spawn power event listener thread (for sleep/resume detection)
-    let power_tx = tx.clone();
-    std::thread::spawn(move || {
-        match PowerEventListener::new(power_tx) {
-            Ok(listener) => {
-                log::info!("Power event listener started");
-                listener.run_message_loop();
-            }
-            Err(e) => {
-                log::error!(error:% = e; "Failed to create power event listener");
-                // Non-fatal: app works without resume detection
-            }
-        }
-    });
+    spawn_power_listener(tx.clone());
 
-    // Phase 6, Step 44 & 45: Register hotkeys and start hotkey thread
+    // Register hotkeys and start hotkey thread
 
     // Register Ctrl+C handler
     if let Ok(mut guard) = SHUTDOWN_SENDER.lock() {
