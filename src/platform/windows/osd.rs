@@ -95,6 +95,55 @@ const ICON_WIDTH: i32 = 25;
 /// Width reserved for percentage text (e.g., "100%").
 const PERCENT_TEXT_WIDTH: i32 = 45;
 
+/// Metrics for the OSD window, scaled for a specific DPI.
+#[derive(Debug, Clone, Copy)]
+pub struct OsdMetrics {
+    pub width: i32,
+    pub height: i32,
+    pub height_with_error: i32,
+    pub bottom_margin: i32,
+    pub error_row_height: i32,
+    pub padding: i32,
+    pub bar_height: i32,
+    pub bar_gap: i32,
+    pub font_size: i32,
+    pub icon_width: i32,
+    pub percent_text_width: i32,
+}
+
+impl Default for OsdMetrics {
+    fn default() -> Self {
+        Self::for_dpi(96)
+    }
+}
+
+impl OsdMetrics {
+    /// Calculates metrics for the given DPI.
+    ///
+    /// Base values are designed for 96 DPI (100% scaling).
+    #[must_use]
+    pub fn for_dpi(dpi: u32) -> Self {
+        let scale = dpi as f32 / 96.0;
+
+        // Helper to scale and round
+        let s = |val: i32| (val as f32 * scale).round() as i32;
+
+        Self {
+            width: s(OSD_WIDTH),
+            height: s(OSD_HEIGHT),
+            height_with_error: s(OSD_HEIGHT_WITH_ERROR),
+            bottom_margin: s(OSD_BOTTOM_MARGIN),
+            error_row_height: s(ERROR_ROW_HEIGHT),
+            padding: s(OSD_PADDING),
+            bar_height: s(BAR_HEIGHT),
+            bar_gap: s(BAR_GAP),
+            font_size: s(FONT_SIZE),
+            icon_width: s(ICON_WIDTH),
+            percent_text_width: s(PERCENT_TEXT_WIDTH),
+        }
+    }
+}
+
 /// Timer ID for the auto-hide functionality.
 const HIDE_TIMER_ID: usize = 1;
 
