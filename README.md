@@ -24,6 +24,7 @@ Rust (2024 edition) — chosen for cross-platform portability, low resource usag
 ### User Interface
 - OSD overlay (similar to Windows volume indicator)
 - Visual feedback on brightness changes
+- System tray icon with context menu (Settings, Quit)
 
 ## Hotkeys
 - **Primary**: `Ctrl+Shift+Up` / `Ctrl+Shift+Down` (reliable cross-keyboard default)
@@ -98,6 +99,7 @@ The configuration file is automatically created at:
 2. Use `Ctrl+Shift+Up` to increase brightness.
 3. Use `Ctrl+Shift+Down` to decrease brightness.
 4. If brightness reaches 0%, continuing to decrease will activate the dimming overlay.
+5. Right-click the system tray icon to access Settings or Quit.
 
 ## Brightness Key Limitations
 
