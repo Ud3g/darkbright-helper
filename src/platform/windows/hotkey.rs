@@ -240,6 +240,8 @@ pub struct HotkeyManager {
     sender: Sender<BrightnessMessage>,
     /// Brightness step percentage (1-50).
     step_percent: i8,
+    /// Low-level keyboard hook for intercepting brightness keys (optional).
+    keyboard_hook: Option<SafeHook>,
 }
 
 impl HotkeyManager {
@@ -297,6 +299,7 @@ impl HotkeyManager {
             registered_ids: Vec::new(),
             sender,
             step_percent: step_percent.cast_signed(),
+            keyboard_hook: None,
         })
     }
 
@@ -339,6 +342,38 @@ impl HotkeyManager {
             })?;
         }
         self.registered_ids.retain(|&x| x != id);
+        Ok(())
+    }
+
+    /// Installs a low-level keyboard hook to intercept dedicated brightness keys.
+    ///
+    /// This hook captures `VK_BRIGHTNESS_UP` and `VK_BRIGHTNESS_DOWN` before the
+    /// Windows Shell processes them, suppressing the native brightness OSD.
+    ///
+    /// The hook must be installed on the same thread that runs the message loop,
+    /// as Windows delivers hook callbacks to the thread that installed the hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::WindowsApi` if `SetWindowsHookExW` fails.
+    pub fn install_brightness_hook(&mut self) -> Result<()> {
+        // Initialize thread-local context for the hook callback
+        set_hook_context(self.sender.clone(), self.step_percent);
+
+        // Install the low-level keyboard hook
+        // SAFETY: We pass a valid callback function. The hook handle will be
+        // stored in SafeHook which ensures cleanup on drop.
+        let hook = unsafe {
+            SetWindowsHookExW(WH_KEYBOARD_LL, Some(low_level_keyboard_proc), None, 0)
+                .map_err(|e| {
+                    BrightnessError::windows_api("SetWindowsHookExW", e.code().0.cast_unsigned())
+                })?
+        };
+
+        // SAFETY: The hook handle is valid as SetWindowsHookExW succeeded.
+        self.keyboard_hook = Some(unsafe { SafeHook::new(hook) });
+
+        log::debug!("Low-level keyboard hook installed for brightness keys");
         Ok(())
     }
 
