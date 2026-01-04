@@ -166,7 +166,7 @@ fn request_menu_data() -> Option<TrayMenuData> {
     match reply_rx.recv_timeout(MENU_DATA_TIMEOUT) {
         Ok(data) => Some(data),
         Err(e) => {
-            log::warn!("Failed to receive menu data: {e}");
+            log::warn!(error:% = e; "Failed to receive menu data");
             None
         }
     }
@@ -729,7 +729,7 @@ fn handle_menu_selection(cmd: u32) {
             log::debug!("Settings menu item clicked");
             with_tray_sender(|sender| {
                 if let Err(e) = sender.send(BrightnessMessage::TrayOpenSettings) {
-                    log::error!("Failed to send TrayOpenSettings: {e}");
+                    log::error!(error:% = e; "Failed to send TrayOpenSettings");
                 }
             });
         }
@@ -737,12 +737,12 @@ fn handle_menu_selection(cmd: u32) {
             log::debug!("Quit menu item clicked");
             with_tray_sender(|sender| {
                 if let Err(e) = sender.send(BrightnessMessage::TrayRequestQuit) {
-                    log::error!("Failed to send TrayRequestQuit: {e}");
+                    log::error!(error:% = e; "Failed to send TrayRequestQuit");
                 }
             });
         }
         _ => {
-            log::debug!("Unknown menu item: {cmd}");
+            log::debug!(menu_id = cmd; "Unknown menu item");
         }
     }
 }

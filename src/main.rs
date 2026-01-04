@@ -591,8 +591,8 @@ fn spawn_tray_thread(tx: mpsc::Sender<BrightnessMessage>) {
                 }
             }
             Err(e) => {
-                log::error!(error:% = e; "Failed to create system tray icon");
                 // Non-fatal: app works without tray icon
+                log::warn!(error:% = e; "Failed to create system tray icon, continuing without it");
             }
         }
     });
