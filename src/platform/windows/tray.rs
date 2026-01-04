@@ -19,14 +19,17 @@ use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
     NOTIFY_ICON_DATA_FLAGS, Shell_NotifyIconW,
 };
+use windows::Win32::Graphics::Gdi::HFONT;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, GetMessageW, HICON, HMENU, HWND_MESSAGE, IMAGE_ICON, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY,
-    WM_NULL, WNDCLASSEXW, WS_OVERLAPPED,
+    GetCursorPos, GetMenuItemRect, GetMessageW, HICON, HMENU, HWND_MESSAGE, IMAGE_ICON,
+    LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING,
+    MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WM_DESTROY, WM_EXITMENULOOP, WM_MENUSELECT, WM_NULL, WM_USER, WNDCLASSEXW,
+    WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP,
 };
+use windows::Win32::Foundation::RECT;
 use windows::core::{PCWSTR, w};
 
 use crate::core::state::{BrightnessMessage, TrayMenuData};
@@ -76,6 +79,46 @@ const APP_NAME: &str = "Brightness Control";
 const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tooltip Constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tooltip window class name.
+const TOOLTIPS_CLASS: &str = "tooltips_class32";
+
+/// Tooltip style: Always show tip even if window is not active.
+const TTS_ALWAYSTIP: u32 = 0x01;
+
+/// Tooltip style: Prevent prefix characters from being stripped.
+const TTS_NOPREFIX: u32 = 0x02;
+
+/// Tooltip message: Set maximum width (enables multi-line).
+const TTM_SETMAXTIPWIDTH: u32 = WM_USER + 24;
+
+/// Tooltip message: Activate/deactivate tracking tooltip.
+const TTM_TRACKACTIVATE: u32 = WM_USER + 17;
+
+/// Tooltip message: Set position of tracking tooltip.
+const TTM_TRACKPOSITION: u32 = WM_USER + 18;
+
+/// Tooltip message: Add a tool (Unicode).
+const TTM_ADDTOOLW: u32 = WM_USER + 50;
+
+/// Tooltip message: Update tooltip text (Unicode).
+const TTM_UPDATETIPTEXTW: u32 = WM_USER + 57;
+
+/// Tool flag: Tooltip is positioned by TTM_TRACKPOSITION.
+const TTF_TRACK: u32 = 0x0020;
+
+/// Tool flag: Position is absolute screen coordinates.
+const TTF_ABSOLUTE: u32 = 0x0080;
+
+/// Tool flag: uId is an HWND.
+const TTF_IDISHWND: u32 = 0x0001;
+
+/// Maximum tooltip width in pixels.
+const TOOLTIP_MAX_WIDTH: i32 = 350;
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Thread-Local Sender Storage
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -83,6 +126,15 @@ thread_local! {
     /// Thread-local storage for the message sender.
     /// This allows the window procedure to send messages to the main thread.
     static TRAY_SENDER: RefCell<Option<Sender<BrightnessMessage>>> = const { RefCell::new(None) };
+
+    /// Thread-local storage for the tooltip window handle.
+    static TRAY_TOOLTIP: RefCell<Option<HWND>> = const { RefCell::new(None) };
+
+    /// Thread-local storage for the tooltip text (built from hotkeys).
+    static TRAY_TOOLTIP_TEXT: RefCell<String> = const { RefCell::new(String::new()) };
+
+    /// Thread-local storage for the currently active menu handle.
+    static TRAY_ACTIVE_MENU: RefCell<Option<HMENU>> = const { RefCell::new(None) };
 }
 
 /// Sets the thread-local sender for the tray icon callbacks.
@@ -123,6 +175,254 @@ fn request_menu_data() -> Option<TrayMenuData> {
             None
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tooltip Support
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// TOOLINFOW structure for tooltip operations.
+/// Using raw struct since windows crate may not expose it directly.
+#[repr(C)]
+#[allow(non_snake_case)]
+struct TOOLINFOW {
+    cbSize: u32,
+    uFlags: u32,
+    hwnd: HWND,
+    uId: usize,
+    rect: RECT,
+    hinst: windows::Win32::Foundation::HINSTANCE,
+    lpszText: *mut u16,
+    lParam: LPARAM,
+    lpReserved: *mut std::ffi::c_void,
+}
+
+/// Creates a tracking tooltip window.
+///
+/// # Arguments
+///
+/// * `parent` - Parent window handle for the tooltip.
+///
+/// # Returns
+///
+/// The tooltip window handle, or `None` if creation failed.
+fn create_tooltip(parent: HWND) -> Option<HWND> {
+    let class_wide: Vec<u16> = TOOLTIPS_CLASS.encode_utf16().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let hwnd = CreateWindowExW(
+            WS_EX_TOPMOST,
+            PCWSTR(class_wide.as_ptr()),
+            PCWSTR::null(),
+            WS_POPUP | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(TTS_ALWAYSTIP | TTS_NOPREFIX),
+            0, 0, 0, 0,
+            parent,
+            None,
+            GetModuleHandleW(None).ok()?,
+            None,
+        );
+
+        if hwnd.0 == 0 {
+            log::warn!("Failed to create tooltip window");
+            return None;
+        }
+
+        // Set maximum width to enable multi-line tooltips
+        SendMessageW(hwnd, TTM_SETMAXTIPWIDTH, WPARAM(0), LPARAM(TOOLTIP_MAX_WIDTH as isize));
+
+        // Add a tool for the parent window
+        let mut ti = TOOLINFOW {
+            cbSize: u32::try_from(std::mem::size_of::<TOOLINFOW>()).unwrap_or(0),
+            uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
+            hwnd: parent,
+            uId: parent.0 as usize,
+            rect: RECT::default(),
+            hinst: windows::Win32::Foundation::HINSTANCE::default(),
+            lpszText: std::ptr::null_mut(),
+            lParam: LPARAM(0),
+            lpReserved: std::ptr::null_mut(),
+        };
+
+        SendMessageW(
+            hwnd,
+            TTM_ADDTOOLW,
+            WPARAM(0),
+            LPARAM(&raw mut ti as isize),
+        );
+
+        log::debug!("Tooltip window created");
+        Some(hwnd)
+    }
+}
+
+/// Stores the tooltip text (built from hotkeys) for later use.
+fn set_tooltip_text(hotkey_up: &str, hotkey_down: &str) {
+    let text = format!(
+        "1. Move mouse to desired monitor\n2. Press {} (brighter) or {} (dimmer)",
+        hotkey_up, hotkey_down
+    );
+    TRAY_TOOLTIP_TEXT.with(|t| {
+        *t.borrow_mut() = text;
+    });
+}
+
+/// Shows the tooltip at the specified screen position.
+///
+/// # Arguments
+///
+/// * `tooltip_hwnd` - The tooltip window handle.
+/// * `parent` - Parent window handle.
+/// * `x`, `y` - Screen coordinates to position the tooltip.
+fn show_tooltip_at(tooltip_hwnd: HWND, parent: HWND, x: i32, y: i32) {
+    TRAY_TOOLTIP_TEXT.with(|text_cell| {
+        let text = text_cell.borrow();
+        if text.is_empty() {
+            return;
+        }
+
+        let mut text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        unsafe {
+            // Update the tooltip text
+            let mut ti = TOOLINFOW {
+                cbSize: u32::try_from(std::mem::size_of::<TOOLINFOW>()).unwrap_or(0),
+                uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
+                hwnd: parent,
+                uId: parent.0 as usize,
+                rect: RECT::default(),
+                hinst: windows::Win32::Foundation::HINSTANCE::default(),
+                lpszText: text_wide.as_mut_ptr(),
+                lParam: LPARAM(0),
+                lpReserved: std::ptr::null_mut(),
+            };
+
+            SendMessageW(
+                tooltip_hwnd,
+                TTM_UPDATETIPTEXTW,
+                WPARAM(0),
+                LPARAM(&raw mut ti as isize),
+            );
+
+            // Position the tooltip
+            let coords = ((y as u32) << 16) | (x as u32 & 0xFFFF);
+            SendMessageW(
+                tooltip_hwnd,
+                TTM_TRACKPOSITION,
+                WPARAM(0),
+                LPARAM(coords as isize),
+            );
+
+            // Activate tracking
+            ti.lpszText = std::ptr::null_mut(); // Not needed for activate
+            SendMessageW(
+                tooltip_hwnd,
+                TTM_TRACKACTIVATE,
+                WPARAM(1), // TRUE = activate
+                LPARAM(&raw mut ti as isize),
+            );
+        }
+    });
+}
+
+/// Hides the tracking tooltip.
+///
+/// # Arguments
+///
+/// * `tooltip_hwnd` - The tooltip window handle.
+/// * `parent` - Parent window handle.
+fn hide_tooltip(tooltip_hwnd: HWND, parent: HWND) {
+    unsafe {
+        let ti = TOOLINFOW {
+            cbSize: u32::try_from(std::mem::size_of::<TOOLINFOW>()).unwrap_or(0),
+            uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
+            hwnd: parent,
+            uId: parent.0 as usize,
+            rect: RECT::default(),
+            hinst: windows::Win32::Foundation::HINSTANCE::default(),
+            lpszText: std::ptr::null_mut(),
+            lParam: LPARAM(0),
+            lpReserved: std::ptr::null_mut(),
+        };
+
+        SendMessageW(
+            tooltip_hwnd,
+            TTM_TRACKACTIVATE,
+            WPARAM(0), // FALSE = deactivate
+            LPARAM(&raw const ti as isize),
+        );
+    }
+}
+
+/// Handles menu item hover events for tooltip display.
+///
+/// # Arguments
+///
+/// * `hwnd` - The tray window handle.
+/// * `wparam` - Contains menu item index and flags.
+fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
+    // Extract item index and flags from wparam
+    #[allow(clippy::cast_possible_truncation)]
+    let item_index = (wparam.0 & 0xFFFF) as u16;
+    #[allow(clippy::cast_possible_truncation)]
+    let flags = ((wparam.0 >> 16) & 0xFFFF) as u16;
+
+    // MF_MOUSESELECT flag indicates mouse hover
+    const MF_HILITE: u16 = 0x0080;
+    const MF_POPUP: u16 = 0x0010;
+
+    // Check if this is a valid item selection (not popup, not closed)
+    let is_valid_selection = (flags & MF_HILITE) != 0 && (flags & MF_POPUP) == 0 && flags != 0xFFFF;
+
+    // Check if this is a monitor item (ID >= MENU_ID_MONITOR_BASE)
+    let is_monitor_item = item_index as u32 >= MENU_ID_MONITOR_BASE - MENU_ID_MONITOR_BASE
+        && is_valid_selection;
+
+    // Get the actual menu item ID by checking if it's in the monitor range
+    let menu_id = item_index as u32;
+    let is_monitor = menu_id >= MENU_ID_MONITOR_BASE && menu_id < MENU_ID_MONITOR_BASE + 100;
+
+    TRAY_TOOLTIP.with(|tooltip_cell| {
+        let tooltip_opt = tooltip_cell.borrow();
+        let Some(tooltip_hwnd) = *tooltip_opt else {
+            return;
+        };
+
+        if is_monitor && is_valid_selection {
+            // Show tooltip near the menu item
+            TRAY_ACTIVE_MENU.with(|menu_cell| {
+                let menu_opt = menu_cell.borrow();
+                let Some(hmenu) = *menu_opt else {
+                    return;
+                };
+
+                // Get menu item rectangle
+                let mut rect = RECT::default();
+                unsafe {
+                    if GetMenuItemRect(hwnd, hmenu, item_index as u32, &raw mut rect).is_ok() {
+                        // Position tooltip to the right of the menu item
+                        show_tooltip_at(tooltip_hwnd, hwnd, rect.right + 5, rect.top);
+                    }
+                }
+            });
+        } else {
+            // Hide tooltip when not hovering a monitor item
+            hide_tooltip(tooltip_hwnd, hwnd);
+        }
+    });
+}
+
+/// Cleans up tooltip when menu closes.
+fn handle_menu_exit(hwnd: HWND) {
+    TRAY_TOOLTIP.with(|tooltip_cell| {
+        let tooltip_opt = tooltip_cell.borrow();
+        if let Some(tooltip_hwnd) = *tooltip_opt {
+            hide_tooltip(tooltip_hwnd, hwnd);
+        }
+    });
+
+    TRAY_ACTIVE_MENU.with(|menu_cell| {
+        *menu_cell.borrow_mut() = None;
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,6 +616,25 @@ fn show_context_menu(hwnd: HWND) {
         // Request current monitor data from main thread
         let menu_data = request_menu_data();
 
+        // Create tooltip if we have monitor data with hotkeys
+        if let Some(ref data) = menu_data {
+            // Store tooltip text from hotkeys
+            set_tooltip_text(&data.hotkey_up, &data.hotkey_down);
+
+            // Create tooltip window if not exists
+            TRAY_TOOLTIP.with(|tooltip_cell| {
+                let mut tooltip_opt = tooltip_cell.borrow_mut();
+                if tooltip_opt.is_none() {
+                    *tooltip_opt = create_tooltip(hwnd);
+                }
+            });
+        }
+
+        // Store menu handle for GetMenuItemRect calls
+        TRAY_ACTIVE_MENU.with(|menu_cell| {
+            *menu_cell.borrow_mut() = Some(hmenu);
+        });
+
         // Add monitor info rows at the top (disabled/non-clickable)
         if let Some(ref data) = menu_data {
             for (index, monitor) in data.monitors.iter().enumerate() {
@@ -492,6 +811,14 @@ unsafe extern "system" fn tray_wnd_proc(
             WM_TRAY_CALLBACK => {
                 handle_tray_callback(hwnd, lparam);
                 LRESULT(0)
+            }
+            WM_MENUSELECT => {
+                handle_menu_select(hwnd, wparam);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_EXITMENULOOP => {
+                handle_menu_exit(hwnd);
+                DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_DESTROY => {
                 log::debug!("Tray window WM_DESTROY received");
