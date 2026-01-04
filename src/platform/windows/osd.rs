@@ -98,21 +98,31 @@ const BASE_PERCENT_TEXT_WIDTH: i32 = 45;
 /// Metrics for the OSD window, scaled for a specific DPI.
 #[derive(Debug, Clone, Copy)]
 pub struct OsdMetrics {
+    /// OSD window width in pixels.
     pub width: i32,
+    /// OSD window height in pixels (compact mode).
     pub height: i32,
+    /// OSD window height when displaying an error message (expanded mode).
     pub height_with_error: i32,
+    /// Margin from the bottom of the monitor in pixels.
     pub bottom_margin: i32,
+    /// Height reserved for the error message row.
     pub error_row_height: i32,
+    /// Padding inside the OSD window.
     pub padding: i32,
+    /// Height of the progress bar.
     pub bar_height: i32,
+    /// Gap between the left (overlay) and right (hardware) bar sections.
     pub bar_gap: i32,
+    /// Font size for text elements.
     pub font_size: i32,
+    /// Width reserved for each icon.
     pub icon_width: i32,
+    /// Width reserved for percentage text (e.g., "100%").
     pub percent_text_width: i32,
 }
 
 impl Default for OsdMetrics {
-    #[must_use]
     fn default() -> Self {
         Self::for_dpi(96)
     }
@@ -681,6 +691,7 @@ fn update_osd_metrics(dpi: u32) {
 }
 
 /// Executes a closure with the current OSD metrics.
+#[inline]
 fn with_metrics<R>(f: impl FnOnce(&OsdMetrics) -> R) -> R {
     OSD_METRICS.with(|m| f(&m.borrow()))
 }
