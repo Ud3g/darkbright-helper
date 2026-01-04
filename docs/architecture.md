@@ -176,6 +176,8 @@ Hotkeys affect the monitor containing the mouse cursor:
 | Inconsistent HID translation | Some keyboards send Consumer Control codes Windows doesn't map to VK codes |
 | `RegisterHotKey` compatibility | Uncertain support for special VK codes |
 
+**Important Limitation:** On most laptops, brightness keys are handled by the Embedded Controller (EC) or ACPI firmware *before* they reach the Windows input system. The low-level keyboard hook (`WH_KEYBOARD_LL`) is the lowest interception point available in user-mode Windows, but it cannot capture keys that never enter the keyboard input pipeline. For these keyboards, the native Windows brightness OSD will appear regardless of hook installation, and the `intercept_brightness_keys` option will have no effect.
+
 **Implementation:**
 
 Primary hotkey registration failures are fatal. The application displays an error message box explaining the failure and suggesting solutions, then exits.

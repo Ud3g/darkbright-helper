@@ -74,7 +74,7 @@ The configuration file is automatically created at:
 
 ### Options
 - **hotkeys.brightness_up/down**: Combination strings (e.g., "Alt+F1", "Ctrl+Shift+Plus").
-- **hotkeys.intercept_brightness_keys**: Enable low-level keyboard hook to capture dedicated brightness keys (default: false). Enable if your keyboard has brightness keys and you want them to use this tool instead of the Windows default. Note: Some antivirus software may flag this behavior.
+- **hotkeys.intercept_brightness_keys**: Enable low-level keyboard hook to capture dedicated brightness keys (default: false). See [Brightness Key Limitations](#brightness-key-limitations) for compatibility information.
 - **osd.timeout_ms**: How long the OSD remains visible (100-10000 ms).
 - **osd.opacity**: OSD window transparency (0.1-1.0).
 - **brightness.step_percent**: Amount to change per keypress (1-50%).
@@ -87,6 +87,27 @@ The configuration file is automatically created at:
 2. Use `Ctrl+Shift+Up` to increase brightness.
 3. Use `Ctrl+Shift+Down` to decrease brightness.
 4. If brightness reaches 0%, continuing to decrease will activate the dimming overlay.
+
+## Brightness Key Limitations
+
+The `intercept_brightness_keys` option attempts to capture dedicated brightness keys (`VK_BRIGHTNESS_UP`/`VK_BRIGHTNESS_DOWN`) using a low-level keyboard hook.
+
+**This feature only works on keyboards that send brightness keys through the standard Windows keyboard input path.**
+
+| Keyboard Type | Works? | Reason |
+|---------------|--------|--------|
+| Most laptop built-in keyboards | ❌ No | Keys handled by firmware/ACPI before reaching Windows |
+| Some external USB keyboards | ✅ Yes | Keys sent as standard HID key codes |
+| Gaming keyboards with media keys | ⚠️ Maybe | Depends on manufacturer implementation |
+
+**If your brightness keys don't work with this option:**
+- Your keyboard's brightness keys are intercepted by firmware or a dedicated driver before Windows sees them
+- The native Windows brightness OSD will still appear regardless of this setting
+- Use the primary hotkeys (`Ctrl+Shift+Up/Down`) instead
+
+**Notes:**
+- Some antivirus software may flag low-level keyboard hooks as suspicious behavior
+- Disabled by default to avoid false positives for users who don't need the feature
 
 ## Future
 
