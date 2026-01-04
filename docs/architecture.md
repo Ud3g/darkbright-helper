@@ -41,7 +41,9 @@ src/
     │   ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
     │   ├── hotkey.rs     # RegisterHotKey API
     │   ├── overlay.rs    # Dimming overlay window
-    │   └── osd.rs        # On-screen display
+    │   ├── osd.rs        # On-screen display
+    │   ├── power.rs      # Power event listener (sleep/resume)
+    │   └── tray.rs       # System tray icon and menu
     └── linux/            # #[cfg(target_os = "linux")] - Future
         └── mod.rs
 ```
@@ -68,19 +70,19 @@ Dedicated threads for I/O, main thread owns state and UI:
                │                              │
       BrightnessMessage                  DdcCommand
                │                              │
-    ┌──────────┼──────────┐                   │
-    │          │          │                   │
-┌───────────┐ ┌───────────┐ ┌─────────────────┴───────────────┐
-│  Hotkey   │ │  Power    │ │       DDC Worker Thread         │
-│  Thread   │ │  Thread   │ │  ┌───────────────────────────┐  │
-│           │ │           │ │  │  - owns Vec<DdcMonitor>   │  │
-│ send()    │ │ send()    │ │  │  - executes DDC I/O       │  │
-│  │        │ │  │        │ │  │  - sends results back     │  │
-│  │        │ │  │        │ │  └───────────────────────────┘  │
-└──┼────────┘ └──┼────────┘ └─────────────────────────────────┘
-   │             │                        │
-   └─────────────┴────────────────────────┘
-          (all send BrightnessMessage)
+    ┌──────────┼──────────┬──────────┐        │
+    │          │          │          │        │
+┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───┴───────────────────────────┐
+│  Hotkey   │ │  Power    │ │   Tray    │ │       DDC Worker Thread       │
+│  Thread   │ │  Thread   │ │  Thread   │ │  ┌───────────────────────┐    │
+│           │ │           │ │           │ │  │  - owns Vec<DdcMonitor>│   │
+│ send()    │ │ send()    │ │ send()    │ │  │  - executes DDC I/O   │    │
+│  │        │ │  │        │ │  │        │ │  │  - sends results back │    │
+│  │        │ │  │        │ │  │        │ │  └───────────────────────┘    │
+└──┼────────┘ └──┼────────┘ └──┼────────┘ └───────────────────────────────┘
+   │             │             │                      │
+   └─────────────┴─────────────┴──────────────────────┘
+              (all send BrightnessMessage)
 ```
 
 **Rationale:**
@@ -88,6 +90,7 @@ Dedicated threads for I/O, main thread owns state and UI:
 - DDC/CI operations are inherently blocking (~40-120ms per operation)
 - DDC worker thread keeps main thread responsive for OSD/overlay updates
 - Power thread listens for system resume events (sleep/hibernate wake)
+- Tray thread handles system tray icon and context menu
 - Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
@@ -96,13 +99,17 @@ Dedicated threads for I/O, main thread owns state and UI:
 Message-passing with single ownership:
 
 ```rust
-// Messages TO main thread (from hotkey thread or DDC worker)
+// Messages TO main thread (from hotkey thread, DDC worker, power thread, or tray thread)
 enum BrightnessMessage {
     Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
     SetAbsolute { monitor_id: Option<MonitorId>, value: u8 }, // None = monitor under cursor
     DdcSetResult { monitor_id, value, success, error },       // DDC worker → main
     DdcRefreshResult { monitors: Vec<(MonitorId, u8)> },      // DDC worker → main
     Refresh,
+    SystemResumed,                                            // Power thread → main
+    TrayOpenSettings,                                         // Tray thread → main
+    TrayRequestQuit,                                          // Tray thread → main
+    TrayMenuOpening { reply_tx: Sender<TrayMenuData> },       // Tray thread ↔ main (request/response)
     Shutdown,
 }
 
@@ -639,11 +646,11 @@ Since DDC/CI requires physical monitor hardware, refresh functionality must be t
 - [x] OSD feedback indicator
 - [x] JSON configuration persistence
 - [x] Windows 10/11 support
+- [x] System tray icon with context menu
 
 ### Deferred (v2.0+)
 - [ ] Custom hotkey configuration UI
 - [ ] Linux support (X11/Wayland)
-- [ ] System tray icon
 - [ ] Settings GUI
 - [ ] Brightness profiles/schedules
 
