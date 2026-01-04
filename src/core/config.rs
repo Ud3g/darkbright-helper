@@ -22,7 +22,7 @@ pub const DEFAULT_HOTKEY_DOWN: &str = "Ctrl+Shift+Down";
 /// Default OSD timeout in milliseconds.
 pub const DEFAULT_OSD_TIMEOUT_MS: u32 = 1000;
 /// Default OSD opacity (0.0-1.0).
-pub const DEFAULT_OSD_OPACITY: f32 = 0.8;
+pub const DEFAULT_OSD_OPACITY: f32 = 1.0;
 /// Default brightness step percentage.
 pub const DEFAULT_STEP_PERCENT: u8 = 5;
 /// Default periodic refresh interval in seconds (0 = disabled).

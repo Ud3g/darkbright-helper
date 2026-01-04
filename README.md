@@ -60,7 +60,7 @@ The configuration file is automatically created at:
   },
   "osd": {
     "timeout_ms": 1000,
-    "opacity": 0.8
+    "opacity": 1.0
   },
   "brightness": {
     "step_percent": 5

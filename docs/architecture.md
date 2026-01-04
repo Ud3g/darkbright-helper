@@ -301,7 +301,7 @@ Example log output for invalid config:
 |--------|----------|-----------|
 | **Position** | Bottom-center | Familiar (matches Windows volume OSD); users expect system feedback here |
 | **Style** | Semi-transparent minimal | Clean, unobtrusive; visibility on any background |
-| **Opacity** | Configurable (`osd.opacity`, default 0.8) | User preference; avoids hardcoded magic numbers |
+| **Opacity** | Configurable (`osd.opacity`, default 1.0) | User preference; avoids hardcoded magic numbers |
 | **Timeout** | 1000ms after last keystroke | Short enough to not obstruct; resets on repeated adjustments |
 | **Animation** | None (MVP) | Simplicity; animations deferred to future release |
 | **Error state** | Red-tinted bar + message | Clear feedback when DDC fails; see below |
