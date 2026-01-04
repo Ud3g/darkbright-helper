@@ -40,3 +40,6 @@ dirs-next = "2.0"
 [lints.clippy]
 all = "warn"
 pedantic = "warn"
+
+[build-dependencies]
+winres = "0.1"
