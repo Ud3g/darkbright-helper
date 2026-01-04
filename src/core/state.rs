@@ -4,6 +4,7 @@
 //! including monitor identification, per-monitor state, inter-thread messages,
 //! and DDC worker communication types.
 
+use std::sync::mpsc::Sender;
 use std::time::Instant;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -125,6 +126,32 @@ impl Default for MonitorState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tray Menu Data
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Information about a single monitor for display in the tray menu.
+#[derive(Debug, Clone)]
+pub struct TrayMonitorInfo {
+    /// Display name with optional index suffix (e.g., "Dell U2722D" or "Dell U2722D #1").
+    pub display_name: String,
+    /// Current hardware brightness value (0-100).
+    pub hardware_brightness: u8,
+    /// Current overlay opacity (0-100, where 0 = invisible).
+    pub overlay_opacity: u8,
+}
+
+/// Data sent from the main thread to the tray thread for menu population.
+#[derive(Debug, Clone)]
+pub struct TrayMenuData {
+    /// List of monitors with their current brightness/overlay state.
+    pub monitors: Vec<TrayMonitorInfo>,
+    /// Configured hotkey string for brightness up (e.g., "Ctrl+Shift+Up").
+    pub hotkey_up: String,
+    /// Configured hotkey string for brightness down (e.g., "Ctrl+Shift+Down").
+    pub hotkey_down: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Inter-Thread Messages
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -172,6 +199,27 @@ pub enum BrightnessMessage {
     /// Triggers a refresh to resync with monitors that may have
     /// reset their brightness during sleep.
     SystemResumed,
+
+    // ── Tray Icon Messages ───────────────────────────────────────────────
+    /// User clicked the "Settings" menu item in the tray menu.
+    ///
+    /// The main thread should open the config file with the system default editor.
+    TrayOpenSettings,
+
+    /// User clicked the "Quit" menu item in the tray menu.
+    ///
+    /// Triggers graceful application shutdown.
+    TrayRequestQuit,
+
+    /// Tray thread requests current monitor state for menu population.
+    ///
+    /// The main thread should respond by sending `TrayMenuData` through
+    /// the provided channel.
+    TrayMenuOpening {
+        /// Channel to send the menu data back to the tray thread.
+        reply_tx: Sender<TrayMenuData>,
+    },
+
     /// Shutdown the application gracefully.
     Shutdown,
 }
