@@ -25,8 +25,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING,
     MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow,
     TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WM_DESTROY, WM_EXITMENULOOP, WM_MENUSELECT, WM_NULL, WM_USER, WNDCLASSEXW,
-    WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP,
+    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_EXITMENULOOP, WM_MENUSELECT, WM_NULL,
+    WM_USER, WNDCLASSEXW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -39,11 +39,11 @@ use super::{SafeHwnd, last_error_as_brightness_error};
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Unique identifier for the tray icon (used with Shell_NotifyIconW).
+/// Unique identifier for the tray icon (used with `Shell_NotifyIconW`).
 const TRAY_ICON_ID: u32 = 1;
 
 /// Custom window message for tray icon callbacks.
-/// Using WM_APP + offset to avoid conflicts with system messages.
+/// Using `WM_APP` + offset to avoid conflicts with system messages.
 const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 100;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ const MENU_ID_SETTINGS: u32 = 1001;
 const MENU_ID_QUIT: u32 = 1002;
 
 /// Base ID for monitor info rows (non-clickable).
-/// Each monitor uses MENU_ID_MONITOR_BASE + index.
+/// Each monitor uses `MENU_ID_MONITOR_BASE` + index.
 const MENU_ID_MONITOR_BASE: u32 = 2000;
 
 /// Tooltip text shown when hovering over the tray icon.
@@ -101,7 +101,7 @@ const TTM_ADDTOOLW: u32 = WM_USER + 50;
 /// Tooltip message: Update tooltip text (Unicode).
 const TTM_UPDATETIPTEXTW: u32 = WM_USER + 57;
 
-/// Tool flag: Tooltip is positioned by TTM_TRACKPOSITION.
+/// Tool flag: Tooltip is positioned by `TTM_TRACKPOSITION`.
 const TTF_TRACK: u32 = 0x0020;
 
 /// Tool flag: Position is absolute screen coordinates.
@@ -262,8 +262,7 @@ fn create_tooltip(parent: HWND) -> Option<HWND> {
 /// Stores the tooltip text (built from hotkeys) for later use.
 fn set_tooltip_text(hotkey_up: &str, hotkey_down: &str) {
     let text = format!(
-        "1. Move mouse to desired monitor\n2. Press {} (brighter) or {} (dimmer)",
-        hotkey_up, hotkey_down
+        "1. Move mouse to desired monitor\n2. Press {hotkey_up} (brighter) or {hotkey_down} (dimmer)"
     );
     TRAY_TOOLTIP_TEXT.with(|t| {
         *t.borrow_mut() = text;
@@ -364,22 +363,22 @@ fn hide_tooltip(tooltip_hwnd: HWND, parent: HWND) {
 /// * `hwnd` - The tray window handle.
 /// * `wparam` - Contains menu item index and flags.
 fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
+    // MF_MOUSESELECT flag indicates mouse hover
+    const MF_HILITE: u16 = 0x0080;
+    const MF_POPUP: u16 = 0x0010;
+
     // Extract item index and flags from wparam
     #[allow(clippy::cast_possible_truncation)]
     let item_index = (wparam.0 & 0xFFFF) as u16;
     #[allow(clippy::cast_possible_truncation)]
     let flags = ((wparam.0 >> 16) & 0xFFFF) as u16;
 
-    // MF_MOUSESELECT flag indicates mouse hover
-    const MF_HILITE: u16 = 0x0080;
-    const MF_POPUP: u16 = 0x0010;
-
     // Check if this is a valid item selection (not popup, not closed)
     let is_valid_selection = (flags & MF_HILITE) != 0 && (flags & MF_POPUP) == 0 && flags != 0xFFFF;
 
     // Get the actual menu item ID by checking if it's in the monitor range
     let menu_id = u32::from(item_index);
-    let is_monitor = menu_id >= MENU_ID_MONITOR_BASE && menu_id < MENU_ID_MONITOR_BASE + 100;
+    let is_monitor = (MENU_ID_MONITOR_BASE..MENU_ID_MONITOR_BASE + 100).contains(&menu_id);
 
     TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
         let tooltip_opt = tooltip_cell.borrow();
@@ -473,7 +472,7 @@ fn load_icon_from_resource() -> Result<HICON> {
             LR_DEFAULTSIZE | LR_SHARED,
         )
         .map_err(|e| {
-            BrightnessError::tray_icon_creation(format!("LoadImageW (resource) failed: {}", e))
+            BrightnessError::tray_icon_creation(format!("LoadImageW (resource) failed: {e}"))
         })?;
 
         Ok(HICON(handle.0))
@@ -507,8 +506,7 @@ fn load_icon_from_file() -> Result<HICON> {
         )
         .map_err(|e| {
             BrightnessError::tray_icon_creation(format!(
-                "LoadImageW (file '{}') failed: {}",
-                path_str, e
+                "LoadImageW (file '{path_str}') failed: {e}"
             ))
         })?;
 
@@ -588,10 +586,10 @@ fn remove_tray_icon(hwnd: HWND) {
     };
 
     unsafe {
-        if !Shell_NotifyIconW(NIM_DELETE, &raw const nid).as_bool() {
-            log::warn!("Failed to remove tray icon");
-        } else {
+        if Shell_NotifyIconW(NIM_DELETE, &raw const nid).as_bool() {
             log::debug!("Tray icon removed from notification area");
+        } else {
+            log::warn!("Failed to remove tray icon");
         }
     }
 }
@@ -912,7 +910,7 @@ impl TrayIcon {
             })?;
 
             let hwnd = CreateWindowExW(
-                Default::default(), // No extended styles needed
+                WINDOW_EX_STYLE::default(), // No extended styles needed
                 class_name,
                 w!("BrightnessControlTray"),
                 WS_OVERLAPPED, // Minimal style for message-only window
