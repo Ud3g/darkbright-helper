@@ -76,6 +76,16 @@ pub struct HotkeyConfig {
     /// Hotkey string for brightness down (e.g., "Ctrl+Shift+Down").
     #[serde(default = "default_hotkey_down")]
     pub brightness_down: String,
+    /// Enable low-level keyboard hook to intercept dedicated brightness keys.
+    ///
+    /// When enabled, the application installs a `WH_KEYBOARD_LL` hook to capture
+    /// `VK_BRIGHTNESS_UP` and `VK_BRIGHTNESS_DOWN` keys before the Windows Shell
+    /// handles them, suppressing the native brightness OSD.
+    ///
+    /// **Note:** Some antivirus software may flag low-level keyboard hooks as
+    /// suspicious behavior. Disabled by default to avoid false positives.
+    #[serde(default)]
+    pub intercept_brightness_keys: bool,
 }
 
 /// Per-monitor configuration (reserved for future use).
@@ -176,6 +186,7 @@ impl Default for HotkeyConfig {
         Self {
             brightness_up: default_hotkey_up(),
             brightness_down: default_hotkey_down(),
+            intercept_brightness_keys: false,
         }
     }
 }
