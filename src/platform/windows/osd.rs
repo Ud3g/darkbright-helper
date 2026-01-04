@@ -18,19 +18,19 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::Graphics::Dwm::{
-    DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteDC, DeleteObject,
     EndPaint, FF_DONTCARE, FW_NORMAL, FillRect, GetMonitorInfoW, HDC, HFONT, HMONITOR,
-    InvalidateRect, MONITORINFO, MonitorFromWindow, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
+    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, OUT_DEFAULT_PRECIS,
     PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextAlign, SetTextColor, TA_LEFT, TA_RIGHT,
     TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, GetClientRect,
     HWND_TOPMOST, KillTimer, LWA_ALPHA, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
@@ -329,13 +329,11 @@ unsafe fn draw_hardware_section(
         // Calculate layout positions
         // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
         let content_width = width - (OSD_PADDING * 2);
-        let total_bar_width =
-            content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
+        let total_bar_width = content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
         let single_bar_width = total_bar_width / 2;
 
         // Right bar starts after: pad + pct + ico + left_bar + gap
-        let bar_left =
-            OSD_PADDING + PERCENT_TEXT_WIDTH + ICON_WIDTH + single_bar_width + BAR_GAP;
+        let bar_left = OSD_PADDING + PERCENT_TEXT_WIDTH + ICON_WIDTH + single_bar_width + BAR_GAP;
 
         // Draw the bar (fills left-to-right)
         draw_single_bar(
@@ -367,20 +365,14 @@ unsafe fn draw_hardware_section(
 /// # Safety
 ///
 /// Must be called with a valid device context.
-unsafe fn draw_overlay_section(
-    hdc: HDC,
-    client_rect: &RECT,
-    bar_top: i32,
-    overlay_opacity: u8,
-) {
+unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overlay_opacity: u8) {
     unsafe {
         let width = client_rect.right - client_rect.left;
 
         // Calculate layout positions
         // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
         let content_width = width - (OSD_PADDING * 2);
-        let total_bar_width =
-            content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
+        let total_bar_width = content_width - (PERCENT_TEXT_WIDTH * 2) - (ICON_WIDTH * 2) - BAR_GAP;
         let single_bar_width = total_bar_width / 2;
 
         // Left bar starts after: pad + pct + ico
@@ -786,16 +778,9 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> 
         let x = rect.left + (monitor_width - width) / 2;
         let y = rect.bottom - height - bottom_margin;
 
-        SetWindowPos(
-            hwnd,
-            HWND_TOPMOST,
-            x,
-            y,
-            width,
-            height,
-            SWP_NOACTIVATE,
-        )
-        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned()))?;
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE).map_err(|e| {
+            BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned())
+        })?;
     }
 
     Ok(())

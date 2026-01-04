@@ -4,7 +4,9 @@ use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
-use windows::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+use windows::Win32::UI::HiDpi::{
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, TranslateMessage,
@@ -584,8 +586,10 @@ fn main() {
 
     if let Err(e) = start_hotkey_thread(&config, tx) {
         log::error!(error:% = e; "Fatal error during hotkey registration");
-        let config_path = Config::default_path()
-            .map_or_else(|| "config file".to_string(), |p| p.to_string_lossy().to_string());
+        let config_path = Config::default_path().map_or_else(
+            || "config file".to_string(),
+            |p| p.to_string_lossy().to_string(),
+        );
         let message = format!(
             "Failed to register hotkeys:\n\n\
              {e}\n\n\
