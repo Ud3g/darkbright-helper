@@ -6,6 +6,7 @@ This document tracks potential future enhancements for the Brightness Control To
 
 ## System Tray Icon
 - Info row on current brightness / overlay level
+- Link to open the settings.json file in an editor
 - Ability to quit the application
 
 ## Settings GUI
@@ -14,6 +15,8 @@ This document tracks potential future enhancements for the Brightness Control To
 - Per-monitor settings management
 
 ## Add option "Always start with the System"
+
+## Find a really good name for the app and rename everything
 
 ## Internationalization
 - Allow the app to work in different languages (technical foundation)
