@@ -20,10 +20,12 @@ pub mod hotkey;
 pub mod osd;
 pub mod overlay;
 pub mod power;
+pub mod tray;
 
 // Re-export commonly used types
 pub use ddc_worker::DdcWorker;
 pub use power::PowerEventListener;
+pub use tray::TrayIcon;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Helpers
