@@ -19,7 +19,6 @@ use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
     NOTIFY_ICON_DATA_FLAGS, Shell_NotifyIconW,
 };
-use windows::Win32::Graphics::Gdi::HFONT;
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
     GetCursorPos, GetMenuItemRect, GetMessageW, HICON, HMENU, HWND_MESSAGE, IMAGE_ICON,
@@ -40,9 +39,6 @@ use super::{SafeHwnd, last_error_as_brightness_error};
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
 // ─────────────────────────────────────────────────────────────────────────────
-
-/// Window class name for the tray message-only window.
-const TRAY_WINDOW_CLASS: &str = "BrightnessControlTrayWindow";
 
 /// Unique identifier for the tray icon (used with Shell_NotifyIconW).
 const TRAY_ICON_ID: u32 = 1;
@@ -372,10 +368,6 @@ fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
 
     // Check if this is a valid item selection (not popup, not closed)
     let is_valid_selection = (flags & MF_HILITE) != 0 && (flags & MF_POPUP) == 0 && flags != 0xFFFF;
-
-    // Check if this is a monitor item (ID >= MENU_ID_MONITOR_BASE)
-    let is_monitor_item = item_index as u32 >= MENU_ID_MONITOR_BASE - MENU_ID_MONITOR_BASE
-        && is_valid_selection;
 
     // Get the actual menu item ID by checking if it's in the monitor range
     let menu_id = item_index as u32;
@@ -871,6 +863,8 @@ pub struct TrayIcon {
     /// Channel sender to communicate with the main thread.
     sender: Sender<BrightnessMessage>,
     /// Handle to the loaded icon resource.
+    /// Kept alive to prevent Windows from releasing the icon while the tray is active.
+    #[allow(dead_code)]
     icon_handle: HICON,
 }
 
