@@ -165,10 +165,14 @@ unsafe extern "system" fn low_level_keyboard_proc(
     // Only process if code indicates we should (HC_ACTION = 0)
     if code == HC_ACTION {
         // Check for key-down events only (ignore key-up to avoid double-firing)
+        // Message types (WM_KEYDOWN, WM_SYSKEYDOWN) are well-defined u32 constants.
+        #[allow(clippy::cast_possible_truncation)]
         let msg_type = wparam.0 as u32;
         if msg_type == WM_KEYDOWN || msg_type == WM_SYSKEYDOWN {
             // SAFETY: When code == HC_ACTION, lparam points to a valid KBDLLHOOKSTRUCT
             let kb_struct = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
+            // Virtual key codes are 16-bit values (0x00-0xFF typical, max 0xFFFF).
+            #[allow(clippy::cast_possible_truncation)]
             let vk_code = VIRTUAL_KEY(kb_struct.vkCode as u16);
 
             // Check if this is a brightness key we want to intercept
