@@ -46,29 +46,29 @@ use crate::error::{BrightnessError, Result};
 /// The class name for the OSD window.
 const OSD_CLASS_NAME: PCWSTR = w!("DarkBrightOSDClass");
 
-/// OSD window width in pixels (wider for bidirectional bar with two labels).
-const OSD_WIDTH: i32 = 360;
-/// OSD window height in pixels (compact single-row layout).
-const OSD_HEIGHT: i32 = 50;
-/// OSD window height when displaying an error message (expanded).
-const OSD_HEIGHT_WITH_ERROR: i32 = 75;
-/// Margin from the bottom of the monitor in pixels.
-const OSD_BOTTOM_MARGIN: i32 = 100;
+/// Base OSD window width in pixels (wider for bidirectional bar with two labels).
+const BASE_OSD_WIDTH: i32 = 360;
+/// Base OSD window height in pixels (compact single-row layout).
+const BASE_OSD_HEIGHT: i32 = 50;
+/// Base OSD window height when displaying an error message (expanded).
+const BASE_OSD_HEIGHT_WITH_ERROR: i32 = 75;
+/// Base margin from the bottom of the monitor in pixels.
+const BASE_OSD_BOTTOM_MARGIN: i32 = 100;
 
-/// Height reserved for the error message row (when expanded).
-const ERROR_ROW_HEIGHT: i32 = 25;
+/// Base height reserved for the error message row (when expanded).
+const BASE_ERROR_ROW_HEIGHT: i32 = 25;
 /// Error message displayed when DDC communication fails.
 const ERROR_MESSAGE: &str = "DDC Error - Adjustment failed";
 
 /// OSD background color (dark gray, semi-transparent look).
 const OSD_BACKGROUND_COLOR: u32 = 0x0030_3030; // RGB: 48, 48, 48
 
-/// Padding inside the OSD window.
-const OSD_PADDING: i32 = 10;
-/// Height of the progress bar.
-const BAR_HEIGHT: i32 = 20;
-/// Gap between the left (overlay) and right (hardware) bar sections.
-const BAR_GAP: i32 = 4;
+/// Base padding inside the OSD window.
+const BASE_OSD_PADDING: i32 = 10;
+/// Base height of the progress bar.
+const BASE_BAR_HEIGHT: i32 = 20;
+/// Base gap between the left (overlay) and right (hardware) bar sections.
+const BASE_BAR_GAP: i32 = 4;
 
 /// Hardware brightness bar fill color (golden/orange).
 const BAR_FILL_COLOR: u32 = 0x00D0_A030; // BGR: 48, 160, 208
@@ -83,17 +83,17 @@ const BAR_ERROR_COLOR: u32 = 0x0000_00CC; // BGR: 204, 0, 0
 /// Error text color (light red for visibility on dark background).
 const ERROR_TEXT_COLOR: u32 = 0x0050_50FF; // BGR: 255, 80, 80
 
-/// Font size for percentage text.
-const FONT_SIZE: i32 = 18;
+/// Base font size for percentage text.
+const BASE_FONT_SIZE: i32 = 18;
 
 /// Icon for hardware brightness (sun symbol).
 const ICON_HARDWARE: &str = "🔆";
 /// Icon for overlay/dimming (sunglasses symbol).
 const ICON_OVERLAY: &str = "🕶";
-/// Width reserved for each icon.
-const ICON_WIDTH: i32 = 25;
-/// Width reserved for percentage text (e.g., "100%").
-const PERCENT_TEXT_WIDTH: i32 = 45;
+/// Base width reserved for each icon.
+const BASE_ICON_WIDTH: i32 = 25;
+/// Base width reserved for percentage text (e.g., "100%").
+const BASE_PERCENT_TEXT_WIDTH: i32 = 45;
 
 /// Metrics for the OSD window, scaled for a specific DPI.
 #[derive(Debug, Clone, Copy)]
@@ -129,17 +129,17 @@ impl OsdMetrics {
         let s = |val: i32| (val as f32 * scale).round() as i32;
 
         Self {
-            width: s(OSD_WIDTH),
-            height: s(OSD_HEIGHT),
-            height_with_error: s(OSD_HEIGHT_WITH_ERROR),
-            bottom_margin: s(OSD_BOTTOM_MARGIN),
-            error_row_height: s(ERROR_ROW_HEIGHT),
-            padding: s(OSD_PADDING),
-            bar_height: s(BAR_HEIGHT),
-            bar_gap: s(BAR_GAP),
-            font_size: s(FONT_SIZE),
-            icon_width: s(ICON_WIDTH),
-            percent_text_width: s(PERCENT_TEXT_WIDTH),
+            width: s(BASE_OSD_WIDTH),
+            height: s(BASE_OSD_HEIGHT),
+            height_with_error: s(BASE_OSD_HEIGHT_WITH_ERROR),
+            bottom_margin: s(BASE_OSD_BOTTOM_MARGIN),
+            error_row_height: s(BASE_ERROR_ROW_HEIGHT),
+            padding: s(BASE_OSD_PADDING),
+            bar_height: s(BASE_BAR_HEIGHT),
+            bar_gap: s(BASE_BAR_GAP),
+            font_size: s(BASE_FONT_SIZE),
+            icon_width: s(BASE_ICON_WIDTH),
+            percent_text_width: s(BASE_PERCENT_TEXT_WIDTH),
         }
     }
 }
