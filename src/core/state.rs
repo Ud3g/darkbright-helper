@@ -4,6 +4,7 @@
 //! including monitor identification, per-monitor state, inter-thread messages,
 //! and DDC worker communication types.
 
+use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::time::Instant;
 
@@ -48,12 +49,72 @@ impl MonitorId {
             None => format!("{} {}", self.manufacturer, self.model_name),
         }
     }
+
+    /// Returns the base display name without serial number.
+    ///
+    /// Format: `"{manufacturer} {model_name}"` (e.g., "Dell U2722D")
+    ///
+    /// Use [`generate_display_names`] to get unique names with index suffixes
+    /// when multiple monitors share the same base name.
+    #[must_use]
+    pub fn base_display_name(&self) -> String {
+        format!("{} {}", self.manufacturer, self.model_name)
+    }
 }
 
 impl std::fmt::Display for MonitorId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.display_name())
     }
+}
+
+/// Generates unique display names for monitors, appending indices for duplicates.
+///
+/// When multiple monitors have the same base name (manufacturer + model),
+/// they are suffixed with `" #1"`, `" #2"`, etc. Monitors with unique base names
+/// are returned without a suffix.
+///
+/// # Arguments
+///
+/// * `ids` - Slice of monitor identifiers to generate names for.
+///
+/// # Returns
+///
+/// A map from each `MonitorId` to its unique display name string.
+///
+/// # Example
+///
+/// - Single unique monitor: `"Dell U2722D"`
+/// - Two identical monitors: `"Dell U2722D #1"`, `"Dell U2722D #2"`
+#[must_use]
+pub fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, String> {
+    // Count occurrences of each base name
+    let mut base_name_counts: HashMap<String, usize> = HashMap::new();
+    for id in ids {
+        let base = id.base_display_name();
+        *base_name_counts.entry(base).or_insert(0) += 1;
+    }
+
+    // Track current index for each base name (for duplicates)
+    let mut base_name_indices: HashMap<String, usize> = HashMap::new();
+
+    // Generate unique names
+    let mut result = HashMap::new();
+    for id in ids {
+        let base = id.base_display_name();
+        let display_name = if base_name_counts[&base] > 1 {
+            // Multiple monitors with same base name - append index
+            let index = base_name_indices.entry(base.clone()).or_insert(0);
+            *index += 1;
+            format!("{base} #{index}")
+        } else {
+            // Unique monitor - use base name as-is
+            base
+        };
+        result.insert(id.clone(), display_name);
+    }
+
+    result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
