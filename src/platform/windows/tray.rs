@@ -8,19 +8,23 @@
 //! The tray icon runs its own message loop on a dedicated thread and communicates
 //! with the main thread via `BrightnessMessage` channels.
 
+use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
     NOTIFY_ICON_DATA_FLAGS, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, HICON, HWND_MESSAGE,
-    IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MSG, PostQuitMessage,
-    RegisterClassExW, TranslateMessage, WM_DESTROY, WNDCLASSEXW, WS_OVERLAPPED,
+    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
+    GetCursorPos, GetMessageW, HICON, HMENU, HWND_MESSAGE, IMAGE_ICON, LR_DEFAULTSIZE,
+    LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_SEPARATOR, MF_STRING, MSG, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_COMMAND, WM_DESTROY,
+    WM_NULL, WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, w};
 
@@ -63,6 +67,31 @@ const TRAY_TOOLTIP: &str = "Brightness Control";
 /// Resource ID for the embedded application icon.
 /// Must match the ID defined in build.rs when embedding resources.
 const IDI_APP_ICON: u16 = 1;
+
+/// Application name displayed in the tray menu.
+const APP_NAME: &str = "Brightness Control";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Thread-Local Sender Storage
+// ─────────────────────────────────────────────────────────────────────────────
+
+thread_local! {
+    /// Thread-local storage for the message sender.
+    /// This allows the window procedure to send messages to the main thread.
+    static TRAY_SENDER: RefCell<Option<Sender<BrightnessMessage>>> = const { RefCell::new(None) };
+}
+
+/// Sets the thread-local sender for the tray icon callbacks.
+fn set_tray_sender(sender: Sender<BrightnessMessage>) {
+    TRAY_SENDER.with(|s| {
+        *s.borrow_mut() = Some(sender);
+    });
+}
+
+/// Executes a closure with access to the thread-local sender.
+fn with_tray_sender<R>(f: impl FnOnce(&Sender<BrightnessMessage>) -> R) -> Option<R> {
+    TRAY_SENDER.with(|s| s.borrow().as_ref().map(f))
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Icon Loading
@@ -236,6 +265,110 @@ fn remove_tray_icon(hwnd: HWND) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Context Menu
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Shows the tray icon context menu at the current cursor position.
+///
+/// # Arguments
+///
+/// * `hwnd` - Window handle for menu ownership and message routing.
+fn show_context_menu(hwnd: HWND) {
+    unsafe {
+        // Create popup menu
+        let Ok(hmenu) = CreatePopupMenu() else {
+            log::error!("Failed to create popup menu");
+            return;
+        };
+
+        // Build menu items (bottom to top since menu appears above cursor)
+        // Quit item
+        let quit_text = format!("Quit {APP_NAME}\0");
+        let quit_wide: Vec<u16> = quit_text.encode_utf16().collect();
+        let _ = AppendMenuW(hmenu, MF_STRING, MENU_ID_QUIT as usize, PCWSTR(quit_wide.as_ptr()));
+
+        // Settings item
+        let settings_wide: Vec<u16> = "Settings\0".encode_utf16().collect();
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING,
+            MENU_ID_SETTINGS as usize,
+            PCWSTR(settings_wide.as_ptr()),
+        );
+
+        // Separator before static items
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+
+        // TODO: Step 10 - Add dynamic monitor info rows here
+
+        // Get cursor position for menu placement
+        let mut cursor_pos = POINT::default();
+        if GetCursorPos(&raw mut cursor_pos).is_err() {
+            log::warn!("GetCursorPos failed, using default position");
+            cursor_pos = POINT { x: 0, y: 0 };
+        }
+
+        // Required: Set foreground window before showing menu
+        // This ensures the menu dismisses when clicking outside
+        let _ = SetForegroundWindow(hwnd);
+
+        // Show menu and wait for selection
+        let cmd = TrackPopupMenu(
+            hmenu,
+            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD,
+            cursor_pos.x,
+            cursor_pos.y,
+            0,
+            hwnd,
+            None,
+        );
+
+        // Clean up menu
+        let _ = DestroyMenu(hmenu);
+
+        // Send a null message to ensure the window processes the menu dismissal
+        // This is a Windows quirk required for proper tray menu behavior
+        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+
+        // Handle selection
+        handle_menu_selection(cmd.0 as u32);
+    }
+}
+
+/// Handles a menu item selection.
+///
+/// # Arguments
+///
+/// * `cmd` - The menu item ID that was selected (0 if menu was dismissed).
+fn handle_menu_selection(cmd: u32) {
+    match cmd {
+        0 => {
+            // Menu was dismissed without selection
+            log::debug!("Tray menu dismissed");
+        }
+        MENU_ID_SETTINGS => {
+            log::debug!("Settings menu item clicked");
+            with_tray_sender(|sender| {
+                if let Err(e) = sender.send(BrightnessMessage::TrayOpenSettings) {
+                    log::error!("Failed to send TrayOpenSettings: {e}");
+                }
+            });
+        }
+        MENU_ID_QUIT => {
+            log::debug!("Quit menu item clicked");
+            with_tray_sender(|sender| {
+                if let Err(e) = sender.send(BrightnessMessage::TrayRequestQuit) {
+                    log::error!("Failed to send TrayRequestQuit: {e}");
+                }
+            });
+        }
+        _ => {
+            log::debug!("Unknown menu item: {cmd}");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Window Class Registration
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -319,9 +452,9 @@ unsafe extern "system" fn tray_wnd_proc(
 ///
 /// # Arguments
 ///
-/// * `_hwnd` - The window handle (unused for now, needed for menu positioning later).
+/// * `hwnd` - The window handle, used for menu ownership.
 /// * `lparam` - Contains the mouse message (e.g., `WM_RBUTTONUP`).
-fn handle_tray_callback(_hwnd: HWND, lparam: LPARAM) {
+fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
     use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONUP, WM_RBUTTONUP};
 
     // The low word of lparam contains the mouse message
@@ -331,7 +464,7 @@ fn handle_tray_callback(_hwnd: HWND, lparam: LPARAM) {
     match mouse_msg {
         WM_RBUTTONUP => {
             log::debug!("Tray icon right-clicked");
-            // TODO: Step 9 - Show context menu
+            show_context_menu(hwnd);
         }
         WM_LBUTTONUP => {
             log::debug!("Tray icon left-clicked (no action)");
@@ -407,6 +540,9 @@ impl TrayIcon {
         };
 
         log::debug!("Tray message window created");
+
+        // Store sender in thread-local storage for window procedure access
+        set_tray_sender(sender.clone());
 
         // Load the application icon
         let icon_handle = load_tray_icon()?;
