@@ -40,7 +40,13 @@ pub use error::{BrightnessError, Result};
 // Core types
 pub use core::brightness::{BrightnessAdjustment, calculate_adjustment};
 pub use core::config::Config;
-pub use core::state::{BrightnessMessage, MonitorId, MonitorState};
+pub use core::state::{
+    BrightnessMessage, MonitorId, MonitorState, TrayMenuData, TrayMonitorInfo,
+};
 
 // Platform traits
 pub use platform::DimmingOverlay;
+
+// Platform-specific types (Windows)
+#[cfg(windows)]
+pub use platform::windows::TrayIcon;
