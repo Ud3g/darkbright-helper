@@ -95,6 +95,52 @@ fn with_hook_context<R>(f: impl FnOnce(&HookContext) -> R) -> Option<R> {
     HOOK_CONTEXT.with(|ctx| ctx.borrow().as_ref().map(f))
 }
 
+/// RAII wrapper for a Windows hook handle (`HHOOK`).
+///
+/// Automatically calls `UnhookWindowsHookEx` when dropped to ensure
+/// the hook is always unregistered.
+struct SafeHook(HHOOK);
+
+impl SafeHook {
+    /// Creates a new `SafeHook` from a raw `HHOOK`.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that `hook` is a valid hook handle
+    /// returned by `SetWindowsHookExW`.
+    const unsafe fn new(hook: HHOOK) -> Self {
+        Self(hook)
+    }
+
+    /// Returns the raw `HHOOK` handle.
+    ///
+    /// Used when calling `CallNextHookEx`.
+    #[allow(dead_code)]
+    const fn as_raw(&self) -> HHOOK {
+        self.0
+    }
+
+    /// Returns `true` if the hook handle is valid (non-null).
+    #[allow(dead_code)]
+    fn is_valid(&self) -> bool {
+        !self.0.is_invalid()
+    }
+}
+
+impl Drop for SafeHook {
+    fn drop(&mut self) {
+        if !self.0.is_invalid() {
+            // SAFETY: We own the hook handle and it was valid when created.
+            // UnhookWindowsHookEx is safe to call on a valid hook handle.
+            unsafe {
+                if UnhookWindowsHookEx(self.0).is_err() {
+                    log::warn!("Failed to unhook keyboard hook");
+                }
+            }
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
