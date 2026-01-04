@@ -151,6 +151,7 @@ const HIDE_TIMER_ID: usize = 1;
 // This allows the window procedure to access the current brightness values.
 thread_local! {
     static OSD_STATE: RefCell<OsdRenderState> = RefCell::new(OsdRenderState::default());
+    static OSD_METRICS: RefCell<OsdMetrics> = RefCell::new(OsdMetrics::default());
 }
 
 /// State used for rendering the OSD.
@@ -643,6 +644,18 @@ fn update_osd_state(state: &MonitorState, is_error: bool) {
         render_state.overlay_opacity = overlay;
         render_state.is_error = is_error;
     });
+}
+
+/// Updates the OSD metrics for a new DPI.
+fn update_osd_metrics(dpi: u32) {
+    OSD_METRICS.with(|m| {
+        *m.borrow_mut() = OsdMetrics::for_dpi(dpi);
+    });
+}
+
+/// Executes a closure with the current OSD metrics.
+fn with_metrics<R>(f: impl FnOnce(&OsdMetrics) -> R) -> R {
+    OSD_METRICS.with(|m| f(&*m.borrow()))
 }
 
 /// Registers the window class for the OSD window if not already registered.
