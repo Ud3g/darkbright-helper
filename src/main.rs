@@ -30,7 +30,7 @@ use darkbright_helper::platform::windows::hotkey::{
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::show_error_message_box;
-use darkbright_helper::platform::windows::{DdcWorker, PowerEventListener};
+use darkbright_helper::platform::windows::{DdcWorker, PowerEventListener, TrayIcon};
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -573,6 +573,31 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
     });
 }
 
+/// Spawns the system tray icon thread.
+///
+/// The tray icon provides a menu for accessing settings and quitting the application.
+/// The thread runs until the application shuts down (tray icon is cleaned up via RAII).
+///
+/// # Arguments
+///
+/// * `tx` - Channel sender to notify the main thread of tray events.
+fn spawn_tray_thread(tx: mpsc::Sender<BrightnessMessage>) {
+    std::thread::spawn(move || {
+        match TrayIcon::new(tx) {
+            Ok(tray) => {
+                log::info!("System tray icon created");
+                if let Err(e) = tray.run_message_loop() {
+                    log::error!(error:% = e; "Tray message loop error");
+                }
+            }
+            Err(e) => {
+                log::error!(error:% = e; "Failed to create system tray icon");
+                // Non-fatal: app works without tray icon
+            }
+        }
+    });
+}
+
 fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> Result<()> {
     // Parse and validate primary hotkeys before spawning thread (fail fast on parse errors)
     let up_hotkey = parse_hotkey(&config.hotkeys.brightness_up)
@@ -731,6 +756,9 @@ fn main() {
 
     // Spawn power event listener thread (for sleep/resume detection)
     spawn_power_listener(tx.clone());
+
+    // Spawn system tray icon thread
+    spawn_tray_thread(tx.clone());
 
     // Register hotkeys and start hotkey thread
 
