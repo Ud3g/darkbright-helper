@@ -15,18 +15,20 @@ use std::time::Duration;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Controls::ICC_WIN95_CLASSES;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFY_ICON_DATA_FLAGS,
     NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, GetMenuItemRect, GetMessageW, HICON, HMENU, HWND_MESSAGE, IMAGE_ICON,
-    LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-    MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow,
+    GetCursorPos, GetMenuItemRect, GetMessageW, HICON, HMENU, HWND_MESSAGE,
+    HWND_TOPMOST, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SendMessageW,
+    SetForegroundWindow, SetWindowPos, ShowWindow, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE,
     TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
     TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_EXITMENULOOP, WM_MENUSELECT, WM_NULL,
-    WM_USER, WNDCLASSEXW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP,
+    WNDCLASSEXW, WS_BORDER, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_OVERLAPPED, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
 
@@ -77,41 +79,14 @@ const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
 // Tooltip Constants
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tooltip window class name.
-const TOOLTIPS_CLASS: &str = "tooltips_class32";
-
-/// Tooltip style: Always show tip even if window is not active.
-const TTS_ALWAYSTIP: u32 = 0x01;
-
-/// Tooltip style: Prevent prefix characters from being stripped.
-const TTS_NOPREFIX: u32 = 0x02;
-
-/// Tooltip message: Set maximum width (enables multi-line).
-const TTM_SETMAXTIPWIDTH: u32 = WM_USER + 24;
-
-/// Tooltip message: Activate/deactivate tracking tooltip.
-const TTM_TRACKACTIVATE: u32 = WM_USER + 17;
-
-/// Tooltip message: Set position of tracking tooltip.
-const TTM_TRACKPOSITION: u32 = WM_USER + 18;
-
-/// Tooltip message: Add a tool (Unicode).
-const TTM_ADDTOOLW: u32 = WM_USER + 50;
-
-/// Tooltip message: Update tooltip text (Unicode).
-const TTM_UPDATETIPTEXTW: u32 = WM_USER + 57;
-
-/// Tool flag: Tooltip is positioned by `TTM_TRACKPOSITION`.
-const TTF_TRACK: u32 = 0x0020;
-
-/// Tool flag: Position is absolute screen coordinates.
-const TTF_ABSOLUTE: u32 = 0x0080;
-
-/// Tool flag: uId is an HWND.
-const TTF_IDISHWND: u32 = 0x0001;
-
 /// Maximum tooltip width in pixels.
 const TOOLTIP_MAX_WIDTH: i32 = 350;
+
+/// Tooltip padding in pixels.
+const TOOLTIP_PADDING: i32 = 10;
+
+/// Estimated line height in pixels for tooltip text.
+const TOOLTIP_LINE_HEIGHT: i32 = 18;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Thread-Local Sender Storage
@@ -122,7 +97,7 @@ thread_local! {
     /// This allows the window procedure to send messages to the main thread.
     static TRAY_SENDER: RefCell<Option<Sender<BrightnessMessage>>> = const { RefCell::new(None) };
 
-    /// Thread-local storage for the tooltip window handle.
+    /// Thread-local storage for the custom tooltip window handle.
     static TRAY_TOOLTIP_HWND: RefCell<Option<HWND>> = const { RefCell::new(None) };
 
     /// Thread-local storage for the tooltip text (built from hotkeys).
@@ -176,85 +151,58 @@ fn request_menu_data() -> Option<TrayMenuData> {
 // Tooltip Support
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// `TOOLINFOW` structure for tooltip operations.
-/// Using raw struct since windows crate may not expose it directly.
-#[repr(C)]
-#[allow(non_snake_case, clippy::upper_case_acronyms)]
-struct Toolinfow {
-    cbSize: u32,
-    uFlags: u32,
-    hwnd: HWND,
-    uId: usize,
-    rect: RECT,
-    hinst: windows::Win32::Foundation::HINSTANCE,
-    lpszText: *mut u16,
-    lParam: LPARAM,
-    lpReserved: *mut std::ffi::c_void,
-}
-
-/// Creates a tracking tooltip window.
+/// Creates a custom tooltip window (simple popup with text).
 ///
-/// # Arguments
-///
-/// * `parent` - Parent window handle for the tooltip.
+/// This uses a basic STATIC window instead of the tooltips_class32 control,
+/// which has proven unreliable for tracking tooltips near popup menus.
 ///
 /// # Returns
 ///
 /// The tooltip window handle, or `None` if creation failed.
-fn create_tooltip(parent: HWND) -> Option<HWND> {
-    let class_wide: Vec<u16> = TOOLTIPS_CLASS
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+fn create_tooltip(_tray_hwnd: HWND) -> Option<HWND> {
+    // Initialize common controls (still needed for other things)
+    use windows::Win32::UI::Controls::INITCOMMONCONTROLSEX;
+
+    let icc = INITCOMMONCONTROLSEX {
+        dwSize: u32::try_from(std::mem::size_of::<INITCOMMONCONTROLSEX>()).unwrap_or(0),
+        dwICC: ICC_WIN95_CLASSES,
+    };
 
     unsafe {
+        use windows::Win32::UI::Controls::InitCommonControlsEx;
+        let _ = InitCommonControlsEx(&icc);
+    }
+
+    unsafe {
+        let hinstance = GetModuleHandleW(None).ok()?;
+
+        // Create a simple popup window styled like a tooltip
+        // Using STATIC class with SS_LEFT style for text display
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST,
-            PCWSTR(class_wide.as_ptr()),
-            PCWSTR::null(),
-            WS_POPUP
-                | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
-                    TTS_ALWAYSTIP | TTS_NOPREFIX,
-                ),
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW, // Always on top, no taskbar entry
+            w!("STATIC"),                      // Built-in static text control
+            w!(""),                            // Initial text (empty)
+            WS_POPUP | WS_BORDER,              // Popup with border
             0,
             0,
-            0,
-            0,
-            parent,
+            TOOLTIP_MAX_WIDTH,
+            100, // Initial height, will be adjusted
+            HWND::default(),                   // No parent
             None,
-            GetModuleHandleW(None).ok()?,
+            hinstance,
             None,
         );
 
         if hwnd.0 == 0 {
-            log::warn!("Failed to create tooltip window");
+            log::warn!("Failed to create custom tooltip window");
             return None;
         }
 
-        // Set maximum width to enable multi-line tooltips
-        SendMessageW(
-            hwnd,
-            TTM_SETMAXTIPWIDTH,
-            WPARAM(0),
-            LPARAM(TOOLTIP_MAX_WIDTH as isize),
-        );
+        // Set tooltip colors using window messages
+        // Note: For STATIC controls, we'll handle painting via subclassing or
+        // just accept the default colors for now (they're reasonable)
 
-        // Add a tool for the parent window
-        let mut ti = Toolinfow {
-            cbSize: u32::try_from(std::mem::size_of::<Toolinfow>()).unwrap_or(0),
-            uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
-            hwnd: parent,
-            uId: parent.0.cast_unsigned(),
-            rect: RECT::default(),
-            hinst: windows::Win32::Foundation::HINSTANCE::default(),
-            lpszText: std::ptr::null_mut(),
-            lParam: LPARAM(0),
-            lpReserved: std::ptr::null_mut(),
-        };
-
-        SendMessageW(hwnd, TTM_ADDTOOLW, WPARAM(0), LPARAM(&raw mut ti as isize));
-
-        log::debug!("Tooltip window created");
+        log::debug!(tooltip_hwnd = hwnd.0; "Custom tooltip window created");
         Some(hwnd)
     }
 }
@@ -262,99 +210,99 @@ fn create_tooltip(parent: HWND) -> Option<HWND> {
 /// Stores the tooltip text (built from hotkeys) for later use.
 fn set_tooltip_text(hotkey_up: &str, hotkey_down: &str) {
     let text = format!(
-        "1. Move mouse to desired monitor\n2. Press {hotkey_up} (brighter) or {hotkey_down} (dimmer)"
+        "1. Move mouse to desired monitor\n\
+         2. Press {hotkey_up} (brighter) or\n\
+            {hotkey_down} (dimmer)"
     );
     TRAY_TOOLTIP_TEXT.with(|t| {
         *t.borrow_mut() = text;
     });
 }
 
-/// Shows the tooltip at the specified screen position.
+/// Shows the custom tooltip at the specified screen position.
 ///
 /// # Arguments
 ///
 /// * `tooltip_hwnd` - The tooltip window handle.
-/// * `parent` - Parent window handle.
 /// * `x`, `y` - Screen coordinates to position the tooltip.
-fn show_tooltip_at(tooltip_hwnd: HWND, parent: HWND, x: i32, y: i32) {
+fn show_tooltip_at(tooltip_hwnd: HWND, x: i32, y: i32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN, WM_SETTEXT};
+
     TRAY_TOOLTIP_TEXT.with(|text_cell| {
         let text = text_cell.borrow();
         if text.is_empty() {
+            log::debug!("Tooltip text is empty, not showing tooltip");
             return;
         }
 
-        let mut text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+        let text_wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
 
         unsafe {
-            // Update the tooltip text
-            let mut ti = Toolinfow {
-                cbSize: u32::try_from(std::mem::size_of::<Toolinfow>()).unwrap_or(0),
-                uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
-                hwnd: parent,
-                uId: parent.0.cast_unsigned(),
-                rect: RECT::default(),
-                hinst: windows::Win32::Foundation::HINSTANCE::default(),
-                lpszText: text_wide.as_mut_ptr(),
-                lParam: LPARAM(0),
-                lpReserved: std::ptr::null_mut(),
-            };
-
+            // Set the text on the static control
             SendMessageW(
                 tooltip_hwnd,
-                TTM_UPDATETIPTEXTW,
+                WM_SETTEXT,
                 WPARAM(0),
-                LPARAM(&raw mut ti as isize),
+                LPARAM(text_wide.as_ptr() as isize),
             );
 
-            // Position the tooltip (pack x,y into LPARAM)
-            let coords = (y.cast_unsigned() << 16) | (x.cast_unsigned() & 0xFFFF);
-            #[allow(clippy::cast_possible_wrap)]
-            let coords_lparam = coords as isize;
-            SendMessageW(
+            // Measure text (approximate - take longest line)
+            let max_line_len = text.lines().map(|l| l.len()).max().unwrap_or(0);
+            let line_count = text.lines().count();
+            
+            // Use a simple estimate: ~7 pixels per character
+            let width = ((max_line_len as i32) * 7 + TOOLTIP_PADDING * 2).min(TOOLTIP_MAX_WIDTH);
+            let height = (line_count as i32) * TOOLTIP_LINE_HEIGHT + TOOLTIP_PADDING * 2;
+
+            // Get screen dimensions to keep tooltip on screen
+            let screen_width = GetSystemMetrics(SM_CXSCREEN);
+            let screen_height = GetSystemMetrics(SM_CYSCREEN);
+
+            // Adjust position to stay on screen
+            let mut final_x = x;
+            let mut final_y = y;
+
+            if final_x + width > screen_width {
+                final_x = screen_width - width - 5;
+            }
+            if final_y + height > screen_height {
+                final_y = y - height - 5; // Show above if too low
+            }
+
+            // Position and resize the tooltip window
+            let _ = SetWindowPos(
                 tooltip_hwnd,
-                TTM_TRACKPOSITION,
-                WPARAM(0),
-                LPARAM(coords_lparam),
+                HWND_TOPMOST,
+                final_x,
+                final_y,
+                width,
+                height,
+                SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
 
-            // Activate tracking
-            ti.lpszText = std::ptr::null_mut(); // Not needed for activate
-            SendMessageW(
-                tooltip_hwnd,
-                TTM_TRACKACTIVATE,
-                WPARAM(1), // TRUE = activate
-                LPARAM(&raw mut ti as isize),
+            // Explicitly show the window
+            let _ = ShowWindow(tooltip_hwnd, windows::Win32::UI::WindowsAndMessaging::SW_SHOWNOACTIVATE);
+
+            log::debug!(
+                x = final_x,
+                y = final_y,
+                width,
+                height;
+                "Custom tooltip shown"
             );
         }
     });
 }
 
-/// Hides the tracking tooltip.
+/// Hides the custom tooltip.
 ///
 /// # Arguments
 ///
 /// * `tooltip_hwnd` - The tooltip window handle.
-/// * `parent` - Parent window handle.
-fn hide_tooltip(tooltip_hwnd: HWND, parent: HWND) {
+fn hide_tooltip(tooltip_hwnd: HWND) {
     unsafe {
-        let ti = Toolinfow {
-            cbSize: u32::try_from(std::mem::size_of::<Toolinfow>()).unwrap_or(0),
-            uFlags: TTF_IDISHWND | TTF_TRACK | TTF_ABSOLUTE,
-            hwnd: parent,
-            uId: parent.0.cast_unsigned(),
-            rect: RECT::default(),
-            hinst: windows::Win32::Foundation::HINSTANCE::default(),
-            lpszText: std::ptr::null_mut(),
-            lParam: LPARAM(0),
-            lpReserved: std::ptr::null_mut(),
-        };
-
-        SendMessageW(
-            tooltip_hwnd,
-            TTM_TRACKACTIVATE,
-            WPARAM(0), // FALSE = deactivate
-            LPARAM(&raw const ti as isize),
-        );
+        let _ = ShowWindow(tooltip_hwnd, SW_HIDE);
+        log::trace!("Custom tooltip hidden");
     }
 }
 
@@ -396,28 +344,35 @@ fn handle_menu_select(hwnd: HWND, wparam: WPARAM) {
                     return;
                 };
 
+                // Calculate 0-based position from menu ID
+                // Monitor items are added at positions 0, 1, 2... with IDs MENU_ID_MONITOR_BASE + index
+                let position = menu_id - MENU_ID_MONITOR_BASE;
+
                 // Get menu item rectangle
                 let mut rect = RECT::default();
                 unsafe {
-                    if GetMenuItemRect(hwnd, hmenu, u32::from(item_index), &raw mut rect).is_ok() {
+                    if GetMenuItemRect(hwnd, hmenu, position, &raw mut rect).is_ok() {
+                        log::debug!(position, x = rect.right + 5, y = rect.top; "Showing tooltip for monitor item");
                         // Position tooltip to the right of the menu item
-                        show_tooltip_at(tooltip_hwnd, hwnd, rect.right + 5, rect.top);
+                        show_tooltip_at(tooltip_hwnd, rect.right + 5, rect.top);
+                    } else {
+                        log::warn!(position, menu_id; "GetMenuItemRect failed for monitor item");
                     }
                 }
             });
         } else {
             // Hide tooltip when not hovering a monitor item
-            hide_tooltip(tooltip_hwnd, hwnd);
+            hide_tooltip(tooltip_hwnd);
         }
     });
 }
 
 /// Cleans up tooltip when menu closes.
-fn handle_menu_exit(hwnd: HWND) {
+fn handle_menu_exit(_hwnd: HWND) {
     TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
         let tooltip_opt = tooltip_cell.borrow();
         if let Some(tooltip_hwnd) = *tooltip_opt {
-            hide_tooltip(tooltip_hwnd, hwnd);
+            hide_tooltip(tooltip_hwnd);
         }
     });
 
@@ -591,7 +546,7 @@ fn remove_tray_icon(hwnd: HWND) {
         if Shell_NotifyIconW(NIM_DELETE, &raw const nid).as_bool() {
             log::debug!("Tray icon removed from notification area");
         } else {
-            log::warn!("Failed to remove tray icon");
+            log::warn!(error_code = super::get_last_error_code(); "Failed to remove tray icon");
         }
     }
 }
@@ -609,7 +564,7 @@ fn show_context_menu(hwnd: HWND) {
     unsafe {
         // Create popup menu
         let Ok(hmenu) = CreatePopupMenu() else {
-            log::error!("Failed to create popup menu");
+            log::error!(error_code = super::get_last_error_code(); "Failed to create popup menu");
             return;
         };
 
@@ -625,7 +580,7 @@ fn show_context_menu(hwnd: HWND) {
             TRAY_TOOLTIP_HWND.with(|tooltip_cell| {
                 let mut tooltip_opt = tooltip_cell.borrow_mut();
                 if tooltip_opt.is_none() {
-                    *tooltip_opt = create_tooltip(hwnd);
+                    *tooltip_opt = create_tooltip(hwnd); // Pass tray hwnd as owner
                 }
             });
         }
@@ -639,8 +594,8 @@ fn show_context_menu(hwnd: HWND) {
         if let Some(ref data) = menu_data {
             for (index, monitor) in data.monitors.iter().enumerate() {
                 let monitor_text = format!(
-                    "{}: 🔆{}% 🕶{}%\0",
-                    monitor.display_name, monitor.hardware_brightness, monitor.overlay_opacity
+                    "{}: 🕶{}% 🔆{}%\0",
+                    monitor.display_name, monitor.overlay_opacity, monitor.hardware_brightness
                 );
                 let monitor_wide: Vec<u16> = monitor_text.encode_utf16().collect();
 
@@ -684,7 +639,7 @@ fn show_context_menu(hwnd: HWND) {
         // Get cursor position for menu placement
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&raw mut cursor_pos).is_err() {
-            log::warn!("GetCursorPos failed, using default position");
+            log::warn!(error_code = super::get_last_error_code(); "GetCursorPos failed, using default position");
             cursor_pos = POINT { x: 0, y: 0 };
         }
 

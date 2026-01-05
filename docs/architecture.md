@@ -588,6 +588,51 @@ If DDC communication fails after retries, the application does **not** fall back
 - Avoids state desynchronization (user thinks brightness is 50%, backlight is actually 100%)
 - Ensures the user is aware of hardware communication failures via the OSD error indicator
 
+### 12. System Tray
+
+The application runs as a background process with a system tray icon for user interaction.
+
+**Tray Icon Behavior:**
+
+| Action | Result |
+|--------|--------|
+| Right-click | Opens context menu |
+| Left-click | No action (intentional) |
+
+**Context Menu Structure:**
+
+```
+┌─────────────────────────────────┐
+│ DEL U2722D: 🕶 0% 🔆 50%        │  ← Monitor status (disabled/info only)
+│ LG 27UK850: 🕶 0% 🔆 75%        │
+│─────────────────────────────────│
+│ Settings                        │  → Opens config.json in default editor
+│ Quit Brightness Control         │  → Graceful shutdown
+└─────────────────────────────────┘
+```
+
+**Monitor Status Rows:**
+- Displayed at the top of the menu as disabled (non-clickable) items
+- Show current overlay opacity (🕶) and hardware brightness (🔆) for each monitor
+- Updated each time the menu is opened via `TrayMenuOpening` request/response
+
+**Hover Tooltip:**
+
+When the user hovers over a monitor status row, a tooltip appears showing usage instructions:
+
+```
+1. Move mouse to desired monitor
+2. Press Ctrl+Shift+Up (brighter) or
+   Ctrl+Shift+Down (dimmer)
+```
+
+The tooltip displays the user's configured hotkeys (not hardcoded defaults). This helps new users discover how to use the application without consulting documentation.
+
+**Implementation Notes:**
+- Uses a custom popup window (`WS_POPUP | WS_BORDER`) instead of the Win32 `tooltips_class32` control, which proved unreliable for tracking tooltips near popup menus
+- Tooltip is positioned to the right of the hovered menu item
+- Hidden automatically when hovering non-monitor items or when the menu closes
+
 ---
 
 ## Testing
@@ -665,18 +710,3 @@ Since DDC/CI requires physical monitor hardware, refresh functionality must be t
 | Memory (idle) | < 30 MB | Lightweight background app |
 | CPU (idle) | < 1% | Minimal resource usage |
 | DDC write latency | 100-500ms | Monitor limitation, acceptable |
-
----
-
-## Future Considerations
-
-### Linux Support
-- Platform traits allow adding `linux/` module
-- DDC: `/dev/i2c-*` or `ddcutil` integration
-- Overlay: X11 (XComposite) or Wayland (layer-shell)
-- Hotkeys: X11 (XGrabKey) or portal APIs
-
-### Potential Enhancements
-- Ambient light sensor integration
-- Brightness curves/gamma adjustment
-- Per-application brightness profiles

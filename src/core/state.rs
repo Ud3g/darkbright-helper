@@ -52,19 +52,65 @@ impl MonitorId {
 
     /// Returns the base display name without serial number.
     ///
-    /// Format: `"{manufacturer} {model_name}"` (e.g., "Dell U2722D")
+    /// Format: `"{manufacturer} {model_name}"` (e.g., "DEL U2722D")
+    ///
+    /// If the model name already starts with the manufacturer prefix
+    /// (case-insensitive), only the model name is returned to avoid
+    /// duplication (e.g., "PHL 346B1C" instead of "PHL PHL 346B1C").
     ///
     /// Use [`generate_display_names`] to get unique names with index suffixes
     /// when multiple monitors share the same base name.
     #[must_use]
     pub fn base_display_name(&self) -> String {
-        format!("{} {}", self.manufacturer, self.model_name)
+        // Check if model_name already starts with manufacturer prefix (case-insensitive)
+        // to avoid duplication like "PHL PHL 346B1C" when EDID contains redundant info
+        let prefix = format!("{} ", self.manufacturer);
+        if self.model_name
+            .to_ascii_uppercase()
+            .starts_with(&prefix.to_ascii_uppercase())
+        {
+            self.model_name.clone()
+        } else {
+            format!("{} {}", self.manufacturer, self.model_name)
+        }
     }
 }
 
 impl std::fmt::Display for MonitorId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.display_name())
+    }
+}
+
+#[cfg(test)]
+mod monitor_id_tests {
+    use super::*;
+
+    #[test]
+    fn base_display_name_normal() {
+        let id = MonitorId::new("DEL", "U2722D", None);
+        assert_eq!(id.base_display_name(), "DEL U2722D");
+    }
+
+    #[test]
+    fn base_display_name_redundant_prefix() {
+        // Simulates Philips monitor with redundant manufacturer in model name
+        let id = MonitorId::new("PHL", "PHL 346B1C", None);
+        assert_eq!(id.base_display_name(), "PHL 346B1C");
+    }
+
+    #[test]
+    fn base_display_name_redundant_prefix_case_insensitive() {
+        // Case mismatch should still be detected
+        let id = MonitorId::new("PHL", "phl 346B1C", None);
+        assert_eq!(id.base_display_name(), "phl 346B1C");
+    }
+
+    #[test]
+    fn base_display_name_partial_match_no_skip() {
+        // "PHLEGM" starts with "PHL" but not "PHL " - should NOT skip
+        let id = MonitorId::new("PHL", "PHLEGM 123", None);
+        assert_eq!(id.base_display_name(), "PHL PHLEGM 123");
     }
 }
 

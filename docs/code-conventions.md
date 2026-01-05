@@ -103,6 +103,22 @@ FFI calls should be wrapped in safe functions as close to their point of use as 
 
 Shared or common FFI wrappers may be extracted into a common module (e.g., `platform/windows/mod.rs` or a dedicated `ffi.rs`) to avoid duplication and provide reusable utilities like RAII handle wrappers.
 
+### Win32 UI Control Pitfalls
+
+**Tracking Tooltips (`tooltips_class32`):**
+
+The Win32 tooltip control is unreliable for "tracking tooltips" (manually positioned tooltips near popup menus). `TTM_ADDTOOLW` can silently fail (return 0) with `GetLastError()` returning 0, even with correct parameters.
+
+Attempted configurations that failed:
+- `hwnd` = `HWND_MESSAGE` (message-only window)
+- `hwnd` = `GetDesktopWindow()`
+- `hwnd` = tooltip's own window handle
+- `hwnd` = dedicated invisible STATIC window
+- Various flag combinations (`TTF_TRACK`, `TTF_ABSOLUTE`, `TTF_IDISHWND`)
+- Correct `cbSize` (72 bytes on 64-bit)
+
+**Recommended approach:** For menu tooltips, use a simple custom popup window (e.g., `STATIC` class with `WS_POPUP | WS_BORDER | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`) instead of `tooltips_class32`. Control visibility with `ShowWindow()` and position with `SetWindowPos()`. This is more reliable and provides full control over appearance.
+
 ### Windows Crate (v0.52+) Specifics
 
 We use the `windows` crate which generates idiomatic Rust bindings. Follow these rules:
