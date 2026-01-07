@@ -11,7 +11,7 @@ use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorF
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GetCursorPos, GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetFocus, SetForegroundWindow, ShowWindow,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION,
     WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
@@ -504,7 +504,7 @@ impl UsageWindow {
             let btn_x = (USAGE_CLIENT_WIDTH - BTN_WIDTH) / 2;
             let btn_y = USAGE_CLIENT_HEIGHT - USAGE_TEXT_MARGIN - BTN_HEIGHT;
 
-            let _btn_hwnd = CreateWindowExW(
+            let btn_hwnd = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 windows::core::PCWSTR(button_class.as_ptr()),
                 windows::core::PCWSTR(button_text.as_ptr()),
@@ -523,8 +523,14 @@ impl UsageWindow {
                 None,
             );
 
-            // Show the window
+            // Show the window and set focus
             ShowWindow(hwnd, SW_SHOW);
+            let _ = SetForegroundWindow(hwnd);
+
+            // Set focus to the OK button so Enter key dismisses the window
+            if btn_hwnd.0 != 0 {
+                SetFocus(btn_hwnd);
+            }
         }
 
         log::debug!("Usage window created");
