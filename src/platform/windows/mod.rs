@@ -8,7 +8,6 @@
 
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
-use windows::Win32::UI::Controls::SS_LEFT;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetSystemMetrics, IsWindow,
     MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
@@ -316,7 +315,7 @@ fn ensure_usage_class_registered() -> Result<()> {
                     lpfnWndProc: Some(usage_wnd_proc),
                     hInstance: hinstance.into(),
                     lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
-                    hbrBackground: HBRUSH(unsafe { GetStockObject(WHITE_BRUSH) }.0),
+                    hbrBackground: HBRUSH(GetStockObject(WHITE_BRUSH).0),
                     ..Default::default()
                 };
 
@@ -460,7 +459,7 @@ impl UsageWindow {
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 windows::core::PCWSTR(static_class.as_ptr()),
                 windows::core::PCWSTR(text_wide.as_ptr()),
-                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                WS_CHILD | WS_VISIBLE,
                 USAGE_TEXT_MARGIN,
                 USAGE_TEXT_MARGIN,
                 USAGE_WINDOW_WIDTH - (USAGE_TEXT_MARGIN * 2),
