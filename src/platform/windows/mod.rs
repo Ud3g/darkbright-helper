@@ -494,7 +494,9 @@ impl UsageWindow {
                 windows::core::PCWSTR(button_text.as_ptr()),
                 WS_CHILD
                     | WS_VISIBLE
-                    | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(BS_DEFPUSHBUTTON),
+                    | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
+                        BS_DEFPUSHBUTTON as u32,
+                    ),
                 btn_x,
                 btn_y,
                 BTN_WIDTH,
