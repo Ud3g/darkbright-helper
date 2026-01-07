@@ -622,13 +622,8 @@ The application runs as a background process with a system tray icon for user in
 Clicking "Usage" opens a modeless window displaying usage instructions:
 
 ```
-How to adjust brightness:
-
-1. Move your mouse cursor to the monitor
-   you want to adjust
-
-2. Press Ctrl+Shift+Up to increase brightness
-   or Ctrl+Shift+Down to decrease brightness
+1. Move mouse to desired monitor
+2. Press Ctrl+Shift+Up (brighter) or Ctrl+Shift+Down (dimmer)
 ```
 
 The window displays the user's configured hotkeys (not hardcoded defaults). This helps new users discover how to use the application without consulting documentation.

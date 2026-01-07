@@ -289,8 +289,8 @@ pub fn show_error_message_box(title: &str, message: &str) {
 const USAGE_WINDOW_CLASS: &str = "BrightnessControlUsageWindow";
 
 /// Usage window dimensions (in pixels, will be DPI-scaled at creation).
-const USAGE_WINDOW_WIDTH: i32 = 350;
-const USAGE_WINDOW_HEIGHT: i32 = 180;
+const USAGE_WINDOW_WIDTH: i32 = 380;
+const USAGE_WINDOW_HEIGHT: i32 = 80;
 const USAGE_TEXT_MARGIN: i32 = 20;
 
 /// Ensures the usage window class is registered exactly once.
@@ -438,11 +438,8 @@ impl UsageWindow {
 
         // Create static text control with usage instructions
         let usage_text = format!(
-            "How to adjust brightness:\r\n\r\n\
-             1. Move your mouse cursor to the monitor\r\n\
-                you want to adjust\r\n\r\n\
-             2. Press {} to increase brightness\r\n\
-                or {} to decrease brightness",
+            "1. Move mouse to desired monitor\r\n\
+             2. Press {} (brighter) or {} (dimmer)",
             hotkey_up, hotkey_down
         );
 
