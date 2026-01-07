@@ -30,7 +30,7 @@ use darkbright_helper::platform::windows::hotkey::{
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::show_error_message_box;
-use darkbright_helper::platform::windows::{DdcWorker, PowerEventListener, TrayIcon};
+use darkbright_helper::platform::windows::{DdcWorker, PowerEventListener, TrayIcon, UsageWindow};
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -123,6 +123,8 @@ struct BrightnessController {
     refresh_in_progress: bool,
     /// Whether the last refresh found any monitors.
     last_refresh_successful: bool,
+    /// Handle to the currently open usage window (if any).
+    usage_window: Option<UsageWindow>,
 }
 
 impl BrightnessController {
@@ -151,6 +153,7 @@ impl BrightnessController {
             last_refresh: now,
             refresh_in_progress: false,
             last_refresh_successful: true,
+            usage_window: None,
         })
     }
 
@@ -179,8 +182,7 @@ impl BrightnessController {
             }
             // ── Tray Icon Messages ───────────────────────────────────────
             BrightnessMessage::TrayOpenUsage => {
-                log::debug!("TrayOpenUsage received");
-                // TODO: Open usage window (Step 3)
+                self.handle_open_usage();
             }
             BrightnessMessage::TrayOpenSettings => {
                 log::debug!("TrayOpenSettings received");
@@ -227,6 +229,35 @@ impl BrightnessController {
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn handle_shutdown(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    /// Opens or focuses the usage instructions window.
+    ///
+    /// If a usage window is already open and valid, it is brought to the front.
+    /// Otherwise, a new window is created with the configured hotkey information.
+    fn handle_open_usage(&mut self) {
+        // Check if we already have a valid usage window
+        if let Some(ref window) = self.usage_window {
+            if window.is_valid() {
+                log::debug!("Usage window already open, bringing to front");
+                window.bring_to_front();
+                return;
+            }
+        }
+
+        // Create a new usage window
+        match UsageWindow::new(
+            &self.config.hotkeys.brightness_up,
+            &self.config.hotkeys.brightness_down,
+        ) {
+            Ok(window) => {
+                log::info!("Usage window opened");
+                self.usage_window = Some(window);
+            }
+            Err(e) => {
+                log::error!(error:% = e; "Failed to create usage window");
+            }
+        }
     }
 
     /// Handles the result of a DDC brightness set operation.

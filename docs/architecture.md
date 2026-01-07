@@ -606,6 +606,7 @@ The application runs as a background process with a system tray icon for user in
 │ DEL U2722D: 🕶 0% 🔆 50%        │  ← Monitor status (disabled/info only)
 │ LG 27UK850: 🕶 0% 🔆 75%        │
 │─────────────────────────────────│
+│ Usage                           │  → Opens usage instructions window
 │ Settings                        │  → Opens config.json in default editor
 │ Quit Brightness Control         │  → Graceful shutdown
 └─────────────────────────────────┘
@@ -616,22 +617,27 @@ The application runs as a background process with a system tray icon for user in
 - Show current overlay opacity (🕶) and hardware brightness (🔆) for each monitor
 - Updated each time the menu is opened via `TrayMenuOpening` request/response
 
-**Hover Tooltip:**
+**Usage Window:**
 
-When the user hovers over a monitor status row, a tooltip appears showing usage instructions:
+Clicking "Usage" opens a modeless window displaying usage instructions:
 
 ```
-1. Move mouse to desired monitor
-2. Press Ctrl+Shift+Up (brighter) or
-   Ctrl+Shift+Down (dimmer)
+How to adjust brightness:
+
+1. Move your mouse cursor to the monitor
+   you want to adjust
+
+2. Press Ctrl+Shift+Up to increase brightness
+   or Ctrl+Shift+Down to decrease brightness
 ```
 
-The tooltip displays the user's configured hotkeys (not hardcoded defaults). This helps new users discover how to use the application without consulting documentation.
+The window displays the user's configured hotkeys (not hardcoded defaults). This helps new users discover how to use the application without consulting documentation.
 
 **Implementation Notes:**
-- Uses a custom popup window (`WS_POPUP | WS_BORDER`) instead of the Win32 `tooltips_class32` control, which proved unreliable for tracking tooltips near popup menus
-- Tooltip is positioned to the right of the hovered menu item
-- Hidden automatically when hovering non-monitor items or when the menu closes
+- The usage window is modeless (does not block the application)
+- Only one instance can exist at a time; clicking "Usage" again brings the existing window to front
+- The window is centered on the primary monitor
+- The window can be closed via the close button (X) or Alt+F4
 
 ---
 

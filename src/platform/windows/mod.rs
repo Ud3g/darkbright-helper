@@ -9,8 +9,17 @@
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetCursorPos, MB_ICONERROR, MB_OK, MessageBoxW,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetSystemMetrics, IsWindow,
+    MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SS_LEFT,
+    SW_SHOW, SetForegroundWindow, ShowWindow, WM_CLOSE, WM_CREATE, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
+
+use std::sync::OnceLock;
+
+use windows::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
 use crate::error::{BrightnessError, Result};
 
@@ -269,6 +278,223 @@ pub fn show_error_message_box(title: &str, message: &str) {
             windows::core::PCWSTR(title_wide.as_ptr()),
             MB_OK | MB_ICONERROR,
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage Window
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Window class name for the usage window.
+const USAGE_WINDOW_CLASS: &str = "BrightnessControlUsageWindow";
+
+/// Usage window dimensions (in pixels, will be DPI-scaled at creation).
+const USAGE_WINDOW_WIDTH: i32 = 350;
+const USAGE_WINDOW_HEIGHT: i32 = 180;
+const USAGE_TEXT_MARGIN: i32 = 20;
+
+/// Ensures the usage window class is registered exactly once.
+static USAGE_CLASS_REGISTERED: OnceLock<Result<()>> = OnceLock::new();
+
+/// Registers the window class for the usage window if not already registered.
+fn ensure_usage_class_registered() -> Result<()> {
+    USAGE_CLASS_REGISTERED
+        .get_or_init(|| {
+            unsafe {
+                let hinstance = GetModuleHandleW(None).map_err(|e| {
+                    BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
+                })?;
+
+                let class_name: Vec<u16> = USAGE_WINDOW_CLASS
+                    .encode_utf16()
+                    .chain(std::iter::once(0))
+                    .collect();
+
+                let wnd_class = WNDCLASSEXW {
+                    cbSize: u32::try_from(std::mem::size_of::<WNDCLASSEXW>()).unwrap_or(0),
+                    lpfnWndProc: Some(usage_wnd_proc),
+                    hInstance: hinstance.into(),
+                    lpszClassName: windows::core::PCWSTR(class_name.as_ptr()),
+                    hbrBackground: HBRUSH(unsafe { GetStockObject(WHITE_BRUSH) }.0),
+                    ..Default::default()
+                };
+
+                if RegisterClassExW(&raw const wnd_class) == 0 {
+                    return Err(last_error_as_brightness_error("RegisterClassExW"));
+                }
+
+                log::debug!("Usage window class registered");
+            }
+            Ok(())
+        })
+        .clone()
+}
+
+/// Window procedure for the usage window.
+unsafe extern "system" fn usage_wnd_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            WM_CREATE => {
+                log::debug!("Usage window WM_CREATE");
+                LRESULT(0)
+            }
+            WM_CTLCOLORSTATIC => {
+                // Return white background brush for static controls
+                LRESULT(GetStockObject(WHITE_BRUSH).0 as isize)
+            }
+            WM_CLOSE => {
+                log::debug!("Usage window WM_CLOSE");
+                let _ = DestroyWindow(hwnd);
+                LRESULT(0)
+            }
+            WM_DESTROY => {
+                log::debug!("Usage window WM_DESTROY");
+                LRESULT(0)
+            }
+            _ => DefWindowProcW(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// A modeless window displaying usage instructions.
+///
+/// Only one instance should exist at a time. The window can be closed
+/// by clicking the X button or pressing Alt+F4.
+#[derive(Debug)]
+pub struct UsageWindow {
+    hwnd: SafeHwnd,
+}
+
+impl UsageWindow {
+    /// Creates and shows a new usage window with the given hotkey information.
+    ///
+    /// The window is positioned at the center of the primary monitor.
+    ///
+    /// # Arguments
+    ///
+    /// * `hotkey_up` - The configured hotkey string for brightness up.
+    /// * `hotkey_down` - The configured hotkey string for brightness down.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::WindowsApi` if window creation fails.
+    pub fn new(hotkey_up: &str, hotkey_down: &str) -> Result<Self> {
+        ensure_usage_class_registered()?;
+
+        let class_name: Vec<u16> = USAGE_WINDOW_CLASS
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        let title: Vec<u16> = "Brightness Control - Usage"
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // Calculate centered position
+        let (x, y) = unsafe {
+            let screen_width = GetSystemMetrics(SM_CXSCREEN);
+            let screen_height = GetSystemMetrics(SM_CYSCREEN);
+            (
+                (screen_width - USAGE_WINDOW_WIDTH) / 2,
+                (screen_height - USAGE_WINDOW_HEIGHT) / 2,
+            )
+        };
+
+        let hwnd = unsafe {
+            let hinstance = GetModuleHandleW(None).map_err(|e| {
+                BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
+            })?;
+
+            let hwnd = CreateWindowExW(
+                windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+                windows::core::PCWSTR(class_name.as_ptr()),
+                windows::core::PCWSTR(title.as_ptr()),
+                WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                x,
+                y,
+                USAGE_WINDOW_WIDTH,
+                USAGE_WINDOW_HEIGHT,
+                None,
+                None,
+                hinstance,
+                None,
+            );
+
+            if hwnd.0 == 0 {
+                return Err(last_error_as_brightness_error("CreateWindowExW"));
+            }
+
+            hwnd
+        };
+
+        // Create static text control with usage instructions
+        let usage_text = format!(
+            "How to adjust brightness:\r\n\r\n\
+             1. Move your mouse cursor to the monitor\r\n\
+                you want to adjust\r\n\r\n\
+             2. Press {} to increase brightness\r\n\
+                or {} to decrease brightness",
+            hotkey_up, hotkey_down
+        );
+
+        let text_wide: Vec<u16> = usage_text.encode_utf16().chain(std::iter::once(0)).collect();
+
+        unsafe {
+            let hinstance = GetModuleHandleW(None).map_err(|e| {
+                BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
+            })?;
+
+            let static_class: Vec<u16> = "STATIC".encode_utf16().chain(std::iter::once(0)).collect();
+
+            let _static_hwnd = CreateWindowExW(
+                windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+                windows::core::PCWSTR(static_class.as_ptr()),
+                windows::core::PCWSTR(text_wide.as_ptr()),
+                WS_CHILD | WS_VISIBLE | SS_LEFT,
+                USAGE_TEXT_MARGIN,
+                USAGE_TEXT_MARGIN,
+                USAGE_WINDOW_WIDTH - (USAGE_TEXT_MARGIN * 2),
+                USAGE_WINDOW_HEIGHT - (USAGE_TEXT_MARGIN * 2),
+                hwnd,
+                None,
+                hinstance,
+                None,
+            );
+
+            // Show the window
+            ShowWindow(hwnd, SW_SHOW);
+        }
+
+        log::debug!("Usage window created");
+
+        Ok(Self {
+            hwnd: unsafe { SafeHwnd::new_owned(hwnd) },
+        })
+    }
+
+    /// Returns true if the window is still valid (not closed).
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        if !self.hwnd.is_valid() {
+            return false;
+        }
+        unsafe { IsWindow(self.hwnd.as_raw()).as_bool() }
+    }
+
+    /// Brings the window to the foreground if it exists.
+    pub fn bring_to_front(&self) {
+        if self.is_valid() {
+            unsafe {
+                let _ = SetForegroundWindow(self.hwnd.as_raw());
+            }
+            log::debug!("Usage window brought to front");
+        }
     }
 }
 
