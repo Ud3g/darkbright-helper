@@ -290,7 +290,7 @@ const USAGE_WINDOW_CLASS: &str = "BrightnessControlUsageWindow";
 
 /// Usage window dimensions (in pixels, will be DPI-scaled at creation).
 const USAGE_WINDOW_WIDTH: i32 = 380;
-const USAGE_WINDOW_HEIGHT: i32 = 80;
+const USAGE_WINDOW_HEIGHT: i32 = 150;
 const USAGE_TEXT_MARGIN: i32 = 20;
 
 /// Ensures the usage window class is registered exactly once.
