@@ -178,6 +178,10 @@ impl BrightnessController {
                 self.handle_refresh();
             }
             // ── Tray Icon Messages ───────────────────────────────────────
+            BrightnessMessage::TrayOpenUsage => {
+                log::debug!("TrayOpenUsage received");
+                // TODO: Open usage window (Step 3)
+            }
             BrightnessMessage::TrayOpenSettings => {
                 log::debug!("TrayOpenSettings received");
                 if let Some(path) = Config::default_path() {
