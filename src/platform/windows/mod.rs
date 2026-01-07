@@ -8,10 +8,11 @@
 
 use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
+use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GetCursorPos, GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetFocus, SetForegroundWindow, ShowWindow,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION,
     WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
