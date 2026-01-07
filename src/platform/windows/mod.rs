@@ -6,7 +6,7 @@
 //! - Dimming overlay windows
 //! - On-screen display (OSD)
 
-use windows::Win32::Foundation::{HANDLE, HWND, POINT};
+use windows::Win32::Foundation::{HANDLE, HWND, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow,
