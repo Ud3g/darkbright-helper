@@ -9,10 +9,11 @@
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetSystemMetrics, IsWindow,
-    MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
-    SetForegroundWindow, ShowWindow, WM_CLOSE, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
+    GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW,
+    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow, WM_CLOSE, WM_COMMAND,
+    WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP,
+    WS_SYSMENU, WS_VISIBLE,
 };
 
 use std::sync::OnceLock;
@@ -292,6 +293,9 @@ const USAGE_WINDOW_CLASS: &str = "BrightnessControlUsageWindow";
 const USAGE_WINDOW_WIDTH: i32 = 380;
 const USAGE_WINDOW_HEIGHT: i32 = 150;
 const USAGE_TEXT_MARGIN: i32 = 20;
+const ID_OK_BTN: isize = 1001;
+const BTN_WIDTH: i32 = 80;
+const BTN_HEIGHT: i32 = 25;
 
 /// Ensures the usage window class is registered exactly once.
 static USAGE_CLASS_REGISTERED: OnceLock<Result<()>> = OnceLock::new();
@@ -349,6 +353,14 @@ unsafe extern "system" fn usage_wnd_proc(
             WM_CTLCOLORSTATIC => {
                 // Return white background brush for static controls
                 LRESULT(GetStockObject(WHITE_BRUSH).0 as isize)
+            }
+            WM_COMMAND => {
+                // Check if the OK button was clicked (low word of wparam is the ID)
+                let id = (wparam.0 & 0xFFFF) as isize;
+                if id == ID_OK_BTN {
+                    let _ = DestroyWindow(hwnd);
+                }
+                LRESULT(0)
             }
             WM_CLOSE => {
                 log::debug!("Usage window WM_CLOSE");
@@ -452,6 +464,9 @@ impl UsageWindow {
 
             let static_class: Vec<u16> = "STATIC".encode_utf16().chain(std::iter::once(0)).collect();
 
+            // Text area takes remaining space above the button
+            let text_height = USAGE_WINDOW_HEIGHT - (USAGE_TEXT_MARGIN * 2) - BTN_HEIGHT - 10;
+
             let _static_hwnd = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 windows::core::PCWSTR(static_class.as_ptr()),
@@ -460,9 +475,32 @@ impl UsageWindow {
                 USAGE_TEXT_MARGIN,
                 USAGE_TEXT_MARGIN,
                 USAGE_WINDOW_WIDTH - (USAGE_TEXT_MARGIN * 2),
-                USAGE_WINDOW_HEIGHT - (USAGE_TEXT_MARGIN * 2),
+                text_height,
                 hwnd,
                 None,
+                hinstance,
+                None,
+            );
+
+            let button_class: Vec<u16> = "BUTTON".encode_utf16().chain(std::iter::once(0)).collect();
+            let button_text: Vec<u16> = "OK".encode_utf16().chain(std::iter::once(0)).collect();
+
+            let btn_x = (USAGE_WINDOW_WIDTH - BTN_WIDTH) / 2;
+            let btn_y = USAGE_WINDOW_HEIGHT - USAGE_TEXT_MARGIN - BTN_HEIGHT;
+
+            let _btn_hwnd = CreateWindowExW(
+                windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
+                windows::core::PCWSTR(button_class.as_ptr()),
+                windows::core::PCWSTR(button_text.as_ptr()),
+                WS_CHILD
+                    | WS_VISIBLE
+                    | windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(BS_DEFPUSHBUTTON),
+                btn_x,
+                btn_y,
+                BTN_WIDTH,
+                BTN_HEIGHT,
+                hwnd,
+                HMENU(ID_OK_BTN),
                 hinstance,
                 None,
             );
