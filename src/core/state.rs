@@ -308,6 +308,13 @@ pub enum BrightnessMessage {
     SystemResumed,
 
     // ── Tray Icon Messages ───────────────────────────────────────────────
+    /// User clicked the "Usage" menu item in the tray menu.
+    ///
+    /// The main thread should open a modeless window displaying usage
+    /// instructions (hotkeys). Only one instance of this window should
+    /// exist at a time; if already open, bring it to front.
+    TrayOpenUsage,
+
     /// User clicked the "Settings" menu item in the tray menu.
     ///
     /// The main thread should open the config file with the system default editor.
