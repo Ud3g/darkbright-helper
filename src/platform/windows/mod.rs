@@ -9,11 +9,11 @@
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos,
-    GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW,
-    SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow, WM_CLOSE, WM_COMMAND,
-    WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP,
-    WS_SYSMENU, WS_VISIBLE,
+    AdjustWindowRect, BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GetCursorPos, GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow,
+    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 use std::sync::OnceLock;
@@ -289,10 +289,12 @@ pub fn show_error_message_box(title: &str, message: &str) {
 /// Window class name for the usage window.
 const USAGE_WINDOW_CLASS: &str = "BrightnessControlUsageWindow";
 
-/// Usage window dimensions (in pixels, will be DPI-scaled at creation).
-const USAGE_WINDOW_WIDTH: i32 = 380;
-const USAGE_WINDOW_HEIGHT: i32 = 150;
-const USAGE_TEXT_MARGIN: i32 = 20;
+/// Usage window client area dimensions (in pixels).
+/// These are the desired client area sizes; the actual window will be larger
+/// to accommodate the title bar and borders.
+const USAGE_CLIENT_WIDTH: i32 = 340;
+const USAGE_CLIENT_HEIGHT: i32 = 100;
+const USAGE_TEXT_MARGIN: i32 = 15;
 const ID_OK_BTN: isize = 1001;
 const BTN_WIDTH: i32 = 80;
 const BTN_HEIGHT: i32 = 25;
@@ -411,13 +413,27 @@ impl UsageWindow {
             .chain(std::iter::once(0))
             .collect();
 
+        // Calculate window size from desired client area
+        let window_style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+        let (window_width, window_height) = unsafe {
+            let mut rect = RECT {
+                left: 0,
+                top: 0,
+                right: USAGE_CLIENT_WIDTH,
+                bottom: USAGE_CLIENT_HEIGHT,
+            };
+            // AdjustWindowRect calculates the required window size for a given client area
+            let _ = AdjustWindowRect(&raw mut rect, window_style, false);
+            (rect.right - rect.left, rect.bottom - rect.top)
+        };
+
         // Calculate centered position
         let (x, y) = unsafe {
             let screen_width = GetSystemMetrics(SM_CXSCREEN);
             let screen_height = GetSystemMetrics(SM_CYSCREEN);
             (
-                (screen_width - USAGE_WINDOW_WIDTH) / 2,
-                (screen_height - USAGE_WINDOW_HEIGHT) / 2,
+                (screen_width - window_width) / 2,
+                (screen_height - window_height) / 2,
             )
         };
 
@@ -430,11 +446,11 @@ impl UsageWindow {
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(title.as_ptr()),
-                WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                window_style,
                 x,
                 y,
-                USAGE_WINDOW_WIDTH,
-                USAGE_WINDOW_HEIGHT,
+                window_width,
+                window_height,
                 None,
                 None,
                 hinstance,
@@ -464,8 +480,8 @@ impl UsageWindow {
 
             let static_class: Vec<u16> = "STATIC".encode_utf16().chain(std::iter::once(0)).collect();
 
-            // Text area takes remaining space above the button
-            let text_height = USAGE_WINDOW_HEIGHT - (USAGE_TEXT_MARGIN * 2) - BTN_HEIGHT - 10;
+            // Text area takes remaining space above the button (using client area dimensions)
+            let text_height = USAGE_CLIENT_HEIGHT - (USAGE_TEXT_MARGIN * 2) - BTN_HEIGHT - 10;
 
             let _static_hwnd = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
@@ -474,7 +490,7 @@ impl UsageWindow {
                 WS_CHILD | WS_VISIBLE,
                 USAGE_TEXT_MARGIN,
                 USAGE_TEXT_MARGIN,
-                USAGE_WINDOW_WIDTH - (USAGE_TEXT_MARGIN * 2),
+                USAGE_CLIENT_WIDTH - (USAGE_TEXT_MARGIN * 2),
                 text_height,
                 hwnd,
                 None,
@@ -485,8 +501,8 @@ impl UsageWindow {
             let button_class: Vec<u16> = "BUTTON".encode_utf16().chain(std::iter::once(0)).collect();
             let button_text: Vec<u16> = "OK".encode_utf16().chain(std::iter::once(0)).collect();
 
-            let btn_x = (USAGE_WINDOW_WIDTH - BTN_WIDTH) / 2;
-            let btn_y = USAGE_WINDOW_HEIGHT - USAGE_TEXT_MARGIN - BTN_HEIGHT;
+            let btn_x = (USAGE_CLIENT_WIDTH - BTN_WIDTH) / 2;
+            let btn_y = USAGE_CLIENT_HEIGHT - USAGE_TEXT_MARGIN - BTN_HEIGHT;
 
             let _btn_hwnd = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
