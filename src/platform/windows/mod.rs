@@ -8,11 +8,12 @@
 
 use windows::Win32::Foundation::{HANDLE, HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
+use windows::Win32::UI::Controls::SS_LEFT;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetSystemMetrics, IsWindow,
-    MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SS_LEFT,
-    SW_SHOW, SetForegroundWindow, ShowWindow, WM_CLOSE, WM_CREATE, WM_CTLCOLORSTATIC,
-    WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    MB_ICONERROR, MB_OK, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+    SetForegroundWindow, ShowWindow, WM_CLOSE, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 use std::sync::OnceLock;
@@ -327,7 +328,10 @@ fn ensure_usage_class_registered() -> Result<()> {
             }
             Ok(())
         })
-        .clone()
+        .as_ref()
+        .map_err(|e| BrightnessError::OverlayCreation(format!("Usage window class registration failed: {e}")))?;
+
+    Ok(())
 }
 
 /// Window procedure for the usage window.
