@@ -56,3 +56,4 @@ personal/
 # Added by cargo
 
 /target
+.cecli*
