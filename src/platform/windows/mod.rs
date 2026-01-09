@@ -294,7 +294,7 @@ const USAGE_WINDOW_CLASS: &str = "BrightnessControlUsageWindow";
 /// These are the desired client area sizes; the actual window will be larger
 /// to accommodate the title bar and borders.
 const USAGE_CLIENT_WIDTH: i32 = 340;
-const USAGE_CLIENT_HEIGHT: i32 = 100;
+const USAGE_CLIENT_HEIGHT: i32 = 150;
 const USAGE_TEXT_MARGIN: i32 = 15;
 const ID_OK_BTN: isize = 1001;
 const BTN_WIDTH: i32 = 80;
