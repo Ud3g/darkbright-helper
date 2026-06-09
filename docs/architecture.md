@@ -107,6 +107,7 @@ enum BrightnessMessage {
     DdcRefreshResult { monitors: Vec<(MonitorId, u8)> },      // DDC worker → main
     Refresh,
     SystemResumed,                                            // Power thread → main
+    TrayOpenUsage,                                            // Tray thread → main
     TrayOpenSettings,                                         // Tray thread → main
     TrayRequestQuit,                                          // Tray thread → main
     TrayMenuOpening { reply_tx: Sender<TrayMenuData> },       // Tray thread ↔ main (request/response)
@@ -227,7 +228,7 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   "monitors": {},
   "osd": {
     "timeout_ms": 1000,
-    "opacity": 0.8
+    "opacity": 1.0
   },
   "brightness": {
     "step_percent": 5
@@ -275,7 +276,7 @@ When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
 | `hotkeys.brightness_down` | Valid hotkey string (see format above) | `Ctrl+Shift+Down` |
 | `hotkeys.intercept_brightness_keys` | `true` / `false` | `false` |
 | `osd.timeout_ms` | 100 - 10000 | 1000 |
-| `osd.opacity` | 0.1 - 1.0 | 0.8 |
+| `osd.opacity` | 0.1 - 1.0 | 1.0 |
 | `brightness.step_percent` | 1 - 50 | 5 |
 | `refresh.periodic_seconds` | 0 - 3600 | 60 |
 | `refresh.inactivity_seconds` | 0 - 600 | 30 |
@@ -394,6 +395,8 @@ pub trait DimmingOverlay {
     fn set_opacity(&mut self, opacity: f32) -> Result<()>;  // 0.0 = invisible, 1.0 = fully black
     fn show(&mut self) -> Result<()>;
     fn hide(&mut self) -> Result<()>;
+    fn is_visible(&self) -> bool;
+    fn opacity(&self) -> f32;
 }
 ```
 
