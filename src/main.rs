@@ -771,7 +771,7 @@ fn main() {
     // Load configuration
     let config = load_config();
 
-    // Phase 6, Step 43: Create channels
+    // Create channels
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();
 
@@ -833,7 +833,7 @@ fn main() {
         return;
     }
 
-    // Phase 6, Step 46: Main Loop
+    // Main Loop
     log::info!("Entering main event loop");
     loop {
         // Pump Windows messages (for OSD WM_PAINT, WM_TIMER, etc.)
@@ -867,7 +867,7 @@ fn main() {
         }
     }
 
-    // Phase 6, Step 48: Cleanup
+    // Cleanup
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), FALSE);
     }

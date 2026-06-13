@@ -1,6 +1,6 @@
 //! On-Screen Display (OSD) implementation for Windows.
 //!
-//! ## Layout (F.6 Bidirectional Bar)
+//! ## Layout (Bidirectional Bar)
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────────────────┐
@@ -284,7 +284,7 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
     }
 }
 
-/// Draws the bidirectional brightness bar (F.6 layout).
+/// Draws the bidirectional brightness bar.
 ///
 /// Layout: `|pad|pct 🕶 ░░░░██████|gap|██████░░░░ 🔆 pct|pad|`
 ///
