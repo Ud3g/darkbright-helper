@@ -2,7 +2,7 @@
 name = "darkbright-helper"
 version = "0.7.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 
 [dependencies]
 # Windows API

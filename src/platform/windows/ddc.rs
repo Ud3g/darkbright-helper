@@ -344,25 +344,6 @@ impl DdcMonitor {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_enumerate_monitors() {
-        // This test should pass on any Windows system, even headless (returns empty vec).
-        let result = enumerate_monitors();
-        assert!(result.is_ok());
-    }
-
-    /// Static assertion that `DdcMonitor` is `Send`.
-    /// This is required for the DDC worker thread to own monitors.
-    const _: () = {
-        const fn assert_send<T: Send>() {}
-        assert_send::<DdcMonitor>();
-    };
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // EDID & Monitor ID Implementation
 // ─────────────────────────────────────────────────────────────────────────────
@@ -657,4 +638,23 @@ fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
 fn parse_descriptor_string(bytes: &[u8]) -> String {
     let len = bytes.iter().position(|&b| b == 0x0A).unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..len]).trim().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_enumerate_monitors() {
+        // This test should pass on any Windows system, even headless (returns empty vec).
+        let result = enumerate_monitors();
+        assert!(result.is_ok());
+    }
+
+    /// Static assertion that `DdcMonitor` is `Send`.
+    /// This is required for the DDC worker thread to own monitors.
+    const _: () = {
+        const fn assert_send<T: Send>() {}
+        assert_send::<DdcMonitor>();
+    };
 }

@@ -361,7 +361,7 @@ unsafe extern "system" fn usage_wnd_proc(
             }
             WM_COMMAND => {
                 // Check if the OK button was clicked (low word of wparam is the ID)
-                let id = (wparam.0 & 0xFFFF) as isize;
+                let id = (wparam.0 & 0xFFFF).cast_signed();
                 if id == ID_OK_BTN {
                     let _ = DestroyWindow(hwnd);
                 }
@@ -403,6 +403,8 @@ impl UsageWindow {
     /// # Errors
     ///
     /// Returns `BrightnessError::WindowsApi` if window creation fails.
+    // Sequential Win32 window and child-control creation is inherently long.
+    #[allow(clippy::too_many_lines)]
     pub fn new(hotkey_up: &str, hotkey_down: &str) -> Result<Self> {
         ensure_usage_class_registered()?;
 
@@ -470,8 +472,7 @@ impl UsageWindow {
         // Create static text control with usage instructions
         let usage_text = format!(
             "1. Move mouse to desired monitor\r\n\
-             2. Press {} (brighter) or {} (dimmer)",
-            hotkey_up, hotkey_down
+             2. Press {hotkey_up} (brighter) or {hotkey_down} (dimmer)"
         );
 
         let text_wide: Vec<u16> = usage_text
