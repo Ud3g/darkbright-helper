@@ -15,7 +15,7 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
     }
 
     for (i, &hmonitor) in monitors.iter().enumerate() {
-        println!("\n--- Logical Monitor #{} ---", i);
+        println!("\n--- Logical Monitor #{i} ---");
 
         // 2. Identify Monitor (EDID)
         match get_monitor_id(hmonitor) {
@@ -26,7 +26,7 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
                 );
             }
             Err(e) => {
-                println!("  Failed to identify monitor: {}", e);
+                println!("  Failed to identify monitor: {e}");
             }
         }
 
@@ -39,19 +39,16 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
                     // 4. Read Brightness (VCP 0x10)
                     match get_vcp_feature(pm, 0x10) {
                         Ok((current, max)) => {
-                            println!(
-                                "    [Physical #{}] Brightness: {} (Max: {})",
-                                j, current, max
-                            );
+                            println!("    [Physical #{j}] Brightness: {current} (Max: {max})");
                         }
                         Err(e) => {
-                            println!("    [Physical #{}] Failed to read brightness: {}", j, e);
+                            println!("    [Physical #{j}] Failed to read brightness: {e}");
                         }
                     }
                 }
             }
             Err(e) => {
-                println!("  Failed to get physical monitors: {}", e);
+                println!("  Failed to get physical monitors: {e}");
             }
         }
     }
