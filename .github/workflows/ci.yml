@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref to save runner minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: CI only needs to read the repo.
+permissions:
+  contents: read
+
+jobs:
+  # Build/lint/test must run on Windows: the binary path is gated behind
+  # #[cfg(windows)] and pulls in the `windows` crate, so it does not compile
+  # on Linux. windows-latest builds and tests the whole crate natively.
+  check:
+    name: fmt + clippy + test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      # Promote all warnings (including the pedantic group enabled in
+      # Cargo.toml) to errors, matching the pre-commit bar in CLAUDE.md.
+      - name: Clippy (deny warnings)
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      # Plain `cargo test` covers unit, integration, and doc tests.
+      - name: Test
+        run: cargo test --locked
+
+  # cargo audit only reads Cargo.lock against the RustSec advisory DB, so it
+  # runs on a fast Linux runner independent of the Windows build.
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Audit dependencies for known advisories
+        run: cargo audit
