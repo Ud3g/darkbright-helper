@@ -289,8 +289,8 @@ fn test_parsed_hotkey_display_no_modifiers() {
 fn test_hotkey_id_constants() {
     // Verify the hotkey IDs are distinct
     assert_ne!(BRIGHTNESS_UP_ID, BRIGHTNESS_DOWN_ID);
-    assert!(BRIGHTNESS_UP_ID > 0);
-    assert!(BRIGHTNESS_DOWN_ID > 0);
+    const { assert!(BRIGHTNESS_UP_ID > 0) };
+    const { assert!(BRIGHTNESS_DOWN_ID > 0) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
