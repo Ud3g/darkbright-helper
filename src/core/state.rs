@@ -65,7 +65,8 @@ impl MonitorId {
         // Check if model_name already starts with manufacturer prefix (case-insensitive)
         // to avoid duplication like "PHL PHL 346B1C" when EDID contains redundant info
         let prefix = format!("{} ", self.manufacturer);
-        if self.model_name
+        if self
+            .model_name
             .to_ascii_uppercase()
             .starts_with(&prefix.to_ascii_uppercase())
         {

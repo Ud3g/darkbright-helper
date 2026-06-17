@@ -12,9 +12,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow,
     GetCursorPos, GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow,
-    WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow, WM_CLOSE,
+    WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
+    WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 use std::sync::OnceLock;
@@ -335,7 +335,9 @@ fn ensure_usage_class_registered() -> Result<()> {
             Ok(())
         })
         .as_ref()
-        .map_err(|e| BrightnessError::OverlayCreation(format!("Usage window class registration failed: {e}")))?;
+        .map_err(|e| {
+            BrightnessError::OverlayCreation(format!("Usage window class registration failed: {e}"))
+        })?;
 
     Ok(())
 }
@@ -472,14 +474,18 @@ impl UsageWindow {
             hotkey_up, hotkey_down
         );
 
-        let text_wide: Vec<u16> = usage_text.encode_utf16().chain(std::iter::once(0)).collect();
+        let text_wide: Vec<u16> = usage_text
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
 
         unsafe {
             let hinstance = GetModuleHandleW(None).map_err(|e| {
                 BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
             })?;
 
-            let static_class: Vec<u16> = "STATIC".encode_utf16().chain(std::iter::once(0)).collect();
+            let static_class: Vec<u16> =
+                "STATIC".encode_utf16().chain(std::iter::once(0)).collect();
 
             // Text area takes remaining space above the button (using client area dimensions)
             let text_height = USAGE_CLIENT_HEIGHT - (USAGE_TEXT_MARGIN * 2) - BTN_HEIGHT - 10;
@@ -499,7 +505,8 @@ impl UsageWindow {
                 None,
             );
 
-            let button_class: Vec<u16> = "BUTTON".encode_utf16().chain(std::iter::once(0)).collect();
+            let button_class: Vec<u16> =
+                "BUTTON".encode_utf16().chain(std::iter::once(0)).collect();
             let button_text: Vec<u16> = "OK".encode_utf16().chain(std::iter::once(0)).collect();
 
             let btn_x = (USAGE_CLIENT_WIDTH - BTN_WIDTH) / 2;
