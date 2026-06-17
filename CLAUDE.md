@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`darkbright-helper` is a hotkey-driven monitor brightness tool for Windows (Rust 2024, MSRV 1.85+). It controls hardware brightness via DDC/CI (VCP code `0x10`) for 1–100%, and falls back to a black layered overlay window for "sub-zero" dimming at 0%. Multi-monitor aware: hotkeys target the monitor under the mouse cursor. Monitors are identified by EDID (manufacturer + model + serial), not OS handles, so config is portable.
+`darkbright-helper` is a hotkey-driven monitor brightness tool for Windows (Rust 2024, MSRV 1.87+). It controls hardware brightness via DDC/CI (VCP code `0x10`) for 1–100%, and falls back to a black layered overlay window for "sub-zero" dimming at 0%. Multi-monitor aware: hotkeys target the monitor under the mouse cursor. Monitors are identified by EDID (manufacturer + model + serial), not OS handles, so config is portable.
 
 ## Platform gotcha (important)
 
