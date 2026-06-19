@@ -22,12 +22,9 @@ use windows::Win32::Graphics::Dwm::{
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateFontW, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteDC, DeleteObject,
-    EndPaint, FF_DONTCARE, FW_NORMAL, FillRect, GetMonitorInfoW, HDC, HFONT, HMONITOR,
-    InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, SRCCOPY, SelectObject, SetBkMode, SetTextAlign, SetTextColor, TA_LEFT, TA_RIGHT,
-    TRANSPARENT, TextOutW,
+    BeginPaint, CreateSolidBrush, EndPaint, GetMonitorInfoW, HDC, HMONITOR, InvalidateRect,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, PAINTSTRUCT, SetBkMode, SetTextAlign,
+    SetTextColor, TA_LEFT, TA_RIGHT, TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -39,7 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::{SafeHwnd, last_error_as_brightness_error};
+use super::{SafeHwnd, last_error_as_brightness_error, osd_render};
 use crate::core::state::MonitorState;
 use crate::error::{BrightnessError, Result};
 
@@ -244,24 +241,14 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
         let width = rect.right - rect.left;
         let height = rect.bottom - rect.top;
 
-        // Create memory DC for double-buffering
-        let mem_dc = CreateCompatibleDC(hdc);
-        if mem_dc.0 == 0 {
+        // Double-buffer to avoid flicker; the guard cleans up on drop.
+        let Some(buffer) = osd_render::BackBuffer::new(hdc, width, height) else {
             return;
-        }
-
-        let mem_bitmap = CreateCompatibleBitmap(hdc, width, height);
-        if mem_bitmap.0 == 0 {
-            let _ = DeleteDC(mem_dc);
-            return;
-        }
-
-        let old_bitmap = SelectObject(mem_dc, mem_bitmap);
+        };
+        let mem_dc = buffer.dc();
 
         // Fill background
-        let bg_brush = CreateSolidBrush(COLORREF(OSD_BACKGROUND_COLOR));
-        FillRect(mem_dc, &raw const rect, bg_brush);
-        let _ = DeleteObject(bg_brush);
+        osd_render::fill_rect(mem_dc, &rect, OSD_BACKGROUND_COLOR);
 
         // Get current state from thread-local storage
         let state = OSD_STATE.with(|s| s.borrow().clone());
@@ -275,12 +262,7 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
         }
 
         // Copy to screen
-        let _ = BitBlt(hdc, 0, 0, width, height, mem_dc, 0, 0, SRCCOPY);
-
-        // Cleanup
-        SelectObject(mem_dc, old_bitmap);
-        DeleteObject(mem_bitmap);
-        DeleteDC(mem_dc);
+        buffer.blit_to(hdc);
     }
 }
 
@@ -421,9 +403,7 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
             right: bar_left + single_bar_width,
             bottom: bar_top + bar_height,
         };
-        let bg_brush = CreateSolidBrush(COLORREF(BAR_BACKGROUND_COLOR));
-        FillRect(hdc, &raw const bg_rect, bg_brush);
-        let _ = DeleteObject(bg_brush);
+        osd_render::fill_rect(hdc, &bg_rect, BAR_BACKGROUND_COLOR);
 
         // Draw filled portion (fills from right to left)
         let fill_width =
@@ -436,9 +416,7 @@ unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overl
                 right: bar_left + single_bar_width,
                 bottom: bar_top + bar_height,
             };
-            let fill_brush = CreateSolidBrush(COLORREF(OVERLAY_FILL_COLOR));
-            FillRect(hdc, &raw const fill_rect, fill_brush);
-            let _ = DeleteObject(fill_brush);
+            osd_render::fill_rect(hdc, &fill_rect, OVERLAY_FILL_COLOR);
         }
 
         // Percentage text position: right-aligned so "%" stays at fixed position
@@ -460,9 +438,8 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
     unsafe {
         let (font_size, bar_height) = with_metrics(|m| (m.font_size, m.bar_height));
 
-        // Create font (use Segoe UI Emoji for proper emoji rendering)
-        let font = create_icon_font(font_size);
-        let old_font = SelectObject(hdc, font);
+        // Select an emoji font; the guard restores + deletes on drop.
+        let _font = osd_render::SelectedFont::new(hdc, font_size, osd_render::FontFace::Emoji);
 
         // Set text properties
         SetBkMode(hdc, TRANSPARENT);
@@ -472,36 +449,6 @@ unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
         let wide_text: Vec<u16> = icon.encode_utf16().collect();
         let text_y = y + (bar_height - font_size) / 2;
         TextOutW(hdc, x, text_y, &wide_text);
-
-        // Cleanup
-        SelectObject(hdc, old_font);
-        DeleteObject(font);
-    }
-}
-
-/// Creates the font used for OSD icons (emoji).
-///
-/// # Safety
-///
-/// The returned `HFONT` must be deleted with `DeleteObject` when no longer needed.
-unsafe fn create_icon_font(font_size: i32) -> HFONT {
-    unsafe {
-        CreateFontW(
-            font_size,                 // Height
-            0,                         // Width (0 = auto)
-            0,                         // Escapement
-            0,                         // Orientation
-            FW_NORMAL.0.cast_signed(), // Weight
-            0,                         // Italic
-            0,                         // Underline
-            0,                         // StrikeOut
-            u32::from(DEFAULT_CHARSET.0),
-            u32::from(OUT_DEFAULT_PRECIS.0),
-            u32::from(CLIP_DEFAULT_PRECIS.0),
-            0, // Quality (DEFAULT_QUALITY)
-            u32::from(DEFAULT_PITCH.0 | FF_DONTCARE.0),
-            w!("Segoe UI Emoji"), // Font face for emoji support
-        )
     }
 }
 
@@ -519,36 +466,30 @@ unsafe fn draw_single_bar(
     percent: u8,
     is_error: bool,
 ) {
-    unsafe {
-        // Draw background
-        let bg_rect = RECT {
+    // Draw background
+    let bg_rect = RECT {
+        left: x,
+        top: y,
+        right: x + width,
+        bottom: y + height,
+    };
+    osd_render::fill_rect(hdc, &bg_rect, BAR_BACKGROUND_COLOR);
+
+    // Draw filled portion
+    let fill_width = i32::try_from(i64::from(width) * i64::from(percent) / 100).unwrap_or(0);
+    if fill_width > 0 {
+        let fill_rect = RECT {
             left: x,
             top: y,
-            right: x + width,
+            right: x + fill_width,
             bottom: y + height,
         };
-        let bg_brush = CreateSolidBrush(COLORREF(BAR_BACKGROUND_COLOR));
-        FillRect(hdc, &raw const bg_rect, bg_brush);
-        let _ = DeleteObject(bg_brush);
-
-        // Draw filled portion
-        let fill_width = i32::try_from(i64::from(width) * i64::from(percent) / 100).unwrap_or(0);
-        if fill_width > 0 {
-            let fill_rect = RECT {
-                left: x,
-                top: y,
-                right: x + fill_width,
-                bottom: y + height,
-            };
-            let fill_color = if is_error {
-                BAR_ERROR_COLOR
-            } else {
-                BAR_FILL_COLOR
-            };
-            let fill_brush = CreateSolidBrush(COLORREF(fill_color));
-            FillRect(hdc, &raw const fill_rect, fill_brush);
-            let _ = DeleteObject(fill_brush);
-        }
+        let fill_color = if is_error {
+            BAR_ERROR_COLOR
+        } else {
+            BAR_FILL_COLOR
+        };
+        osd_render::fill_rect(hdc, &fill_rect, fill_color);
     }
 }
 
@@ -569,9 +510,8 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_alig
     unsafe {
         let (font_size, bar_height) = with_metrics(|m| (m.font_size, m.bar_height));
 
-        // Create font
-        let font = create_osd_font(font_size);
-        let old_font = SelectObject(hdc, font);
+        // Select the text font; the guard restores + deletes on drop.
+        let _font = osd_render::SelectedFont::new(hdc, font_size, osd_render::FontFace::Text);
 
         // Set text properties
         SetBkMode(hdc, TRANSPARENT);
@@ -589,10 +529,8 @@ unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_alig
         let text_y = y + (bar_height - font_size).saturating_div(2);
         TextOutW(hdc, x, text_y, &wide_text);
 
-        // Restore default alignment and cleanup
+        // Restore default alignment (draw state, not a resource).
         SetTextAlign(hdc, TA_LEFT);
-        SelectObject(hdc, old_font);
-        let _ = DeleteObject(font);
     }
 }
 
@@ -608,9 +546,8 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
     unsafe {
         let (font_size, error_row_height) = with_metrics(|m| (m.font_size, m.error_row_height));
 
-        // Create font
-        let font = create_osd_font(font_size);
-        let old_font = SelectObject(hdc, font);
+        // Select the text font; the guard restores + deletes on drop.
+        let _font = osd_render::SelectedFont::new(hdc, font_size, osd_render::FontFace::Text);
 
         // Set text properties - use red color for error visibility
         SetBkMode(hdc, TRANSPARENT);
@@ -632,36 +569,6 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
         let y = client_rect.bottom - error_row_height + (error_row_height - font_size) / 2;
 
         TextOutW(hdc, x, y, &wide_text);
-
-        // Cleanup
-        SelectObject(hdc, old_font);
-        let _ = DeleteObject(font);
-    }
-}
-
-/// Creates the font used for OSD text.
-///
-/// # Safety
-///
-/// The returned `HFONT` must be deleted with `DeleteObject` when no longer needed.
-unsafe fn create_osd_font(font_size: i32) -> HFONT {
-    unsafe {
-        CreateFontW(
-            font_size,                 // Height
-            0,                         // Width (0 = auto)
-            0,                         // Escapement
-            0,                         // Orientation
-            FW_NORMAL.0.cast_signed(), // Weight
-            0,                         // Italic
-            0,                         // Underline
-            0,                         // StrikeOut
-            u32::from(DEFAULT_CHARSET.0),
-            u32::from(OUT_DEFAULT_PRECIS.0),
-            u32::from(CLIP_DEFAULT_PRECIS.0),
-            0, // Quality (DEFAULT_QUALITY)
-            u32::from(DEFAULT_PITCH.0 | FF_DONTCARE.0),
-            w!("Segoe UI"), // Font face
-        )
     }
 }
 
