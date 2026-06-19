@@ -23,8 +23,7 @@ use windows::Win32::Graphics::Dwm::{
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, EndPaint, GetMonitorInfoW, HDC, HMONITOR, InvalidateRect,
-    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, PAINTSTRUCT, SetBkMode, SetTextAlign,
-    SetTextColor, TA_LEFT, TA_RIGHT, TRANSPARENT, TextOutW,
+    MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
@@ -54,11 +53,9 @@ const BASE_OSD_BOTTOM_MARGIN: i32 = 100;
 
 /// Base height reserved for the error message row (when expanded).
 const BASE_ERROR_ROW_HEIGHT: i32 = 25;
-/// Error message displayed when DDC communication fails.
-const ERROR_MESSAGE: &str = "DDC Error - Adjustment failed";
 
 /// OSD background color (dark gray, semi-transparent look).
-const OSD_BACKGROUND_COLOR: u32 = 0x0030_3030; // RGB: 48, 48, 48
+pub(super) const OSD_BACKGROUND_COLOR: u32 = 0x0030_3030; // RGB: 48, 48, 48
 
 /// Base padding inside the OSD window.
 const BASE_OSD_PADDING: i32 = 10;
@@ -67,26 +64,9 @@ const BASE_BAR_HEIGHT: i32 = 20;
 /// Base gap between the left (overlay) and right (hardware) bar sections.
 const BASE_BAR_GAP: i32 = 4;
 
-/// Hardware brightness bar fill color (golden/orange).
-const BAR_FILL_COLOR: u32 = 0x00D0_A030; // BGR: 48, 160, 208
-/// Overlay dimming bar fill color (purple/violet).
-const OVERLAY_FILL_COLOR: u32 = 0x00CC_6699; // BGR: 153, 102, 204
-/// Progress bar background color (dark gray).
-const BAR_BACKGROUND_COLOR: u32 = 0x0050_5050; // BGR: 80, 80, 80
-/// Text color (white).
-const TEXT_COLOR: u32 = 0x00FF_FFFF; // BGR: 255, 255, 255
-/// Error bar color (red).
-const BAR_ERROR_COLOR: u32 = 0x0000_00CC; // BGR: 204, 0, 0
-/// Error text color (light red for visibility on dark background).
-const ERROR_TEXT_COLOR: u32 = 0x0050_50FF; // BGR: 255, 80, 80
-
 /// Base font size for percentage text.
 const BASE_FONT_SIZE: i32 = 18;
 
-/// Icon for hardware brightness (sun symbol).
-const ICON_HARDWARE: &str = "🔆";
-/// Icon for overlay/dimming (sunglasses symbol).
-const ICON_OVERLAY: &str = "🕶";
 /// Base width reserved for each icon.
 const BASE_ICON_WIDTH: i32 = 25;
 /// Base width reserved for percentage text (e.g., "100%").
@@ -169,13 +149,13 @@ thread_local! {
 
 /// State used for rendering the OSD.
 #[derive(Debug, Clone, Default)]
-struct OsdRenderState {
+pub(super) struct OsdRenderState {
     /// Hardware brightness (0-100).
-    hardware_brightness: u8,
+    pub(super) hardware_brightness: u8,
     /// Overlay opacity (0-100, 0 = inactive).
-    overlay_opacity: u8,
+    pub(super) overlay_opacity: u8,
     /// Whether an error occurred.
-    is_error: bool,
+    pub(super) is_error: bool,
 }
 
 /// Ensures the window class is registered exactly once.
@@ -224,352 +204,24 @@ unsafe extern "system" fn wnd_proc(
     }
 }
 
-/// Paints the OSD content using double-buffering.
+/// Snapshots render state and metrics, then delegates drawing to `osd_render`.
 ///
 /// # Safety
 ///
 /// Must be called from within a `BeginPaint`/`EndPaint` block.
 unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
-    unsafe {
-        log::trace!("Painting OSD");
-        let mut rect = RECT::default();
-        if GetClientRect(hwnd, &raw mut rect).is_err() {
-            log::warn!("GetClientRect failed");
-            return;
-        }
-
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-
-        // Double-buffer to avoid flicker; the guard cleans up on drop.
-        let Some(buffer) = osd_render::BackBuffer::new(hdc, width, height) else {
-            return;
-        };
-        let mem_dc = buffer.dc();
-
-        // Fill background
-        osd_render::fill_rect(mem_dc, &rect, OSD_BACKGROUND_COLOR);
-
-        // Get current state from thread-local storage
-        let state = OSD_STATE.with(|s| s.borrow().clone());
-
-        // Draw progress bar(s)
-        draw_brightness_bars(mem_dc, &rect, &state);
-
-        // Draw error message if in error state
-        if state.is_error {
-            draw_error_message(mem_dc, &rect, ERROR_MESSAGE);
-        }
-
-        // Copy to screen
-        buffer.blit_to(hdc);
+    // Kept here (before the GetClientRect guard) so the trace order on a
+    // GetClientRect failure is identical to the pre-refactor behavior.
+    log::trace!("Painting OSD");
+    let mut rect = RECT::default();
+    if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_err() {
+        log::warn!("GetClientRect failed");
+        return;
     }
-}
 
-/// Draws the bidirectional brightness bar.
-///
-/// Layout: `|pad|pct 🕶 ░░░░██████|gap|██████░░░░ 🔆 pct|pad|`
-///
-/// - Left half: overlay dimming (fills right-to-left)
-/// - Right half: hardware brightness (fills left-to-right)
-/// - Small gap separates the two halves
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderState) {
-    unsafe {
-        log::trace!(
-            hardware_brightness = state.hardware_brightness,
-            overlay_opacity = state.overlay_opacity,
-            is_error = state.is_error;
-            "Drawing bidirectional brightness bar"
-        );
-
-        // Use fixed bar position based on compact height (OSD_HEIGHT).
-        // This keeps the bar in the same position whether or not the error row is visible.
-        // When expanded for errors, the extra space is at the bottom for the error message.
-        let bar_top = with_metrics(|m| (m.height - m.bar_height) / 2);
-
-        // Draw left side (overlay section)
-        draw_overlay_section(hdc, client_rect, bar_top, state.overlay_opacity);
-
-        // Draw right side (hardware section)
-        draw_hardware_section(
-            hdc,
-            client_rect,
-            bar_top,
-            state.hardware_brightness,
-            state.is_error,
-        );
-    }
-}
-
-/// Draws the hardware brightness section (right half of the bidirectional bar).
-///
-/// Layout: `|...|gap|████████░░░░░░░░░░ 🔆 100%|pad|`
-///
-/// The bar fills from left to right based on hardware brightness percentage.
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_hardware_section(
-    hdc: HDC,
-    client_rect: &RECT,
-    bar_top: i32,
-    hardware_brightness: u8,
-    is_error: bool,
-) {
-    unsafe {
-        let width = client_rect.right - client_rect.left;
-
-        // Calculate layout positions
-        let (padding, percent_text_width, icon_width, bar_gap, bar_height) = with_metrics(|m| {
-            (
-                m.padding,
-                m.percent_text_width,
-                m.icon_width,
-                m.bar_gap,
-                m.bar_height,
-            )
-        });
-
-        // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
-        let content_width = width - (padding * 2);
-        let total_bar_width = content_width - (percent_text_width * 2) - (icon_width * 2) - bar_gap;
-        let single_bar_width = total_bar_width / 2;
-
-        // Right bar starts after: pad + pct + ico + left_bar + gap
-        let bar_left = padding + percent_text_width + icon_width + single_bar_width + bar_gap;
-
-        // Draw the bar (fills left-to-right)
-        draw_single_bar(
-            hdc,
-            bar_left,
-            bar_top,
-            single_bar_width,
-            bar_height,
-            hardware_brightness,
-            is_error,
-        );
-
-        // Icon position: right of bar with small padding
-        let icon_x = bar_left + single_bar_width + 2;
-        draw_icon(hdc, icon_x, bar_top, ICON_HARDWARE);
-
-        // Percentage text position: right of icon (left-aligned)
-        let percent_x = icon_x + icon_width;
-        draw_percentage_text(hdc, percent_x, bar_top, hardware_brightness, false);
-    }
-}
-
-/// Draws the overlay dimming section (left half of the bidirectional bar).
-///
-/// Layout: `|pad|30% 🕶 ░░░░░░░░░░░░░░██████|gap|...|`
-///
-/// The bar fills from right to left based on overlay opacity percentage.
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_overlay_section(hdc: HDC, client_rect: &RECT, bar_top: i32, overlay_opacity: u8) {
-    unsafe {
-        let width = client_rect.right - client_rect.left;
-
-        // Calculate layout positions
-        let (padding, percent_text_width, icon_width, bar_gap, bar_height) = with_metrics(|m| {
-            (
-                m.padding,
-                m.percent_text_width,
-                m.icon_width,
-                m.bar_gap,
-                m.bar_height,
-            )
-        });
-
-        // Full layout: |pad|pct|ico|left_bar|gap|right_bar|ico|pct|pad|
-        let content_width = width - (padding * 2);
-        let total_bar_width = content_width - (percent_text_width * 2) - (icon_width * 2) - bar_gap;
-        let single_bar_width = total_bar_width / 2;
-
-        // Left bar starts after: pad + pct + ico
-        let bar_left = padding + percent_text_width + icon_width;
-
-        // Draw the bar background
-        let bg_rect = RECT {
-            left: bar_left,
-            top: bar_top,
-            right: bar_left + single_bar_width,
-            bottom: bar_top + bar_height,
-        };
-        osd_render::fill_rect(hdc, &bg_rect, BAR_BACKGROUND_COLOR);
-
-        // Draw filled portion (fills from right to left)
-        let fill_width =
-            i32::try_from(i64::from(single_bar_width) * i64::from(overlay_opacity) / 100)
-                .unwrap_or(0);
-        if fill_width > 0 {
-            let fill_rect = RECT {
-                left: bar_left + single_bar_width - fill_width, // Start from right side
-                top: bar_top,
-                right: bar_left + single_bar_width,
-                bottom: bar_top + bar_height,
-            };
-            osd_render::fill_rect(hdc, &fill_rect, OVERLAY_FILL_COLOR);
-        }
-
-        // Percentage text position: right-aligned so "%" stays at fixed position
-        let percent_right_x = padding + percent_text_width;
-        draw_percentage_text(hdc, percent_right_x, bar_top, overlay_opacity, true);
-
-        // Icon position: left of bar with small padding
-        let icon_x = padding + percent_text_width;
-        draw_icon(hdc, icon_x, bar_top, ICON_OVERLAY);
-    }
-}
-
-/// Draws an icon (emoji) at the specified position.
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str) {
-    unsafe {
-        let (font_size, bar_height) = with_metrics(|m| (m.font_size, m.bar_height));
-
-        // Select an emoji font; the guard restores + deletes on drop.
-        let _font = osd_render::SelectedFont::new(hdc, font_size, osd_render::FontFace::Emoji);
-
-        // Set text properties
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, COLORREF(TEXT_COLOR));
-
-        // Draw icon
-        let wide_text: Vec<u16> = icon.encode_utf16().collect();
-        let text_y = y + (bar_height - font_size) / 2;
-        TextOutW(hdc, x, text_y, &wide_text);
-    }
-}
-
-/// Draws a single progress bar.
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_single_bar(
-    hdc: HDC,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
-    percent: u8,
-    is_error: bool,
-) {
-    // Draw background
-    let bg_rect = RECT {
-        left: x,
-        top: y,
-        right: x + width,
-        bottom: y + height,
-    };
-    osd_render::fill_rect(hdc, &bg_rect, BAR_BACKGROUND_COLOR);
-
-    // Draw filled portion
-    let fill_width = i32::try_from(i64::from(width) * i64::from(percent) / 100).unwrap_or(0);
-    if fill_width > 0 {
-        let fill_rect = RECT {
-            left: x,
-            top: y,
-            right: x + fill_width,
-            bottom: y + height,
-        };
-        let fill_color = if is_error {
-            BAR_ERROR_COLOR
-        } else {
-            BAR_FILL_COLOR
-        };
-        osd_render::fill_rect(hdc, &fill_rect, fill_color);
-    }
-}
-
-/// Draws the percentage text next to a bar.
-///
-/// # Arguments
-///
-/// * `hdc` - Device context to draw on.
-/// * `x` - X coordinate (left edge if `right_align` is false, right edge if true).
-/// * `y` - Y coordinate (top of bar area, text is centered vertically).
-/// * `percent` - Percentage value to display.
-/// * `right_align` - If true, text is right-aligned (x is the right edge).
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_percentage_text(hdc: HDC, x: i32, y: i32, percent: u8, right_align: bool) {
-    unsafe {
-        let (font_size, bar_height) = with_metrics(|m| (m.font_size, m.bar_height));
-
-        // Select the text font; the guard restores + deletes on drop.
-        let _font = osd_render::SelectedFont::new(hdc, font_size, osd_render::FontFace::Text);
-
-        // Set text properties
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, COLORREF(TEXT_COLOR));
-
-        // Set text alignment
-        let align = if right_align { TA_RIGHT } else { TA_LEFT };
-        SetTextAlign(hdc, align);
-
-        // Format and draw text
-        let text = format!("{percent}%");
-        let wide_text: Vec<u16> = text.encode_utf16().collect();
-
-        // Center text vertically with the bar
-        let text_y = y + (bar_height - font_size).saturating_div(2);
-        TextOutW(hdc, x, text_y, &wide_text);
-
-        // Restore default alignment (draw state, not a resource).
-        SetTextAlign(hdc, TA_LEFT);
-    }
-}
-
-/// Draws the error message centered in the error row at the bottom of the OSD.
-///
-/// The error row occupies the bottom `ERROR_ROW_HEIGHT` pixels of the expanded window.
-/// This function should only be called when the window is in expanded (error) mode.
-///
-/// # Safety
-///
-/// Must be called with a valid device context.
-unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
-    unsafe {
-        let (font_size, error_row_height) = with_metrics(|m| (m.font_size, m.error_row_height));
-
-        // Select the text font; the guard restores + deletes on drop.
-        let _font = osd_render::SelectedFont::new(hdc, font_size, osd_render::FontFace::Text);
-
-        // Set text properties - use red color for error visibility
-        SetBkMode(hdc, TRANSPARENT);
-        SetTextColor(hdc, COLORREF(ERROR_TEXT_COLOR));
-
-        // Convert message to wide string
-        let wide_text: Vec<u16> = message.encode_utf16().collect();
-
-        // Calculate position - centered horizontally, in footer area at bottom
-        let width = client_rect.right - client_rect.left;
-        // Approximate text width (~7 pixels per character at this font size)
-        // Scaling approximation: original was 7px for 18pt font. Ratio ~0.38
-        #[allow(clippy::cast_possible_truncation)]
-        let approx_char_width = (f64::from(font_size) * 0.38).round() as i32;
-        let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
-
-        let x = (width - approx_text_width) / 2;
-        // Position in error row area: bottom of window minus row height, centered vertically
-        let y = client_rect.bottom - error_row_height + (error_row_height - font_size) / 2;
-
-        TextOutW(hdc, x, y, &wide_text);
-    }
+    let state = OSD_STATE.with(|s| s.borrow().clone());
+    let metrics = OSD_METRICS.with(|m| *m.borrow());
+    unsafe { osd_render::paint(hdc, &rect, &state, &metrics) };
 }
 
 /// Updates the OSD render state from a `MonitorState`.
