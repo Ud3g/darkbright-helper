@@ -36,7 +36,7 @@ Single-owner state with message passing — no async runtime. The **main thread*
 
 - **Main thread**: processes `BrightnessMessage`s, owns the `MonitorId → MonitorState` map, updates OSD/overlay immediately (optimistic), dispatches `DdcCommand` to the DDC worker, drives a `PeekMessageW` loop.
 - **Hotkey thread** (`platform/windows/hotkey.rs`): `RegisterHotKey` + `WM_HOTKEY` loop; optional `WH_KEYBOARD_LL` hook for dedicated brightness keys (opt-in, default off).
-- **DDC worker thread** (`platform/windows/ddc_worker.rs`): owns `Vec<DdcMonitor>`, performs blocking DDC I/O (~40–120ms, up to 3 retries @ 40ms), sends results back.
+- **DDC worker thread** (`platform/windows/ddc_worker.rs`): owns `Vec<DdcMonitor>`, performs blocking DDC I/O (~40–120ms, up to 3 attempts = initial try + 2 retries @ 40ms), sends results back.
 - **Power thread** (`platform/windows/power.rs`): listens for resume events, triggers refresh.
 - **Tray thread** (`platform/windows/tray.rs`): tray icon + context menu; uses a request/response message (`TrayMenuOpening { reply_tx }`) to fetch live monitor status when the menu opens.
 

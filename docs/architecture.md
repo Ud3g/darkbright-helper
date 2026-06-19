@@ -4,7 +4,7 @@
 
 ### Language & Toolchain
 - Rust 2024 edition
-- MSRV: 1.85+ (2024 edition requirement)
+- MSRV: 1.87+
 
 ### Dependencies
 
@@ -478,7 +478,7 @@ This means panics and log output in release builds won't be visible in a console
 [DEBUG] DDC write: VCP 0x10 = 55 (was 50)
 [WARN ] DDC retry 1/3 failed: I2C timeout
 [DEBUG] DDC retry 2/3 succeeded
-[ERROR] DDC failed after 3 retries: monitor LG 27UK850 not responding
+[ERROR] DDC failed after 3 attempts: monitor LG 27UK850 not responding
 ```
 
 ### 9. Refresh Strategy (Cache Synchronization)

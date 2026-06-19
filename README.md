@@ -34,7 +34,7 @@ Rust (2024 edition) — chosen for cross-platform portability, low resource usag
 ## Installation & Build
 
 ### Prerequisites
-- Rust 1.85+ (2024 edition)
+- Rust 1.87+ (2024 edition)
 - Windows 10 or 11
 
 ### Build
