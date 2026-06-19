@@ -386,7 +386,8 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
 
         // Calculate position - centered horizontally, in footer area at bottom
         let width = client_rect.right - client_rect.left;
-        // Approximate text width (~0.38 * font size per character).
+        // Approximate text width (~7 pixels per character at this font size)
+        // Scaling approximation: original was 7px for 18pt font. Ratio ~0.38
         #[allow(clippy::cast_possible_truncation)]
         let approx_char_width = (f64::from(font_size) * 0.38).round() as i32;
         let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
@@ -442,7 +443,7 @@ Move the (now-clean) drawing functions out of `osd.rs` and into `osd_render.rs`,
 **Interfaces:**
 - Consumes (from Task 1): `fill_rect`, `FontFace`, `SelectedFont`, `BackBuffer` (now in the same module — become private).
 - Consumes (from `osd.rs`, via `use super::osd::{...}`): `OsdMetrics` (already `pub`), `OsdRenderState` (made `pub(super)` this task), `OSD_BACKGROUND_COLOR` (made `pub(super)` this task).
-- Produces (the module's only public item): `pub fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics)`.
+- Produces (the module's only item visible to `osd.rs`): `pub(super) unsafe fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics)`. It is `pub(super)` (not `pub`): the module is private, and `pub` exposing the `pub(super)` `OsdRenderState` would trip `private_interfaces` (deny) and `unreachable_pub` (pedantic). It is `unsafe` because it dereferences a raw `HDC` via FFI — the caller must pass a valid device context (preserving the safety contract the original `unsafe fn paint_osd` carried).
 - Final private signatures inside `osd_render.rs`:
   - `fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics)`
   - `fn draw_hardware_section(hdc: HDC, client_rect: &RECT, bar_top: i32, hardware_brightness: u8, is_error: bool, metrics: &OsdMetrics)`
@@ -473,22 +474,30 @@ Leave `OSD_BACKGROUND_COLOR` in `osd.rs` (it is also the window-class brush) —
 
 Cut `draw_brightness_bars`, `draw_hardware_section`, `draw_overlay_section`, `draw_icon`, `draw_single_bar`, `draw_percentage_text`, and `draw_error_message` from `osd.rs` and paste them into `osd_render.rs`. Apply these mechanical transformations to each as you move it:
 
-1. **Signature:** drop `unsafe fn` → `fn` (they no longer expose `unsafe`; their FFI is inside `unsafe { }` blocks and the wrappers). Add a trailing `metrics: &OsdMetrics` parameter to every function except `draw_single_bar` (see Interfaces block above for exact final signatures).
+1. **Signature:** drop `unsafe fn` → `fn` for the seven private `draw_*` helpers — they are only ever called with the controlled `mem_dc` from `paint`, so a safe private fn with internal `unsafe { }` blocks is sound (the same pattern `set_osd_opacity` already uses for an HWND). The public-ish entry `paint` is the exception: it stays `unsafe fn` (see below), since it is the boundary that accepts an externally-supplied `HDC`. Add a trailing `metrics: &OsdMetrics` parameter to every function except `draw_single_bar` (see Interfaces block above for exact final signatures).
 2. **Metrics reads:** replace each `with_metrics(|m| (...))` call with direct reads from the `metrics` parameter. Concretely:
    - In `draw_brightness_bars`: `let bar_top = with_metrics(|m| (m.height - m.bar_height) / 2);` → `let bar_top = (metrics.height - metrics.bar_height) / 2;`. Pass `metrics` through to `draw_overlay_section` and `draw_hardware_section`, and pass `state.overlay_opacity` / `state.hardware_brightness` / `state.is_error` as today.
    - In `draw_hardware_section` and `draw_overlay_section`: replace `let (padding, percent_text_width, icon_width, bar_gap, bar_height) = with_metrics(|m| (...));` with five direct bindings from `metrics` (e.g. `let padding = metrics.padding;` …). Pass `metrics` into the nested `draw_percentage_text` and `draw_icon` calls.
    - In `draw_icon`, `draw_percentage_text`, `draw_error_message`: replace `with_metrics(|m| (m.font_size, m.bar_height))` (or `m.error_row_height`) with `let font_size = metrics.font_size;` and `let bar_height = metrics.bar_height;` (resp. `metrics.error_row_height`).
 3. **`unsafe` blocks:** keep an inner `unsafe { }` block around the remaining FFI calls (`SetBkMode`, `SetTextColor`, `SetTextAlign`, `TextOutW`) in the text functions. `draw_single_bar`, `draw_brightness_bars`, `draw_hardware_section`, and `draw_overlay_section` contain no direct FFI after Task 1 (only `fill_rect`/`draw_*` calls), so they need no `unsafe` block — if one remains, clippy's `unused_unsafe` will flag it; remove it.
 
-Then add the public entry point `paint` (this is the body that was in `osd.rs::paint_osd` minus the `GetClientRect`, which stays in `osd.rs`):
+Then add the entry point `paint` (this is the body that was in `osd.rs::paint_osd` minus the `GetClientRect` *and minus the `trace!("Painting OSD")` line*, both of which stay in `osd.rs::paint_osd` so the log order on a `GetClientRect` failure is unchanged):
 
 ```rust
 /// Paints the OSD content into `hdc` using double-buffering.
 ///
 /// `client_rect` is the window's client rectangle; `state` and `metrics` are
 /// snapshots taken by the caller — this function reads no thread-local state.
-pub fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics) {
-    log::trace!("Painting OSD");
+///
+/// # Safety
+///
+/// `hdc` must be a valid device context (e.g. from `BeginPaint`).
+pub(super) unsafe fn paint(
+    hdc: HDC,
+    client_rect: &RECT,
+    state: &OsdRenderState,
+    metrics: &OsdMetrics,
+) {
     let width = client_rect.right - client_rect.left;
     let height = client_rect.bottom - client_rect.top;
 
@@ -522,7 +531,7 @@ use super::osd::{OsdMetrics, OsdRenderState};
 ```
 Add the GDI imports the moved functions need to the existing `use windows::Win32::Graphics::Gdi::{...}` group: `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`. Add `use windows::Win32::Foundation::COLORREF` (already imported with `RECT` — extend that line).
 
-Change the wrapper visibilities from `pub(super)` to private (plain `fn`/`struct`) for `fill_rect`, `FontFace`, `SelectedFont` (and its `new`), and `BackBuffer` (and its `new`/`dc`/`blit_to`) — they are now only used within this module. Keep `paint` as `pub`.
+Change the wrapper visibilities from `pub(super)` to private (plain `fn`/`struct`) for `fill_rect`, `FontFace`, `SelectedFont` (and its `new`), and `BackBuffer` (and its `new`/`dc`/`blit_to`) — they are now only used within this module. Keep `paint` as `pub(super) unsafe fn` (it is the one item `osd.rs` calls).
 
 - [ ] **Step 5: Rewrite `paint_osd` in `osd.rs` as a thin bridge**
 
@@ -535,6 +544,9 @@ Replace the whole `paint_osd` function in `osd.rs` with this (it now only does t
 ///
 /// Must be called from within a `BeginPaint`/`EndPaint` block.
 unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
+    // Kept here (before the GetClientRect guard) so the trace order on a
+    // GetClientRect failure is identical to the pre-refactor behavior.
+    log::trace!("Painting OSD");
     let mut rect = RECT::default();
     if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_err() {
         log::warn!("GetClientRect failed");
@@ -543,13 +555,13 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 
     let state = OSD_STATE.with(|s| s.borrow().clone());
     let metrics = OSD_METRICS.with(|m| *m.borrow());
-    osd_render::paint(hdc, &rect, &state, &metrics);
+    unsafe { osd_render::paint(hdc, &rect, &state, &metrics) };
 }
 ```
 
 - [ ] **Step 6: Drop now-unused imports from `osd.rs`**
 
-Remove these from the `use windows::Win32::Graphics::Gdi::{...}` group in `osd.rs` (they moved to `osd_render.rs` and are no longer referenced): `BitBlt`, `CreateCompatibleBitmap`, `CreateCompatibleDC`, `DeleteDC`, `DeleteObject`, `FillRect`, `SelectObject`, `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`, `SRCCOPY`, `HFONT`. Keep `CreateSolidBrush` and `COLORREF` (used by `ensure_osd_class_registered` and `set_osd_opacity`) and `HDC`/`RECT` (used by `paint_osd`/`wnd_proc`). Do not guess — let clippy be the source of truth in the next step and reconcile against this list.
+Remove these from the `use windows::Win32::Graphics::Gdi::{...}` group in `osd.rs` (they moved to `osd_render.rs` and are no longer referenced): `BitBlt`, `CreateCompatibleBitmap`, `CreateCompatibleDC`, `DeleteDC`, `DeleteObject`, `FillRect`, `SelectObject`, `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`, `SRCCOPY`, `HFONT`. Keep `CreateSolidBrush` (used by `ensure_osd_class_registered`) and `HDC` (used by `paint_osd`/`wnd_proc`). Note: `COLORREF` is imported from `windows::Win32::Foundation` (a separate `use` line), not this Gdi group, and stays untouched — it is still used by `ensure_osd_class_registered` and `set_osd_opacity`. `RECT` likewise comes from `Foundation` and stays (used by `paint_osd`). Do not guess — let clippy be the source of truth in the next step and reconcile against this list.
 
 - [ ] **Step 7: Run fmt, clippy, build**
 
@@ -557,7 +569,7 @@ Run:
 ```bash
 cargo fmt -- --check && cargo clippy -- -D warnings && cargo build
 ```
-Expected: all green. Resolve any remaining unused-import or `unused_unsafe` warnings per Steps 4 and 6. Confirm `osd_render`'s only `pub` item is `paint` (everything else is module-private).
+Expected: all green. Resolve any remaining unused-import or `unused_unsafe` warnings per Steps 4 and 6. Confirm `osd_render`'s only `pub(super)` item is `paint` (everything else is module-private), and that no `private_interfaces`/`unreachable_pub` warning appears.
 
 - [ ] **Step 8: Commit**
 
@@ -628,7 +640,8 @@ Invoke the `superpowers:finishing-a-development-branch` skill to choose how to i
 - `BackBuffer` guard (double-buffering) → Task 1 Steps 1, 3. ✓
 - Early-return-on-failure preserved (`BackBuffer::new` → `None`) → Task 1 Step 3 / Task 2 Step 3. ✓
 - Cleanup ordering preserved (restore-before-delete; bitmap before DC) → `Drop` impls in Task 1 Step 1. ✓
-- Log lines preserved → kept in moved bodies (Task 1 Step 3, Task 2 Step 3). ✓
+- Log lines preserved → `trace!("Painting OSD")` stays in `osd.rs::paint_osd` before the `GetClientRect` guard so its order on failure is unchanged (Task 2 Step 5); other `trace!`/`warn!` lines kept verbatim in moved bodies. ✓
+- `paint` visibility — `pub(super) unsafe fn`, not `pub`, to avoid `private_interfaces`/`unreachable_pub` and to preserve the original `unsafe fn paint_osd` HDC-validity contract at the module boundary (Task 2 Interfaces, Step 3). ✓
 - Wrappers private to `osd_render.rs` → Task 2 Step 4. ✓
 - Manual verification (no GDI unit tests) → Task 3. ✓
 - Future work (layout→`core/`, shared `gdi.rs`) → intentionally excluded; not in any task. ✓

@@ -44,17 +44,19 @@ The thread-local `OSD_STATE` is *not* removed — it remains necessary because `
 // osd.rs — wnd_proc, on WM_PAINT:
 let state   = OSD_STATE.with(|s| s.borrow().clone());
 let metrics = OSD_METRICS.with(|m| *m.borrow());
-osd_render::paint(hdc, &client_rect, &state, &metrics);
+unsafe { osd_render::paint(hdc, &client_rect, &state, &metrics) };
 
-// osd_render.rs — single public entry point:
-pub fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics);
+// osd_render.rs — single entry point visible to osd.rs:
+pub(super) unsafe fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics);
 ```
+
+`paint` is `pub(super)`, not `pub`: the module is private, so a `pub` item exposing the `pub(super)` `OsdRenderState` would trigger `private_interfaces` (deny) and `unreachable_pub` (pedantic). It is `unsafe fn` because it dereferences a caller-supplied raw `HDC` — this preserves the safety contract the original `unsafe fn paint_osd` carried at the module boundary. The private `draw_*` helpers, by contrast, become safe `fn` (they are only ever called with the controlled back-buffer DC).
 
 `GetClientRect` is a window query, not drawing, so it moves to the caller (`wnd_proc` / `paint_osd` in `osd.rs`), which passes the resulting `client_rect` in. `osd_render::paint` does no window-handle queries — it only draws into the DC it is given. The early-return-on-empty-rect guard (`GetClientRect` failure) therefore lives in `osd.rs`.
 
 ### Type ownership
 
-`OsdMetrics` (already `pub`) and `OsdRenderState` stay defined in `osd.rs`. `OsdMetrics` is genuinely shared — `osd.rs` positioning logic also reads `width`/`height`/`bottom_margin`, so it cannot move into the render module. `osd_render` imports both via `use super::{OsdMetrics, OsdRenderState}`. `OsdRenderState` is made visible to the render module (`pub(super)` or module-level `pub(crate)` as needed); it does not become part of the crate's public API.
+`OsdMetrics` (already `pub`) and `OsdRenderState` stay defined in `osd.rs`. `OsdMetrics` is genuinely shared — `osd.rs` positioning logic also reads `width`/`height`/`bottom_margin`, so it cannot move into the render module. `osd_render` imports both via `use super::osd::{OsdMetrics, OsdRenderState}` (both are children of `platform::windows`, so the sibling is reached through `super::osd::`, not `super::`). `OsdRenderState` is made visible to the render module (`pub(super)` or module-level `pub(crate)` as needed); it does not become part of the crate's public API.
 
 ## RAII / cleanup design
 
@@ -146,9 +148,9 @@ This is a pure refactor. The following must be **identical** before/after:
 
 Drawing is GDI FFI and is **not** unit-testable cross-platform (consistent with the existing manual-integration approach for hardware-dependent behavior in `architecture.md` §Integration Testing). Verification:
 
-- `cargo fmt -- --check`, `cargo clippy -- -D warnings`, and `cargo build --target x86_64-pc-windows-msvc` must pass.
+- `cargo fmt -- --check`, `cargo clippy -- -D warnings`, and `cargo build` must pass (on a non-Windows host, target `x86_64-pc-windows-msvc`).
 - Manual smoke test on Windows: trigger brightness up/down (hardware bar), overlay dimming (purple bar), and a DDC error (red bar + expanded error row); confirm the OSD renders identically and auto-hides.
-- No new `unsafe` is exposed across the module boundary; `osd_render`'s only public item is `paint`.
+- The only `unsafe fn` crossing the module boundary is `paint` (mirroring the original `unsafe fn paint_osd`); all private `draw_*` helpers are safe `fn`. `osd_render`'s only item visible to `osd.rs` is `pub(super) unsafe fn paint`.
 
 ## Future Work (not in this change)
 
