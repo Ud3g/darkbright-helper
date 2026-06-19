@@ -29,6 +29,7 @@ pub mod ddc;
 pub mod ddc_worker;
 pub mod hotkey;
 pub mod osd;
+mod osd_render;
 pub mod overlay;
 pub mod power;
 pub mod tray;
