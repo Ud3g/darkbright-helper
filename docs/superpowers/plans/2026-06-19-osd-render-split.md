@@ -415,6 +415,8 @@ Keep (still used in `osd.rs` during Task 1): `CreateSolidBrush` (window-class br
 
 - [ ] **Step 11: Run fmt, clippy, build**
 
+This is the **only** clippy gate for Task 1 — run it after all of Steps 1-10 have landed, not per-step. Between Step 2 (module declared) and Step 10 (import cleanup) the tree is transiently inconsistent: the wrappers are unused right after Step 2 (`dead_code`), and the old imports are unused right after Steps 3-9. Those transient warnings are expected and resolve by Step 10; do not chase them mid-task.
+
 Run:
 ```bash
 cargo fmt -- --check && cargo clippy -- -D warnings && cargo build
