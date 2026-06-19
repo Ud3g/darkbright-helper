@@ -50,7 +50,7 @@ unsafe { osd_render::paint(hdc, &client_rect, &state, &metrics) };
 pub(super) unsafe fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics);
 ```
 
-`paint` is `pub(super)`, not `pub`: the module is private, so a `pub` item exposing the `pub(super)` `OsdRenderState` would trigger `private_interfaces` (deny) and `unreachable_pub` (pedantic). It is `unsafe fn` because it dereferences a caller-supplied raw `HDC` — this preserves the safety contract the original `unsafe fn paint_osd` carried at the module boundary. The private `draw_*` helpers, by contrast, become safe `fn` (they are only ever called with the controlled back-buffer DC).
+`paint` is `pub(super)`, not `pub`: a `pub fn` exposing the `pub(super)` `OsdRenderState` triggers `private_interfaces` (rustc warn-by-default → error under `-D warnings`). (`pub` would also be unreachable through the private module, but `unreachable_pub` is allow-by-default and not enabled here, so `private_interfaces` is the enforcing lint.) It is `unsafe fn` because it dereferences a caller-supplied raw `HDC` — this preserves the safety contract the original `unsafe fn paint_osd` carried at the module boundary. The private `draw_*` helpers, by contrast, become safe `fn` (they are only ever called with the controlled back-buffer DC).
 
 `GetClientRect` is a window query, not drawing, so it moves to the caller (`wnd_proc` / `paint_osd` in `osd.rs`), which passes the resulting `client_rect` in. `osd_render::paint` does no window-handle queries — it only draws into the DC it is given. The early-return-on-empty-rect guard (`GetClientRect` failure) therefore lives in `osd.rs`.
 

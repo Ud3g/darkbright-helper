@@ -405,15 +405,23 @@ unsafe fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str) {
 
 Delete `create_icon_font` (`osd.rs:482-506`) and `create_osd_font` (`osd.rs:642-666`) entirely — their logic now lives in `osd_render::create_font`.
 
-- [ ] **Step 10: Run fmt, clippy, build**
+- [ ] **Step 10: Remove the imports that Task 1 makes unused in `osd.rs`**
+
+The wrapper conversions move the inline FFI out of `osd.rs` *now* (not in Task 2), so these symbols become unused the moment Task 1 lands and **must be removed in this task** or the Task 1 clippy gate (`-D warnings` → `unused_imports` is an error) fails. Remove exactly these from the `use windows::Win32::Graphics::Gdi::{...}` group in `osd.rs`:
+
+`BitBlt`, `CreateCompatibleBitmap`, `CreateCompatibleDC`, `CreateFontW`, `DeleteDC`, `DeleteObject`, `FillRect`, `SelectObject`, `SRCCOPY`, `HFONT`, `FW_NORMAL`, `CLIP_DEFAULT_PRECIS`, `DEFAULT_CHARSET`, `DEFAULT_PITCH`, `FF_DONTCARE`, `OUT_DEFAULT_PRECIS`.
+
+Keep (still used in `osd.rs` during Task 1): `CreateSolidBrush` (window-class brush at `ensure_osd_class_registered`), the text-draw FFI `SetBkMode`/`SetTextColor`/`SetTextAlign`/`TextOutW`/`TA_LEFT`/`TA_RIGHT`/`TRANSPARENT` (the `draw_icon`/`draw_percentage_text`/`draw_error_message` bodies are still here — they leave in Task 2), plus all window/DC symbols. `COLORREF` and `RECT` come from the `Foundation` import line, not this group — leave them.
+
+- [ ] **Step 11: Run fmt, clippy, build**
 
 Run:
 ```bash
 cargo fmt -- --check && cargo clippy -- -D warnings && cargo build
 ```
-Expected: all green. If clippy reports `unused_unsafe` in `draw_single_bar`, remove that inner `unsafe { }` block (the function body no longer touches FFI directly). If it reports unused imports in `osd.rs` (e.g. `CreateFontW`, `FW_NORMAL`, `CLIP_DEFAULT_PRECIS`, `DEFAULT_CHARSET`, `DEFAULT_PITCH`, `FF_DONTCARE`, `OUT_DEFAULT_PRECIS`), remove exactly those — they moved to `osd_render.rs`. Re-run until green.
+Expected: all green. One deterministic fixup: `draw_single_bar`'s body now contains no FFI (only `fill_rect` calls), so its inner `unsafe { }` block is `unused_unsafe` and must be removed — the Step 4 code already shows it without that block. **Do not** remove the `unsafe { }` blocks from `draw_overlay_section`, `draw_icon`, `draw_percentage_text`, `draw_error_message`, or `paint_osd`: those still call `unsafe fn` draw helpers and/or FFI (`SetBkMode`, `TextOutW`, `GetClientRect`), so their blocks remain live. If any unused-import warning beyond the Step 10 list appears, reconcile against Step 10 — do not guess.
 
-- [ ] **Step 11: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add src/platform/windows/osd_render.rs src/platform/windows/mod.rs src/platform/windows/osd.rs
@@ -443,7 +451,7 @@ Move the (now-clean) drawing functions out of `osd.rs` and into `osd_render.rs`,
 **Interfaces:**
 - Consumes (from Task 1): `fill_rect`, `FontFace`, `SelectedFont`, `BackBuffer` (now in the same module — become private).
 - Consumes (from `osd.rs`, via `use super::osd::{...}`): `OsdMetrics` (already `pub`), `OsdRenderState` (made `pub(super)` this task), `OSD_BACKGROUND_COLOR` (made `pub(super)` this task).
-- Produces (the module's only item visible to `osd.rs`): `pub(super) unsafe fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics)`. It is `pub(super)` (not `pub`): the module is private, and `pub` exposing the `pub(super)` `OsdRenderState` would trip `private_interfaces` (deny) and `unreachable_pub` (pedantic). It is `unsafe` because it dereferences a raw `HDC` via FFI — the caller must pass a valid device context (preserving the safety contract the original `unsafe fn paint_osd` carried).
+- Produces (the module's only item visible to `osd.rs`): `pub(super) unsafe fn paint(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics)`. It is `pub(super)` (not `pub`): a `pub fn` exposing the `pub(super)` `OsdRenderState` in its signature trips `private_interfaces` (a rustc warn-by-default lint → error under `-D warnings`). (`pub` would also be unreachable from outside the private module, but `unreachable_pub` is allow-by-default and not enabled here, so it is not the enforcing lint — `private_interfaces` is.) It is `unsafe` because it dereferences a raw `HDC` via FFI — the caller must pass a valid device context (preserving the safety contract the original `unsafe fn paint_osd` carried).
 - Final private signatures inside `osd_render.rs`:
   - `fn draw_brightness_bars(hdc: HDC, client_rect: &RECT, state: &OsdRenderState, metrics: &OsdMetrics)`
   - `fn draw_hardware_section(hdc: HDC, client_rect: &RECT, bar_top: i32, hardware_brightness: u8, is_error: bool, metrics: &OsdMetrics)`
@@ -456,7 +464,7 @@ Move the (now-clean) drawing functions out of `osd.rs` and into `osd_render.rs`,
 - [ ] **Step 1: Widen visibility of the shared types/constant in `osd.rs`**
 
 In `osd.rs`, change three visibilities so the sibling module can read them:
-- `struct OsdRenderState` (line 175) → `pub(super) struct OsdRenderState`, and mark each of its three fields `pub(super)` (`hardware_brightness`, `overlay_opacity`, `is_error`).
+- `struct OsdRenderState` (line 175) → `pub(super) struct OsdRenderState`, and mark each of its three fields `pub(super)` (`hardware_brightness`, `overlay_opacity`, `is_error`). Keep its existing `#[derive(Debug, Clone, Default)]` (line 174) untouched — `Clone` is needed for the `OSD_STATE` snapshot and `Default` for the thread-local initializer.
 - `const OSD_BACKGROUND_COLOR` (line 64) → `pub(super) const OSD_BACKGROUND_COLOR`.
 
 `OsdMetrics` and its fields are already `pub`, so no change there.
@@ -529,7 +537,7 @@ At the top of `osd_render.rs`, add:
 ```rust
 use super::osd::{OsdMetrics, OsdRenderState};
 ```
-Add the GDI imports the moved functions need to the existing `use windows::Win32::Graphics::Gdi::{...}` group: `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`. Add `use windows::Win32::Foundation::COLORREF` (already imported with `RECT` — extend that line).
+Add the GDI imports the moved text functions need to the existing `use windows::Win32::Graphics::Gdi::{...}` group: `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`. (`COLORREF` and `RECT` are already imported in `osd_render.rs` from Task 1 Step 1 — no change needed there.)
 
 Change the wrapper visibilities from `pub(super)` to private (plain `fn`/`struct`) for `fill_rect`, `FontFace`, `SelectedFont` (and its `new`), and `BackBuffer` (and its `new`/`dc`/`blit_to`) — they are now only used within this module. Keep `paint` as `pub(super) unsafe fn` (it is the one item `osd.rs` calls).
 
@@ -561,7 +569,7 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 
 - [ ] **Step 6: Drop now-unused imports from `osd.rs`**
 
-Remove these from the `use windows::Win32::Graphics::Gdi::{...}` group in `osd.rs` (they moved to `osd_render.rs` and are no longer referenced): `BitBlt`, `CreateCompatibleBitmap`, `CreateCompatibleDC`, `DeleteDC`, `DeleteObject`, `FillRect`, `SelectObject`, `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`, `SRCCOPY`, `HFONT`. Keep `CreateSolidBrush` (used by `ensure_osd_class_registered`) and `HDC` (used by `paint_osd`/`wnd_proc`). Note: `COLORREF` is imported from `windows::Win32::Foundation` (a separate `use` line), not this Gdi group, and stays untouched — it is still used by `ensure_osd_class_registered` and `set_osd_opacity`. `RECT` likewise comes from `Foundation` and stays (used by `paint_osd`). Do not guess — let clippy be the source of truth in the next step and reconcile against this list.
+Only the text-draw FFI is left to remove — everything else became unused and was already removed in Task 1 Step 10. The `draw_icon`/`draw_percentage_text`/`draw_error_message` bodies move to `osd_render.rs` this task, so remove these from the `use windows::Win32::Graphics::Gdi::{...}` group in `osd.rs`: `SetBkMode`, `SetTextAlign`, `SetTextColor`, `TA_LEFT`, `TA_RIGHT`, `TextOutW`, `TRANSPARENT`. Keep `CreateSolidBrush` (used by `ensure_osd_class_registered`) and the window/DC symbols. `COLORREF` and `RECT` are in the `Foundation` import (a separate `use` line), not this Gdi group, and stay untouched (`COLORREF` is still used by `ensure_osd_class_registered`/`set_osd_opacity`; `RECT` by `paint_osd`). Do not guess — let clippy in Step 7 reconcile against this list.
 
 - [ ] **Step 7: Run fmt, clippy, build**
 
@@ -641,7 +649,8 @@ Invoke the `superpowers:finishing-a-development-branch` skill to choose how to i
 - Early-return-on-failure preserved (`BackBuffer::new` → `None`) → Task 1 Step 3 / Task 2 Step 3. ✓
 - Cleanup ordering preserved (restore-before-delete; bitmap before DC) → `Drop` impls in Task 1 Step 1. ✓
 - Log lines preserved → `trace!("Painting OSD")` stays in `osd.rs::paint_osd` before the `GetClientRect` guard so its order on failure is unchanged (Task 2 Step 5); other `trace!`/`warn!` lines kept verbatim in moved bodies. ✓
-- `paint` visibility — `pub(super) unsafe fn`, not `pub`, to avoid `private_interfaces`/`unreachable_pub` and to preserve the original `unsafe fn paint_osd` HDC-validity contract at the module boundary (Task 2 Interfaces, Step 3). ✓
+- `paint` visibility — `pub(super) unsafe fn`, not `pub`, to avoid `private_interfaces` (the enforcing lint) and to preserve the original `unsafe fn paint_osd` HDC-validity contract at the module boundary (Task 2 Interfaces, Step 3). ✓
+- Import sequencing — the 16 GDI symbols the wrappers displace become unused in `osd.rs` at the end of Task 1 (not Task 2) and are removed in Task 1 Step 10; only the 7 text-draw symbols leave in Task 2 Step 6. Every intermediate commit passes `clippy -D warnings`. ✓
 - Wrappers private to `osd_render.rs` → Task 2 Step 4. ✓
 - Manual verification (no GDI unit tests) → Task 3. ✓
 - Future work (layout→`core/`, shared `gdi.rs`) → intentionally excluded; not in any task. ✓
