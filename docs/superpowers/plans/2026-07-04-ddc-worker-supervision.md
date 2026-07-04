@@ -17,6 +17,7 @@
 - Structured kv logging: `log::info!(key:% = v; "message")`. Log at the point of *handling*, not occurrence.
 - Do **not** cite ephemeral planning labels (task/step numbers, finding IDs like `#1`/`#2`) in code comments or commit-message-referenced code; state rationale in self-contained domain terms. (This plan's own `#N` references stay out of the code.)
 - Commit messages ≤ ~50 words, terse; **no** `Co-Authored-By`/AI trailer.
+- When adding a `use`, place it in the existing rustfmt-sorted order within its group; if unsure, run `cargo fmt` (in-place) before the `cargo fmt -- --check` gate.
 - This is a Windows binary; `cargo build`/`test` compile the full app on this host. Actual DDC I/O and thread-death timing are verified **manually** (per repo convention) — noted per task.
 
 ---
@@ -107,29 +108,29 @@ mod tests {
     }
 
     #[test]
-    fn refresh_tracker_begin_marks_in_progress_and_bumps_generation() {
+    fn refresh_tracker_begin_marks_in_progress() {
         let base = Instant::now();
         let mut t = RefreshTracker::new(base);
         assert!(!t.in_progress());
-        let g1 = t.begin(base);
-        let g2 = {
-            let mut t2 = RefreshTracker::new(base);
-            t2.begin(base)
-        };
+        let _ = t.begin(base);
         assert!(t.in_progress());
-        assert_eq!(g1, g2, "first generation is deterministic");
     }
 
     #[test]
-    fn refresh_tracker_ignores_stale_generation() {
+    fn refresh_tracker_begin_hands_out_distinct_generations_and_ignores_stale() {
+        // Two overlapping refreshes: a completion for the first (superseded)
+        // generation must be ignored while the second is still in flight.
         let base = Instant::now();
         let mut t = RefreshTracker::new(base);
-        let gen = t.begin(base);
-        // A completion for an older generation must be ignored.
-        t.complete(gen - 1, base + Duration::from_secs(1), true);
-        assert!(t.in_progress(), "stale completion left the refresh in progress");
-        // The matching generation completes it.
-        t.complete(gen, base + Duration::from_secs(1), true);
+        let first = t.begin(base);
+        let second = t.begin(base);
+        assert_ne!(first, second, "each begin hands out a fresh generation");
+        t.complete(first, base + Duration::from_secs(1), true);
+        assert!(
+            t.in_progress(),
+            "stale completion left the newer refresh in progress"
+        );
+        t.complete(second, base + Duration::from_secs(1), true);
         assert!(!t.in_progress());
         assert!(t.last_successful());
     }
@@ -158,12 +159,12 @@ mod tests {
     fn refresh_tracker_abort_invalidates_outstanding_result() {
         let base = Instant::now();
         let mut t = RefreshTracker::new(base);
-        let gen = t.begin(base);
+        let generation = t.begin(base);
         t.abort();
         assert!(!t.in_progress());
         assert!(!t.last_successful());
         // A late result for the aborted generation must not resurrect state.
-        t.complete(gen, base + Duration::from_secs(1), true);
+        t.complete(generation, base + Duration::from_secs(1), true);
         assert!(!t.in_progress());
         assert!(!t.last_successful());
     }
@@ -346,6 +347,7 @@ Add this test module at the end of `src/core/state.rs` (the file already has a `
 #[cfg(test)]
 mod pending_reconcile_tests {
     use super::*;
+    use crate::core::reconcile::SET_TIMEOUT;
     use std::time::Duration;
 
     fn state() -> MonitorState {
@@ -450,11 +452,7 @@ to:
 use std::time::{Duration, Instant};
 ```
 
-Add the `SET_TIMEOUT` import to the same file's `use` section (near the top, after the `std` uses):
-
-```rust
-use crate::core::reconcile::SET_TIMEOUT;
-```
+(The `SET_TIMEOUT` constant is referenced only by the test module — its import was added there in Step 1. Production `pending_timed_out` takes `timeout` as a parameter, so no file-scope import is needed and adding one would trip `unused_imports` under `-D warnings`.)
 
 Add the `PendingSet` and `SetOutcome` types immediately above `pub struct MonitorState`:
 
@@ -497,9 +495,12 @@ In `MonitorState::new` (line ~190), replace `pending_brightness: None,` with:
             pending: None,
 ```
 
-Replace `effective_brightness` (line ~200):
+Replace `effective_brightness` (line ~200), keeping its existing doc comment:
 
 ```rust
+    /// Returns the effective brightness to display in the OSD.
+    ///
+    /// Uses the pending value if a set is in flight, otherwise the cached value.
     #[must_use]
     pub fn effective_brightness(&self) -> u8 {
         self.pending.map_or(self.cached_brightness, |p| p.value)
@@ -577,7 +578,7 @@ Replace `update_from_ddc` (line ~223) so it preserves a live pending:
     }
 ```
 
-(Note: `SET_TIMEOUT` is imported so the in-module tests can reference it; the production `pending_timed_out` takes `timeout` as a parameter.)
+(Note: `pending_timed_out` takes `timeout` as a parameter; the `SET_TIMEOUT` constant is used only by the test module, which imports it locally.)
 
 - [ ] **Step 4: Add `seq` to the DDC set messages**
 
@@ -1134,6 +1135,12 @@ Change `BrightnessController::new`'s signature and body (lines ~141, ~151). Sign
     fn new(config: Config, ddc: DdcSupervisor) -> Result<Self> {
 ```
 
+Update its doc comment (lines ~133–136) so the `# Arguments` list matches — replace the `* `ddc_cmd_tx` - Channel sender for DDC worker commands.` line with:
+
+```rust
+    /// * `ddc` - The supervised DDC worker.
+```
+
 In the struct literal, replace `ddc_cmd_tx,` with:
 
 ```rust
@@ -1207,7 +1214,7 @@ Expected: all pass.
 
 - [ ] **Step 7: Manual smoke test**
 
-Run: `cargo run` (debug build shows the console). Confirm: monitors enumerate on startup (log `DDC refresh complete`), a hotkey brightness change works, and quitting from the tray logs `Sending shutdown command to DDC worker` then `DDC worker thread stopped`. No behavior regression vs. before.
+Run: `cargo run` (debug build shows the console). Confirm: monitors enumerate on startup (log `DDC refresh complete`), a hotkey brightness change works, and quitting from the tray logs `Sending shutdown command to DDC worker` and exits promptly without hanging. (The worker is not joined, so `DDC worker thread stopped` may or may not be flushed before exit — do not treat its presence as a pass/fail criterion.) No behavior regression vs. before.
 
 ```bash
 git add src/platform/windows/ddc_worker.rs src/platform/windows/mod.rs src/main.rs
@@ -1387,9 +1394,37 @@ In `src/main.rs`, add these methods to `impl BrightnessController` (place them a
     }
 ```
 
-- [ ] **Step 3: Track the OSD's monitor and add the send hard-fail**
+- [ ] **Step 3: Reset the hang counter on a good result, track the OSD's monitor, and add the send hard-fail**
 
-In `handle_adjust`, record the monitor whenever the OSD is shown/updated. Replace the "6. Show or update OSD" block (lines ~416–421):
+First, reset the consecutive-timeout counter whenever a set actually succeeds — otherwise it counts *cumulative* timeouts since the last respawn, not *consecutive* ones, and would falsely diagnose a hang. In `handle_ddc_set_result` (from Task 2, Step 6), extend the confirmed/ground-truth arm:
+
+```rust
+            SetOutcome::Confirmed | SetOutcome::GroundTruth => {
+                self.consecutive_set_timeouts = 0;
+                log::debug!(monitor_id:% = monitor_id, brightness = value; "DDC confirmed brightness");
+                if self.osd.is_visible() {
+                    self.osd.update(state)?;
+                }
+            }
+```
+
+Next, in `handle_adjust`, record the monitor on the no-change path too. Replace the `!changed` block (lines ~384–393):
+
+```rust
+        if !changed {
+            log::trace!(monitor_id:% = target_id, hardware = old_hardware, overlay = old_overlay; "No brightness change needed");
+            // Still show/update OSD to reset timer and provide feedback.
+            self.osd_monitor = Some(target_id.clone());
+            if self.osd.is_visible() {
+                self.osd.update(state)?;
+            } else {
+                self.osd.show(hmonitor, state)?;
+            }
+            return Ok(());
+        }
+```
+
+Then, record the monitor on the normal path. Replace the "6. Show or update OSD" block (lines ~416–421):
 
 ```rust
         // 6. Show or update OSD with optimistic values.
@@ -1455,16 +1490,33 @@ Expected: all pass.
 
 - [ ] **Step 7: Manual fault-injection verification**
 
-The decision logic is unit-tested; this confirms the glue fires at the right time. Use a **temporary** fault injection (revert before committing):
+The decision logic is unit-tested; this confirms the glue fires at the right time. Use a **temporary** fault injection (revert before committing). The trigger fires on *any* set (independent of `step_percent`, so it does not depend on landing on a specific brightness value).
 
-1. In `src/platform/windows/ddc_worker.rs` `handle_set_brightness`, temporarily add at the top:
-   `if value == 42 { panic!("fault injection"); }`
-2. `cargo run`. Set a monitor to a brightness of 42% via hotkeys.
-3. Confirm the log shows, within ~250 ms: `DDC worker died; respawned` followed by `Requesting monitor refresh` and `DDC refresh complete`. Confirm the OSD does **not** stay stuck on a wrong value, and a subsequent brightness change works (proving the respawned worker is live).
-4. Trigger it 4× quickly (within 60 s) and confirm `respawn backoff exceeded; disabling DDC` appears on the 4th, then a further hotkey press logs `Recovering from degraded DDC state` and works again.
-5. **Remove the fault-injection line.** Re-run `cargo build` to confirm it's gone.
+**Part A — single death, respawn, and recovery.** In `src/platform/windows/ddc_worker.rs`, at the top of `handle_set_brightness`, add a one-shot panic:
 
-Also confirm no regression on the normal path: after leaving the app idle past the inactivity threshold, a single hotkey press adjusts brightness with **no** spurious red-OSD/error (verifies the 8 s `SET_TIMEOUT` backstop does not fire on a set queued behind the resulting refresh).
+```rust
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static FAULT_FIRED: AtomicBool = AtomicBool::new(false);
+        if !FAULT_FIRED.swap(true, Ordering::Relaxed) {
+            panic!("fault injection: first set");
+        }
+```
+
+1. `cargo run` (debug build shows the console). Press a brightness hotkey — the first set panics the worker.
+2. Confirm the log shows, within ~250 ms: `DDC worker died; respawned`, then `Requesting monitor refresh` and `DDC refresh complete`. Confirm the OSD does **not** stay stuck on the un-applied value.
+3. Press a brightness hotkey **again**: this set now succeeds (the one-shot fault already fired), proving the respawned worker is live.
+
+**Part B — backoff and degraded recovery.** Replace the one-shot block above with an unconditional panic on every set:
+
+```rust
+        panic!("fault injection: every set");
+```
+
+4. `cargo run`. Press a brightness hotkey 4 times within 60 s (each press dies + respawns). Confirm `respawn backoff exceeded; disabling DDC` appears once the window fills.
+5. Press a brightness hotkey again: confirm the log shows `Recovering from degraded DDC state`. Note this press itself does **not** adjust brightness — its send hits the dead worker and hard-fails (revert + red OSD); the respawn happens on the next ~250 ms tick, so the *following* press is the one that works.
+6. **Remove the fault-injection code.** Re-run `cargo build` to confirm it's gone.
+
+**Normal-path regression check.** With no fault injected: after leaving the app idle past the inactivity threshold, a single hotkey press adjusts brightness with **no** spurious red-OSD/error — verifying the 8 s `SET_TIMEOUT` backstop does not fire on a set queued behind the inactivity-triggered refresh.
 
 - [ ] **Step 8: Commit**
 
@@ -1476,6 +1528,120 @@ Poll worker liveness and pending/refresh deadlines each tick: respawn a
 dead worker and reconcile its stuck pendings, hard-fail on send error,
 back off and degrade on repeated failure, and recover on user activity
 or resume. A hung worker escalates after repeated set timeouts."
+```
+
+---
+
+### Task 6: Sync `docs/architecture.md` (declared source of truth)
+
+`CLAUDE.md` names `architecture.md` the source of truth for behavior, and it references the renamed/removed symbols (`confirm_brightness`, `revert_pending`, `pending_brightness`, `refresh_in_progress`, unstamped `RefreshAll`/`DdcSetResult`) in ~14 places. Update them so the doc matches the shipped behavior. Docs-only; verified by re-reading, no build gate.
+
+**Files:**
+- Modify: `docs/architecture.md` (message enums ~105–119; overlap protection ~505; DDC flow ~549–551; `MonitorState` ~570–576; cache-management bullets ~581–582; new subsection after §11)
+
+- [ ] **Step 1: Update the message-enum listing**
+
+Replace the `DdcSetResult`/`DdcRefreshResult` lines (~105–106):
+
+```rust
+    DdcSetResult { monitor_id, value, seq, success, error }, // DDC worker → main
+    DdcRefreshResult { generation, monitors },               // DDC worker → main
+```
+
+Replace the `DdcCommand` set/refresh lines (~118–119):
+
+```rust
+    SetBrightness { monitor_id: MonitorId, value: u8, seq: u64 },
+    RefreshAll { generation: u64 },
+```
+
+- [ ] **Step 2: Update the overlap-protection paragraph**
+
+Replace the `refresh_in_progress` paragraph (~505):
+
+```markdown
+A `RefreshTracker` prevents overlapping refresh requests and correlates each
+refresh to its result by a generation counter, so a late result from a
+superseded refresh cannot clear the in-progress state of a newer one. This
+avoids DDC bus congestion when multiple triggers fire simultaneously (e.g.,
+resume + periodic + inactivity at once). If a refresh result never returns
+(hung or dead worker), a watchdog aborts it after `REFRESH_TIMEOUT` so
+refreshes are never permanently suppressed.
+```
+
+- [ ] **Step 3: Update the DDC result-handling flow**
+
+Replace the `[async] Main thread receives DdcSetResult` block (~549–551):
+
+```
+[async] Main thread receives DdcSetResult (correlated by seq)
+        → Matching seq, success: promote pending → cached, update OSD
+        → Matching seq, failure: revert pending, show OSD error state
+        → Stale seq (a newer set is in flight): ignore
+        → No pending (already reverted by the watchdog), success: apply as ground truth
+```
+
+- [ ] **Step 4: Update the `MonitorState` sketch and cache-management bullets**
+
+Replace the `MonitorState` struct sketch (~570–576):
+
+```rust
+struct MonitorState {
+    cached_brightness: u8,         // Last confirmed DDC value
+    pending: Option<PendingSet>,   // Optimistic value + seq + sent-at, awaiting confirmation
+    overlay_opacity: u8,           // Current overlay dimming level
+    last_refresh: Instant,
+}
+```
+
+Replace the two cache-management bullets (~581–582):
+
+```markdown
+- On a seq-matching `DdcSetResult(success)`: the pending value is promoted to cached
+- On a seq-matching `DdcSetResult(failure)`: the optimistic value is reverted
+- A success arriving with no matching pending (already reverted by the watchdog) is applied as ground truth; other non-matching results are ignored as stale
+```
+
+- [ ] **Step 5: Add a supervision subsection**
+
+Immediately after section **11. Error Handling: Strict** (before the next `###` heading, or at end of file if none), add:
+
+```markdown
+### 12. Worker Supervision & State Watchdog
+
+The DDC worker is supervised so its death or a lost result cannot silently and
+permanently degrade the app. Two decoupled mechanisms:
+
+- **Death detection (fast path).** The main loop polls `JoinHandle::is_finished()`
+  (~every 250 ms) and treats a command-channel `send` error as a hard failure. A
+  dead worker is respawned within ~250 ms, its stuck optimistic values reverted,
+  and a fresh refresh issued. Respawns are rate-limited: more than `RESPAWN_MAX`
+  within `RESPAWN_WINDOW` disables DDC until recovery.
+- **State watchdog (backstop).** Wall-clock deadlines reconcile state a dead-worker
+  check cannot see. A pending set outstanding past `SET_TIMEOUT` is reverted with a
+  red OSD; an in-flight refresh past `REFRESH_TIMEOUT` is aborted. `SET_TIMEOUT` is
+  deliberately generous (larger than `REFRESH_TIMEOUT` plus a set's budget) because a
+  set can queue behind an in-flight refresh; it exists to catch a worker that is
+  alive but hung inside a blocking DDC call, not a merely-queued set.
+
+A worker that is hung (not dead) is never respawned — that would run two threads
+against the same physical-monitor handles. After `HUNG_TIMEOUT_LIMIT` consecutive
+set timeouts it is diagnosed as hung and DDC is disabled. A disabled DDC state
+recovers on user activity (a hotkey adjustment) or on system resume.
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `SET_TIMEOUT` | 8000 ms | Backstop revert for a pending set (hung worker) |
+| `REFRESH_TIMEOUT` | 5000 ms | Abort an in-flight refresh |
+| `RESPAWN_MAX` / `RESPAWN_WINDOW` | 3 / 60 s | Respawn backoff before disabling DDC |
+| `HUNG_TIMEOUT_LIMIT` | 3 | Consecutive set timeouts before diagnosing a hang |
+```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add docs/architecture.md
+git commit -m "docs: describe DDC supervision, seq correlation, refresh generation"
 ```
 
 ---
@@ -1493,10 +1659,12 @@ or resume. A hung worker escalates after repeated set timeouts."
 - Visibility-gated red OSD, single-monitor rule (#8) → Task 5 `show_error_on_visible_osd` + `osd_monitor`. ✓
 - Recovery via user activity + `SystemResumed`, clears backoff (#4, #5) → Task 5 `clear_degraded`. ✓
 - Send-failure hard fail → Task 5, Step 3. ✓
+- Hang-counter reset on a matched successful set → Task 5, Step 3. ✓
 - Startup/shutdown rewiring → Task 4, Step 5. ✓
+- `architecture.md` synced to the new symbols/behavior → Task 6. ✓
 - Tests for all pure logic → Tasks 1 (8 tests) + 2 (8 tests). ✓
 
-**Placeholder scan:** No `TBD`/`TODO`/"add error handling"/"similar to Task N"; the only `panic!` is the explicitly-temporary, explicitly-removed fault injection in Task 5 Step 7. ✓
+**Placeholder scan:** No `TBD`/`TODO`/"add error handling"/"similar to Task N"; the only `panic!`s are the two explicitly-temporary, explicitly-removed fault-injection variants in Task 5 Step 7. ✓
 
 **Type consistency:** `apply_set_result(seq, value, success) -> SetOutcome` and `SetOutcome::{Confirmed, Reverted, GroundTruth, Ignored}` consistent across Task 2 and its use in Task 5. `RefreshTracker` method names (`begin`/`complete`/`abort`/`timed_out`/`in_progress`/`last_successful`/`elapsed_since_refresh`) consistent across Tasks 1, 3, 5. `DdcSupervisor` methods (`spawn`/`send`/`is_alive`/`respawn`/`clear_backoff`/`shutdown`) consistent across Tasks 4, 5. Message fields (`seq` on set, `generation` on refresh) consistent across state.rs, ddc_worker.rs, main.rs. ✓
 
