@@ -338,6 +338,10 @@ impl BrightnessController {
             log::warn!("DDC refresh completed with no monitors found");
         }
 
+        // The read brightness is applied as authoritative ground truth for every
+        // monitor regardless of the refresh generation: a hardware value is true
+        // no matter which refresh produced it. Only the in-progress/last-outcome
+        // bookkeeping below is gated on the generation (a stale one is dropped).
         for (monitor_id, brightness) in monitors {
             log::debug!(monitor_id:% = monitor_id, brightness = brightness; "Monitor found during refresh");
 
@@ -378,7 +382,7 @@ impl BrightnessController {
             RespawnOutcome::BackoffExceeded => {
                 log::error!("DDC worker respawn backoff exceeded; disabling DDC until recovery");
                 self.ddc_disabled = true;
-                self.show_error_on_visible_osd();
+                self.reconcile_all_pending();
             }
         }
     }
