@@ -102,8 +102,8 @@ Message-passing with single ownership:
 enum BrightnessMessage {
     Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
     SetAbsolute { monitor_id: Option<MonitorId>, value: u8 }, // None = monitor under cursor
-    DdcSetResult { monitor_id, value, success, error },       // DDC worker → main
-    DdcRefreshResult { monitors: Vec<(MonitorId, u8)> },      // DDC worker → main
+    DdcSetResult { monitor_id, value, seq, success, error }, // DDC worker → main
+    DdcRefreshResult { generation, monitors },               // DDC worker → main
     Refresh,
     SystemResumed,                                            // Power thread → main
     TrayOpenUsage,                                            // Tray thread → main
@@ -115,8 +115,8 @@ enum BrightnessMessage {
 
 // Commands TO DDC worker (from main thread)
 enum DdcCommand {
-    SetBrightness { monitor_id: MonitorId, value: u8 },
-    RefreshAll,
+    SetBrightness { monitor_id: MonitorId, value: u8, seq: u64 },
+    RefreshAll { generation: u64 },
     Shutdown,
 }
 ```
@@ -502,7 +502,13 @@ The application maintains cached brightness values for instant OSD response. The
 
 **Overlap Protection:**
 
-A `refresh_in_progress` flag prevents multiple concurrent refresh requests. This avoids DDC bus congestion when multiple triggers fire simultaneously (e.g., resume + periodic + inactivity all at once).
+A `RefreshTracker` prevents overlapping refresh requests and correlates each
+refresh to its result by a generation counter, so a late result from a
+superseded refresh cannot clear the in-progress state of a newer one. This
+avoids DDC bus congestion when multiple triggers fire simultaneously (e.g.,
+resume + periodic + inactivity at once). If a refresh result never returns
+(hung or dead worker), a watchdog aborts it after `REFRESH_TIMEOUT` so
+refreshes are never permanently suppressed.
 
 **Configuration:**
 
@@ -546,9 +552,11 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
         → Success: send DdcSetResult(success) to main
         → Failure: send DdcSetResult(failure) to main
 
-[async] Main thread receives DdcSetResult
-        → Success: confirm_brightness(), update OSD
-        → Failure: revert_pending(), show OSD error state
+[async] Main thread receives DdcSetResult (correlated by seq)
+        → Matching seq, success: promote pending → cached, update OSD
+        → Matching seq, failure: revert pending, show OSD error state
+        → Stale seq (a newer set is in flight): ignore
+        → No pending (already reverted by the watchdog), success: apply as ground truth
 ```
 
 | Aspect | Decision | Rationale |
@@ -569,17 +577,18 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
 **Cache Management:**
 ```rust
 struct MonitorState {
-    cached_brightness: u8,           // Last confirmed DDC value
-    pending_brightness: Option<u8>,  // Optimistic value awaiting confirmation
-    overlay_opacity: u8,             // Current overlay dimming level
+    cached_brightness: u8,         // Last confirmed DDC value
+    pending: Option<PendingSet>,   // Optimistic value + seq + sent-at, awaiting confirmation
+    overlay_opacity: u8,           // Current overlay dimming level
     last_refresh: Instant,
 }
 ```
 
 - Cache populated on startup via `DdcCommand::RefreshAll`
 - DDC worker owns all `DdcMonitor` instances
-- On `DdcSetResult(success)`: `confirm_brightness()` promotes pending to cached
-- On `DdcSetResult(failure)`: `revert_pending()` discards optimistic value
+- On a seq-matching `DdcSetResult(success)`: the pending value is promoted to cached
+- On a seq-matching `DdcSetResult(failure)`: the optimistic value is reverted
+- A success arriving with no matching pending (already reverted by the watchdog) is applied as ground truth; other non-matching results are ignored as stale
 
 ### 11. Error Handling: Strict
 
@@ -590,7 +599,36 @@ If DDC communication fails after retries, the application does **not** fall back
 - Avoids state desynchronization (user thinks brightness is 50%, backlight is actually 100%)
 - Ensures the user is aware of hardware communication failures via the OSD error indicator
 
-### 12. System Tray
+### 12. Worker Supervision & State Watchdog
+
+The DDC worker is supervised so its death or a lost result cannot silently and
+permanently degrade the app. Two decoupled mechanisms:
+
+- **Death detection (fast path).** The main loop polls `JoinHandle::is_finished()`
+  (~every 250 ms) and treats a command-channel `send` error as a hard failure. A
+  dead worker is respawned within ~250 ms, its stuck optimistic values reverted,
+  and a fresh refresh issued. Respawns are rate-limited: more than `RESPAWN_MAX`
+  within `RESPAWN_WINDOW` disables DDC until recovery.
+- **State watchdog (backstop).** Wall-clock deadlines reconcile state a dead-worker
+  check cannot see. A pending set outstanding past `SET_TIMEOUT` is reverted with a
+  red OSD; an in-flight refresh past `REFRESH_TIMEOUT` is aborted. `SET_TIMEOUT` is
+  deliberately generous (larger than `REFRESH_TIMEOUT` plus a set's budget) because a
+  set can queue behind an in-flight refresh; it exists to catch a worker that is
+  alive but hung inside a blocking DDC call, not a merely-queued set.
+
+A worker that is hung (not dead) is never respawned — that would run two threads
+against the same physical-monitor handles. After `HUNG_TIMEOUT_LIMIT` consecutive
+set timeouts it is diagnosed as hung and DDC is disabled. A disabled DDC state
+recovers on user activity (a hotkey adjustment) or on system resume.
+
+| Constant | Value | Purpose |
+|---|---|---|
+| `SET_TIMEOUT` | 8000 ms | Backstop revert for a pending set (hung worker) |
+| `REFRESH_TIMEOUT` | 5000 ms | Abort an in-flight refresh |
+| `RESPAWN_MAX` / `RESPAWN_WINDOW` | 3 / 60 s | Respawn backoff before disabling DDC |
+| `HUNG_TIMEOUT_LIMIT` | 3 | Consecutive set timeouts before diagnosing a hang |
+
+### 13. System Tray
 
 The application runs as a background process with a system tray icon for user interaction.
 
