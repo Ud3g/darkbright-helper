@@ -1,6 +1,6 @@
 # DDC Worker Supervision & State Watchdog — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make the DDC worker thread supervised and self-healing so its death or a lost result can no longer silently and permanently degrade the app.
 
@@ -51,7 +51,7 @@ Purely additive new module; nothing consumes it yet, so the crate keeps compilin
   - `pub fn respawn_allowed(recent: &[Instant], now: Instant, window: Duration, max: usize) -> bool`
   - `pub struct RefreshTracker` with: `new(now: Instant) -> Self`, `begin(&mut self, now: Instant) -> u64`, `complete(&mut self, generation: u64, now: Instant, found: bool)`, `abort(&mut self)`, `timed_out(&self, now: Instant, timeout: Duration) -> bool`, `in_progress(&self) -> bool`, `last_successful(&self) -> bool`, `elapsed_since_refresh(&self, now: Instant) -> Duration`.
 
-- [ ] **Step 1: Declare the module**
+- [x] **Step 1: Declare the module**
 
 In `src/core/mod.rs`, add under the existing `pub mod` lines (after `pub mod brightness;`):
 
@@ -65,7 +65,7 @@ And add to the re-export block (after `pub use config::Config;`):
 pub use reconcile::{RefreshTracker, respawn_allowed};
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Create `src/core/reconcile.rs` with only the test module first (module body empty), so the tests fail to compile/resolve:
 
@@ -171,12 +171,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to verify they fail**
+- [x] **Step 3: Run the tests to verify they fail**
 
 Run: `cargo test --lib reconcile`
 Expected: FAIL — `respawn_allowed`/`RefreshTracker` not found (unresolved names).
 
-- [ ] **Step 4: Implement the constants, `respawn_allowed`, and `RefreshTracker`**
+- [x] **Step 4: Implement the constants, `respawn_allowed`, and `RefreshTracker`**
 
 Replace the `// (implementation added in later steps)` line in `src/core/reconcile.rs` with:
 
@@ -299,12 +299,12 @@ impl RefreshTracker {
 }
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cargo test --lib reconcile`
 Expected: PASS (8 tests).
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `cargo fmt -- --check && cargo clippy -- -D warnings && cargo test`
 Expected: all pass.
@@ -339,7 +339,7 @@ Replaces the blind `confirm_brightness`/`revert_pending` with seq-guarded logic,
   - `DdcCommand::SetBrightness { monitor_id, value, seq: u64 }`
   - `BrightnessMessage::DdcSetResult { monitor_id, value, seq: u64, success, error }`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add this test module at the end of `src/core/state.rs` (the file already has a `monitor_id_tests` module; add a new sibling module):
 
@@ -433,12 +433,12 @@ mod pending_reconcile_tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --lib pending_reconcile`
 Expected: FAIL — `SetOutcome`, `set_pending` arity, `apply_set_result`, `force_revert`, `pending`, `pending_timed_out`, `SET_TIMEOUT` unresolved.
 
-- [ ] **Step 3: Update `MonitorState` and add the new types**
+- [x] **Step 3: Update `MonitorState` and add the new types**
 
 In `src/core/state.rs`, change the imports at the top of the file from:
 
@@ -580,7 +580,7 @@ Replace `update_from_ddc` (line ~223) so it preserves a live pending:
 
 (Note: `pending_timed_out` takes `timeout` as a parameter; the `SET_TIMEOUT` constant is used only by the test module, which imports it locally.)
 
-- [ ] **Step 4: Add `seq` to the DDC set messages**
+- [x] **Step 4: Add `seq` to the DDC set messages**
 
 In `src/core/state.rs`, in `BrightnessMessage::DdcSetResult` (line ~272), add a `seq` field after `value`:
 
@@ -612,7 +612,7 @@ In `DdcCommand::SetBrightness` (line ~353), add `seq`:
     },
 ```
 
-- [ ] **Step 5: Echo `seq` from the worker**
+- [x] **Step 5: Echo `seq` from the worker**
 
 In `src/platform/windows/ddc_worker.rs`, change the `SetBrightness` match arm in `run` (line ~63):
 
@@ -644,7 +644,7 @@ and
         };
 ```
 
-- [ ] **Step 6: Add the sequence counter and rewrite the set-result handler in the controller**
+- [x] **Step 6: Add the sequence counter and rewrite the set-result handler in the controller**
 
 In `src/main.rs`, add a field to `BrightnessController` (after `usage_window: Option<UsageWindow>,` ~127):
 
@@ -726,7 +726,7 @@ Update the `handle_message` `DdcSetResult` arm (lines ~209–216) to pass `seq`:
             }
 ```
 
-- [ ] **Step 7: Stamp the set command in `handle_adjust`**
+- [x] **Step 7: Stamp the set command in `handle_adjust`**
 
 In `src/main.rs` `handle_adjust`, replace the optimistic-update block (lines ~404–407):
 
@@ -753,12 +753,12 @@ Replace the DDC-send block (lines ~426–433) — still logs on error for now; t
             }
 ```
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `cargo test --lib pending_reconcile`
 Expected: PASS (8 tests).
 
-- [ ] **Step 9: Gate and commit**
+- [x] **Step 9: Gate and commit**
 
 Run: `cargo fmt -- --check && cargo clippy -- -D warnings && cargo test`
 Expected: all pass (the whole crate compiles; existing tests unaffected).
@@ -791,7 +791,7 @@ Swaps the three loose refresh fields for the `RefreshTracker` and stamps refresh
   - `BrightnessMessage::DdcRefreshResult { generation: u64, monitors: Vec<(MonitorId, u8)> }`
   - `BrightnessController` field `refresh: RefreshTracker` (replaces `last_refresh`, `refresh_in_progress`, `last_refresh_successful`).
 
-- [ ] **Step 1: Stamp the refresh messages**
+- [x] **Step 1: Stamp the refresh messages**
 
 In `src/core/state.rs`, change `BrightnessMessage::DdcRefreshResult` (line ~284):
 
@@ -814,7 +814,7 @@ Change `DdcCommand::RefreshAll` (line ~360):
     },
 ```
 
-- [ ] **Step 2: Echo the generation from the worker**
+- [x] **Step 2: Echo the generation from the worker**
 
 In `src/platform/windows/ddc_worker.rs`, change the `RefreshAll` arm in `run` (line ~66):
 
@@ -845,7 +845,7 @@ Update its two `self.send_refresh_result(results)` calls to `self.send_refresh_r
     }
 ```
 
-- [ ] **Step 3: Replace the controller's refresh fields with `RefreshTracker`**
+- [x] **Step 3: Replace the controller's refresh fields with `RefreshTracker`**
 
 In `src/main.rs`, add the import to the core use group (top of file, ~18):
 
@@ -869,7 +869,7 @@ In `BrightnessController::new` (lines ~152–155), replace the three initializer
             refresh: RefreshTracker::new(now),
 ```
 
-- [ ] **Step 4: Rewrite `handle_refresh` to use the tracker**
+- [x] **Step 4: Rewrite `handle_refresh` to use the tracker**
 
 Replace `handle_refresh` (lines ~456–470):
 
@@ -890,7 +890,7 @@ Replace `handle_refresh` (lines ~456–470):
     }
 ```
 
-- [ ] **Step 5: Rewrite `handle_ddc_refresh_result` to complete the tracker**
+- [x] **Step 5: Rewrite `handle_ddc_refresh_result` to complete the tracker**
 
 Replace `handle_ddc_refresh_result` (lines ~306–328). Its signature gains `generation`, and the tail updates the tracker instead of the three fields:
 
@@ -928,7 +928,7 @@ Update the `handle_message` `DdcRefreshResult` arm (lines ~217–219):
             }
 ```
 
-- [ ] **Step 6: Update the refresh-flag readers**
+- [x] **Step 6: Update the refresh-flag readers**
 
 In `check_periodic_refresh` (lines ~476–497), replace the field reads:
 
@@ -961,7 +961,7 @@ In `handle_adjust` (line ~341), replace the failed-refresh retry condition:
         if !self.refresh.last_successful() && !self.refresh.in_progress() {
 ```
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
 Run: `cargo fmt -- --check && cargo clippy -- -D warnings && cargo test`
 Expected: all pass.
@@ -993,7 +993,7 @@ Wraps the worker in a supervisor that owns its `JoinHandle` and can respawn it, 
   - `pub enum RespawnOutcome { Respawned, BackoffExceeded }`
   - `pub struct DdcSupervisor` with: `spawn(resp_tx: Sender<BrightnessMessage>) -> Self`, `send(&self, cmd: DdcCommand) -> Result<(), SendError<DdcCommand>>`, `is_alive(&self) -> bool`, `respawn(&mut self, now: Instant) -> RespawnOutcome`, `clear_backoff(&mut self)`, `shutdown(&self)`.
 
-- [ ] **Step 1: Implement `DdcSupervisor`**
+- [x] **Step 1: Implement `DdcSupervisor`**
 
 In `src/platform/windows/ddc_worker.rs`, extend the imports at the top:
 
@@ -1101,7 +1101,7 @@ impl DdcSupervisor {
 }
 ```
 
-- [ ] **Step 2: Export the supervisor**
+- [x] **Step 2: Export the supervisor**
 
 In `src/platform/windows/mod.rs` (line ~38), change the `ddc_worker` re-export:
 
@@ -1109,12 +1109,12 @@ In `src/platform/windows/mod.rs` (line ~38), change the `ddc_worker` re-export:
 pub use ddc_worker::{DdcSupervisor, DdcWorker};
 ```
 
-- [ ] **Step 3: Verify it compiles**
+- [x] **Step 3: Verify it compiles**
 
 Run: `cargo build`
 Expected: builds (nothing consumes `DdcSupervisor` yet; `DdcWorker` still used by the current `main`).
 
-- [ ] **Step 4: Route the controller through the supervisor**
+- [x] **Step 4: Route the controller through the supervisor**
 
 In `src/main.rs`, change the platform import (line ~33):
 
@@ -1168,7 +1168,7 @@ Replace the send in `handle_refresh`:
         }
 ```
 
-- [ ] **Step 5: Rewire `main` startup and shutdown**
+- [x] **Step 5: Rewire `main` startup and shutdown**
 
 In `src/main.rs` `main`, replace the channel/worker setup (lines ~778–796). Remove the standalone `ddc_cmd_tx`/`ddc_cmd_rx`/`ddc_shutdown_tx`/detached-spawn block and the old `BrightnessController::new(...)` call, replacing with:
 
@@ -1207,12 +1207,12 @@ Add a `shutdown_worker` method to `BrightnessController` (next to `handle_shutdo
     }
 ```
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `cargo fmt -- --check && cargo clippy -- -D warnings && cargo test`
 Expected: all pass.
 
-- [ ] **Step 7: Manual smoke test**
+- [x] **Step 7: Manual smoke test**
 
 Run: `cargo run` (debug build shows the console). Confirm: monitors enumerate on startup (log `DDC refresh complete`), a hotkey brightness change works, and quitting from the tray logs `Sending shutdown command to DDC worker` and exits promptly without hanging. (The worker is not joined, so `DDC worker thread stopped` may or may not be flushed before exit — do not treat its presence as a pass/fail criterion.) No behavior regression vs. before.
 
@@ -1239,7 +1239,7 @@ Activates the two mechanisms: the main loop polls worker liveness and the state 
 - Consumes: `SET_TIMEOUT`, `REFRESH_TIMEOUT`, `HUNG_TIMEOUT_LIMIT` (Task 1); `RespawnOutcome` (Task 4); `SetOutcome`, `force_revert`, `pending_timed_out` (Task 2); `RefreshTracker::{timed_out, abort}` (Task 1/3).
 - Produces: no new public API; internal controller behavior.
 
-- [ ] **Step 1: Add watchdog imports and fields**
+- [x] **Step 1: Add watchdog imports and fields**
 
 In `src/main.rs`, add the constants + outcome imports. Extend the reconcile import (Task 3 added `RefreshTracker`):
 
@@ -1286,7 +1286,7 @@ In `BrightnessController::new` (struct literal), add:
             osd_monitor: None,
 ```
 
-- [ ] **Step 2: Add the supervision + watchdog methods**
+- [x] **Step 2: Add the supervision + watchdog methods**
 
 In `src/main.rs`, add these methods to `impl BrightnessController` (place them after `handle_ddc_refresh_result`):
 
@@ -1394,7 +1394,7 @@ In `src/main.rs`, add these methods to `impl BrightnessController` (place them a
     }
 ```
 
-- [ ] **Step 3: Reset the hang counter on a good result, track the OSD's monitor, and add the send hard-fail**
+- [x] **Step 3: Reset the hang counter on a good result, track the OSD's monitor, and add the send hard-fail**
 
 First, reset the consecutive-timeout counter whenever a set actually succeeds — otherwise it counts *cumulative* timeouts since the last respawn, not *consecutive* ones, and would falsely diagnose a hang. In `handle_ddc_set_result` (from Task 2, Step 6), extend the confirmed/ground-truth arm:
 
@@ -1462,7 +1462,7 @@ Add the recovery trigger at the top of `handle_adjust`, right after `self.check_
         }
 ```
 
-- [ ] **Step 4: Recover on system resume**
+- [x] **Step 4: Recover on system resume**
 
 In `handle_message`, replace the `SystemResumed` arm (lines ~179–182):
 
@@ -1474,7 +1474,7 @@ In `handle_message`, replace the `SystemResumed` arm (lines ~179–182):
             }
 ```
 
-- [ ] **Step 5: Call the pass from the main loop**
+- [x] **Step 5: Call the pass from the main loop**
 
 In `main`, in the loop body, add the supervision pass right after `controller.check_periodic_refresh();` (line ~843):
 
@@ -1483,12 +1483,12 @@ In `main`, in the loop body, add the supervision pass right after `controller.ch
         controller.supervise_and_watchdog();
 ```
 
-- [ ] **Step 6: Gate**
+- [x] **Step 6: Gate**
 
 Run: `cargo fmt -- --check && cargo clippy -- -D warnings && cargo test`
 Expected: all pass.
 
-- [ ] **Step 7: Manual fault-injection verification**
+- [x] **Step 7: Manual fault-injection verification**
 
 The decision logic is unit-tested; this confirms the glue fires at the right time. Use a **temporary** fault injection (revert before committing). The trigger fires on *any* set (independent of `step_percent`, so it does not depend on landing on a specific brightness value).
 
@@ -1518,7 +1518,7 @@ The decision logic is unit-tested; this confirms the glue fires at the right tim
 
 **Normal-path regression check.** With no fault injected: after leaving the app idle past the inactivity threshold, a single hotkey press adjusts brightness with **no** spurious red-OSD/error — verifying the 8 s `SET_TIMEOUT` backstop does not fire on a set queued behind the inactivity-triggered refresh.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/main.rs src/platform/windows/mod.rs
@@ -1539,7 +1539,7 @@ or resume. A hung worker escalates after repeated set timeouts."
 **Files:**
 - Modify: `docs/architecture.md` (message enums ~105–119; overlap protection ~505; DDC flow ~549–551; `MonitorState` ~570–576; cache-management bullets ~581–582; new subsection after §11)
 
-- [ ] **Step 1: Update the message-enum listing**
+- [x] **Step 1: Update the message-enum listing**
 
 Replace the `DdcSetResult`/`DdcRefreshResult` lines (~105–106):
 
@@ -1555,7 +1555,7 @@ Replace the `DdcCommand` set/refresh lines (~118–119):
     RefreshAll { generation: u64 },
 ```
 
-- [ ] **Step 2: Update the overlap-protection paragraph**
+- [x] **Step 2: Update the overlap-protection paragraph**
 
 Replace the `refresh_in_progress` paragraph (~505):
 
@@ -1569,7 +1569,7 @@ resume + periodic + inactivity at once). If a refresh result never returns
 refreshes are never permanently suppressed.
 ```
 
-- [ ] **Step 3: Update the DDC result-handling flow**
+- [x] **Step 3: Update the DDC result-handling flow**
 
 Replace the `[async] Main thread receives DdcSetResult` block (~549–551):
 
@@ -1581,7 +1581,7 @@ Replace the `[async] Main thread receives DdcSetResult` block (~549–551):
         → No pending (already reverted by the watchdog), success: apply as ground truth
 ```
 
-- [ ] **Step 4: Update the `MonitorState` sketch and cache-management bullets**
+- [x] **Step 4: Update the `MonitorState` sketch and cache-management bullets**
 
 Replace the `MonitorState` struct sketch (~570–576):
 
@@ -1602,7 +1602,7 @@ Replace the two cache-management bullets (~581–582):
 - A success arriving with no matching pending (already reverted by the watchdog) is applied as ground truth; other non-matching results are ignored as stale
 ```
 
-- [ ] **Step 5: Add a supervision subsection**
+- [x] **Step 5: Add a supervision subsection**
 
 Immediately after section **11. Error Handling: Strict** (before the next `###` heading, or at end of file if none), add:
 
@@ -1637,7 +1637,7 @@ recovers on user activity (a hotkey adjustment) or on system resume.
 | `HUNG_TIMEOUT_LIMIT` | 3 | Consecutive set timeouts before diagnosing a hang |
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add docs/architecture.md
