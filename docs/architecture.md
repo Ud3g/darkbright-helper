@@ -14,7 +14,6 @@
 | Error handling | `thiserror` | Derive macros for custom error types, zero runtime cost |
 | Serialization | `serde` + `serde_json` | De facto standard, config file handling |
 | Logging | `log` + `env_logger` | Standard facade pattern, runtime-configurable |
-| Synchronization | `parking_lot` | Faster than std locks, no poisoning |
 
 ---
 
