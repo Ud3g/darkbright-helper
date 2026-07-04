@@ -35,7 +35,7 @@ pub mod power;
 pub mod tray;
 
 // Re-export commonly used types
-pub use ddc_worker::DdcWorker;
+pub use ddc_worker::{DdcSupervisor, DdcWorker};
 pub use power::PowerEventListener;
 pub use tray::TrayIcon;
 

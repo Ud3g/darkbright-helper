@@ -4,10 +4,13 @@
 //! operations, keeping the main thread responsive for UI updates.
 
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SendError, Sender};
+use std::thread::JoinHandle;
+use std::time::Instant;
 
 use windows::Win32::Graphics::Gdi::HMONITOR;
 
+use crate::core::reconcile::{RESPAWN_MAX, RESPAWN_WINDOW, respawn_allowed};
 use crate::core::state::{BrightnessMessage, DdcCommand, MonitorId};
 use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
@@ -195,6 +198,94 @@ impl DdcWorker {
         if let Err(e) = self.resp_tx.send(msg) {
             log::error!(error:% = e; "Failed to send refresh result");
         }
+    }
+}
+
+/// Result of a supervisor respawn attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RespawnOutcome {
+    /// A fresh worker thread was spawned.
+    Respawned,
+    /// Too many respawns within the backoff window; the worker is left dead.
+    BackoffExceeded,
+}
+
+/// Owns the DDC worker thread and can respawn it after a confirmed death.
+///
+/// The supervisor holds the command-channel sender, the worker's join handle,
+/// and a persistent response-channel sender used to wire each new worker.
+/// Respawns are rate-limited by a sliding window (see [`respawn_allowed`]).
+pub struct DdcSupervisor {
+    cmd_tx: Sender<DdcCommand>,
+    handle: JoinHandle<()>,
+    resp_tx: Sender<BrightnessMessage>,
+    recent_respawns: Vec<Instant>,
+}
+
+impl DdcSupervisor {
+    /// Spawns the initial worker and returns its supervisor.
+    ///
+    /// `resp_tx` is the channel the worker sends results on; the supervisor
+    /// keeps a clone so it can wire replacement workers.
+    #[must_use]
+    pub fn spawn(resp_tx: Sender<BrightnessMessage>) -> Self {
+        let (cmd_tx, handle) = Self::spawn_worker(&resp_tx);
+        Self {
+            cmd_tx,
+            handle,
+            resp_tx,
+            recent_respawns: Vec::new(),
+        }
+    }
+
+    /// Creates a fresh command channel and spawns a worker draining it.
+    fn spawn_worker(resp_tx: &Sender<BrightnessMessage>) -> (Sender<DdcCommand>, JoinHandle<()>) {
+        let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<DdcCommand>();
+        let worker = DdcWorker::new(cmd_rx, resp_tx.clone());
+        let handle = std::thread::spawn(move || worker.run());
+        (cmd_tx, handle)
+    }
+
+    /// Sends a command to the worker.
+    ///
+    /// # Errors
+    ///
+    /// Returns `SendError` if the worker's receiver has been dropped (the
+    /// worker has died) — callers treat this as a hard failure.
+    pub fn send(&self, cmd: DdcCommand) -> Result<(), SendError<DdcCommand>> {
+        self.cmd_tx.send(cmd)
+    }
+
+    /// Whether the worker thread is still running.
+    #[must_use]
+    pub fn is_alive(&self) -> bool {
+        !self.handle.is_finished()
+    }
+
+    /// Attempts to respawn a dead worker, honouring the backoff window.
+    pub fn respawn(&mut self, now: Instant) -> RespawnOutcome {
+        self.recent_respawns
+            .retain(|&t| now.saturating_duration_since(t) < RESPAWN_WINDOW);
+
+        if !respawn_allowed(&self.recent_respawns, now, RESPAWN_WINDOW, RESPAWN_MAX) {
+            return RespawnOutcome::BackoffExceeded;
+        }
+
+        let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
+        self.cmd_tx = cmd_tx;
+        self.handle = handle;
+        self.recent_respawns.push(now);
+        RespawnOutcome::Respawned
+    }
+
+    /// Clears the respawn history so recovery can retry immediately.
+    pub fn clear_backoff(&mut self) {
+        self.recent_respawns.clear();
+    }
+
+    /// Asks the worker to shut down (best-effort; does not join).
+    pub fn shutdown(&self) {
+        let _ = self.cmd_tx.send(DdcCommand::Shutdown);
     }
 }
 

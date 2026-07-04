@@ -31,7 +31,9 @@ use darkbright_helper::platform::windows::hotkey::{
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::show_error_message_box;
-use darkbright_helper::platform::windows::{DdcWorker, PowerEventListener, TrayIcon, UsageWindow};
+use darkbright_helper::platform::windows::{
+    DdcSupervisor, PowerEventListener, TrayIcon, UsageWindow,
+};
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -114,8 +116,8 @@ struct BrightnessController {
     config: Config,
     /// Cache for mapping Windows handles to monitor IDs (performance optimization).
     id_cache: HashMap<isize, MonitorId>,
-    /// Channel to send commands to the DDC worker thread.
-    ddc_cmd_tx: mpsc::Sender<DdcCommand>,
+    /// Supervised DDC worker (send commands, detect death, respawn).
+    ddc: DdcSupervisor,
     /// Timestamp of last user-initiated brightness adjustment.
     last_activity: Instant,
     /// Refresh lifecycle: in-flight state, generation, and last outcome.
@@ -132,12 +134,12 @@ impl BrightnessController {
     /// # Arguments
     ///
     /// * `config` - The loaded configuration.
-    /// * `ddc_cmd_tx` - Channel sender for DDC worker commands.
+    /// * `ddc` - The supervised DDC worker.
     ///
     /// # Errors
     ///
     /// Returns an error if the OSD window cannot be created.
-    fn new(config: Config, ddc_cmd_tx: mpsc::Sender<DdcCommand>) -> Result<Self> {
+    fn new(config: Config, ddc: DdcSupervisor) -> Result<Self> {
         let osd = OsdWindow::new(config.osd.opacity, config.osd.timeout_ms)?;
 
         let now = Instant::now();
@@ -147,7 +149,7 @@ impl BrightnessController {
             osd,
             config,
             id_cache: HashMap::new(),
-            ddc_cmd_tx,
+            ddc,
             last_activity: now,
             refresh: RefreshTracker::new(now),
             usage_window: None,
@@ -231,6 +233,11 @@ impl BrightnessController {
     #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
     fn handle_shutdown(&mut self) -> Result<()> {
         Ok(())
+    }
+
+    /// Asks the supervised DDC worker to shut down.
+    fn shutdown_worker(&self) {
+        self.ddc.shutdown();
     }
 
     /// Opens or focuses the usage instructions window.
@@ -428,7 +435,7 @@ impl BrightnessController {
             log::debug!(monitor_id:% = target_id, old_overlay = old_overlay, new_overlay = new_overlay; "Adjusting overlay only");
         } else {
             log::debug!(monitor_id:% = target_id, old_hw = old_hardware, new_hw = new_hardware; "Sending DDC command");
-            if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::SetBrightness {
+            if let Err(e) = self.ddc.send(DdcCommand::SetBrightness {
                 monitor_id: target_id,
                 value: new_hardware,
                 seq,
@@ -466,7 +473,7 @@ impl BrightnessController {
         let generation = self.refresh.begin(Instant::now());
 
         // Send refresh command to worker (non-blocking).
-        if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::RefreshAll { generation }) {
+        if let Err(e) = self.ddc.send(DdcCommand::RefreshAll { generation }) {
             log::error!(error:% = e; "Failed to send refresh command to DDC worker");
             self.refresh.abort();
         }
@@ -778,19 +785,12 @@ fn main() {
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();
 
-    // DDC command channel (main -> DDC worker)
-    let (ddc_cmd_tx, ddc_cmd_rx) = mpsc::channel::<DdcCommand>();
-
-    // Keep a clone for sending shutdown command on exit
-    let ddc_shutdown_tx = ddc_cmd_tx.clone();
-
-    // Spawn DDC worker thread
-    let ddc_worker = DdcWorker::new(ddc_cmd_rx, tx.clone());
-    std::thread::spawn(move || ddc_worker.run());
+    // Spawn the supervised DDC worker.
+    let supervisor = DdcSupervisor::spawn(tx.clone());
     log::info!("DDC worker thread spawned");
 
-    // Create controller
-    let mut controller = match BrightnessController::new(config.clone(), ddc_cmd_tx) {
+    // Create controller.
+    let mut controller = match BrightnessController::new(config.clone(), supervisor) {
         Ok(c) => c,
         Err(e) => {
             log::error!(error:% = e; "Failed to initialize BrightnessController");
@@ -875,11 +875,11 @@ fn main() {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), FALSE);
     }
 
-    // Send shutdown command to DDC worker
+    // Ask the DDC worker to shut down, then destroy windows.
     log::debug!("Sending shutdown command to DDC worker");
-    let _ = ddc_shutdown_tx.send(DdcCommand::Shutdown);
+    controller.shutdown_worker();
 
-    // Explicitly drop controller to ensure windows are destroyed before exit
+    // Explicitly drop controller to ensure windows are destroyed before exit.
     drop(controller);
 
     log::info!("Brightness Control Tool Stopped");
