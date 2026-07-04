@@ -17,7 +17,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
-use darkbright_helper::core::reconcile::RefreshTracker;
+use darkbright_helper::core::reconcile::{
+    HUNG_TIMEOUT_LIMIT, REFRESH_TIMEOUT, RefreshTracker, SET_TIMEOUT,
+};
 use darkbright_helper::core::state::{
     BrightnessMessage, DdcCommand, MonitorId, MonitorState, SetOutcome, TrayMenuData,
     TrayMonitorInfo, generate_display_names,
@@ -32,7 +34,7 @@ use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::show_error_message_box;
 use darkbright_helper::platform::windows::{
-    DdcSupervisor, PowerEventListener, TrayIcon, UsageWindow,
+    DdcSupervisor, PowerEventListener, RespawnOutcome, TrayIcon, UsageWindow,
 };
 use darkbright_helper::{BrightnessError, Result};
 
@@ -126,6 +128,14 @@ struct BrightnessController {
     usage_window: Option<UsageWindow>,
     /// Monotonic sequence id stamped on each DDC set command.
     next_seq: u64,
+    /// Throttle for the per-tick supervision/watchdog pass.
+    last_health_check: Instant,
+    /// Consecutive set timeouts while the worker is still alive (hang signal).
+    consecutive_set_timeouts: u32,
+    /// True when DDC is disabled after respawn backoff or a diagnosed hang.
+    ddc_disabled: bool,
+    /// Monitor whose state the OSD is currently showing (for error restyling).
+    osd_monitor: Option<MonitorId>,
 }
 
 impl BrightnessController {
@@ -154,6 +164,10 @@ impl BrightnessController {
             refresh: RefreshTracker::new(now),
             usage_window: None,
             next_seq: 0,
+            last_health_check: now,
+            consecutive_set_timeouts: 0,
+            ddc_disabled: false,
+            osd_monitor: None,
         })
     }
 
@@ -177,6 +191,7 @@ impl BrightnessController {
                 self.handle_refresh();
             }
             BrightnessMessage::SystemResumed => {
+                self.clear_degraded();
                 log::info!(reason = "system_resume"; "Triggering refresh");
                 self.handle_refresh();
             }
@@ -289,6 +304,7 @@ impl BrightnessController {
 
         match state.apply_set_result(seq, value, success) {
             SetOutcome::Confirmed | SetOutcome::GroundTruth => {
+                self.consecutive_set_timeouts = 0;
                 log::debug!(monitor_id:% = monitor_id, brightness = value; "DDC confirmed brightness");
                 if self.osd.is_visible() {
                     self.osd.update(state)?;
@@ -335,6 +351,108 @@ impl BrightnessController {
             .complete(generation, Instant::now(), found_monitors);
     }
 
+    /// Runs one throttled supervision + watchdog pass (called each loop tick).
+    fn supervise_and_watchdog(&mut self) {
+        let now = Instant::now();
+        if now.saturating_duration_since(self.last_health_check) < Duration::from_millis(250) {
+            return;
+        }
+        self.last_health_check = now;
+        self.supervise_worker(now);
+        self.check_watchdogs(now);
+    }
+
+    /// Respawns the DDC worker if it has died (never merely because it is slow).
+    fn supervise_worker(&mut self, now: Instant) {
+        if self.ddc_disabled || self.ddc.is_alive() {
+            return;
+        }
+        match self.ddc.respawn(now) {
+            RespawnOutcome::Respawned => {
+                log::warn!("DDC worker died; respawned");
+                self.reconcile_all_pending();
+                self.refresh.abort();
+                self.consecutive_set_timeouts = 0;
+                self.handle_refresh();
+            }
+            RespawnOutcome::BackoffExceeded => {
+                log::error!("DDC worker respawn backoff exceeded; disabling DDC until recovery");
+                self.ddc_disabled = true;
+                self.show_error_on_visible_osd();
+            }
+        }
+    }
+
+    /// Reconciles state deadlines: stuck pendings and a latched refresh.
+    fn check_watchdogs(&mut self, now: Instant) {
+        let timed_out: Vec<MonitorId> = self
+            .states
+            .iter()
+            .filter(|(_, state)| state.pending_timed_out(now, SET_TIMEOUT))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if !timed_out.is_empty() {
+            for id in &timed_out {
+                if let Some(state) = self.states.get_mut(id) {
+                    state.force_revert();
+                }
+                log::error!(monitor_id:% = id; "DDC set timed out with no result; reverted");
+            }
+            self.consecutive_set_timeouts += 1;
+            self.show_error_on_visible_osd();
+
+            if self.ddc.is_alive()
+                && !self.ddc_disabled
+                && self.consecutive_set_timeouts >= HUNG_TIMEOUT_LIMIT
+            {
+                log::error!(count = self.consecutive_set_timeouts; "DDC worker unresponsive; disabling DDC until restart or resume");
+                self.ddc_disabled = true;
+            }
+        }
+
+        if self.refresh.timed_out(now, REFRESH_TIMEOUT) {
+            log::error!("DDC refresh timed out with no result; aborting");
+            self.refresh.abort();
+        }
+    }
+
+    /// Force-reverts every pending set (used after a worker respawn).
+    fn reconcile_all_pending(&mut self) {
+        for state in self.states.values_mut() {
+            state.force_revert();
+        }
+        self.show_error_on_visible_osd();
+    }
+
+    /// Restyles the OSD to its error state, only if it is currently visible.
+    ///
+    /// Never spontaneously shows a hidden OSD: the watchdog fires seconds after
+    /// the keypress and the cached value is authoritative for the next display.
+    fn show_error_on_visible_osd(&mut self) {
+        if !self.osd.is_visible() {
+            return;
+        }
+        let Some(id) = self.osd_monitor.clone() else {
+            return;
+        };
+        if let Some(state) = self.states.get(&id) {
+            if let Err(e) = self.osd.update_error(state) {
+                log::warn!(error:% = e; "Failed to update OSD error state");
+            }
+        }
+    }
+
+    /// Clears the degraded DDC state so a fresh attempt can be made.
+    fn clear_degraded(&mut self) {
+        if self.ddc_disabled {
+            log::info!("Recovering from degraded DDC state");
+        }
+        self.ddc_disabled = false;
+        self.ddc.clear_backoff();
+        self.consecutive_set_timeouts = 0;
+    }
+
     /// Applies a relative brightness adjustment.
     ///
     /// Determines the target monitor (mouse position), calculates new values,
@@ -344,6 +462,11 @@ impl BrightnessController {
         // Check if we need an inactivity-based refresh before processing
         // (must be checked BEFORE updating last_activity)
         self.check_inactivity_refresh();
+
+        // User activity is a recovery signal for a degraded DDC state.
+        if self.ddc_disabled {
+            self.clear_degraded();
+        }
 
         // If last refresh failed, trigger a new one (user activity indicates they're back).
         if !self.refresh.last_successful() && !self.refresh.in_progress() {
@@ -391,7 +514,8 @@ impl BrightnessController {
 
         if !changed {
             log::trace!(monitor_id:% = target_id, hardware = old_hardware, overlay = old_overlay; "No brightness change needed");
-            // Still show/update OSD to reset timer and provide feedback
+            // Still show/update OSD to reset timer and provide feedback.
+            self.osd_monitor = Some(target_id.clone());
             if self.osd.is_visible() {
                 self.osd.update(state)?;
             } else {
@@ -423,7 +547,8 @@ impl BrightnessController {
                 .update(&target_id, hmonitor, new_overlay)?;
         }
 
-        // 6. Show or update OSD with optimistic values
+        // 6. Show or update OSD with optimistic values.
+        self.osd_monitor = Some(target_id.clone());
         if self.osd.is_visible() {
             self.osd.update(state)?;
         } else {
@@ -436,13 +561,16 @@ impl BrightnessController {
         } else {
             log::debug!(monitor_id:% = target_id, old_hw = old_hardware, new_hw = new_hardware; "Sending DDC command");
             if let Err(e) = self.ddc.send(DdcCommand::SetBrightness {
-                monitor_id: target_id,
+                monitor_id: target_id.clone(),
                 value: new_hardware,
                 seq,
             }) {
-                log::error!(error:% = e; "Failed to send DDC command");
+                log::error!(error:% = e; "DDC worker send failed; reverting optimistic value");
+                if let Some(state) = self.states.get_mut(&target_id) {
+                    state.force_revert();
+                }
+                self.show_error_on_visible_osd();
             }
-            // Confirmation/revert happens when we receive DdcSetResult
         }
 
         Ok(())
@@ -844,6 +972,9 @@ fn main() {
 
         // Check if periodic refresh is due
         controller.check_periodic_refresh();
+
+        // Supervise the DDC worker and reconcile state deadlines.
+        controller.supervise_and_watchdog();
 
         // Check for brightness messages with a short timeout
         match rx.recv_timeout(Duration::from_millis(16)) {
