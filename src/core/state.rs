@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::sync::mpsc::Sender;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Identification
@@ -168,13 +168,37 @@ pub fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, String> {
 // Monitor State
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// An optimistic brightness set awaiting its DDC result.
+#[derive(Debug, Clone, Copy)]
+pub struct PendingSet {
+    /// Target brightness value (0-100).
+    pub value: u8,
+    /// Sequence id correlating this set to its DDC result.
+    pub seq: u64,
+    /// When the command was enqueued to the worker.
+    pub sent_at: Instant,
+}
+
+/// Outcome of reconciling a DDC set result against the pending set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetOutcome {
+    /// Matched the pending set and committed the new value.
+    Confirmed,
+    /// Matched the pending set and reverted after a hardware failure.
+    Reverted,
+    /// Late success with no matching pending: applied as authoritative truth.
+    GroundTruth,
+    /// Stale or irrelevant result: no state changed.
+    Ignored,
+}
+
 /// Per-monitor state tracking brightness values and cache status.
 #[derive(Debug)]
 pub struct MonitorState {
     /// Last confirmed DDC brightness value (0-100).
     pub cached_brightness: u8,
-    /// Optimistic brightness value awaiting DDC confirmation.
-    pub pending_brightness: Option<u8>,
+    /// Optimistic brightness set awaiting DDC confirmation.
+    pub pending: Option<PendingSet>,
     /// Current overlay opacity (0-100, where 0 = invisible).
     pub overlay_opacity: u8,
     /// Timestamp of last successful DDC read/write.
@@ -187,7 +211,7 @@ impl MonitorState {
     pub fn new(initial_brightness: u8) -> Self {
         Self {
             cached_brightness: initial_brightness.min(100),
-            pending_brightness: None,
+            pending: None,
             overlay_opacity: 0,
             last_refresh: Instant::now(),
         }
@@ -195,34 +219,72 @@ impl MonitorState {
 
     /// Returns the effective brightness to display in the OSD.
     ///
-    /// Uses pending value if available, otherwise cached value.
+    /// Uses the pending value if a set is in flight, otherwise the cached value.
     #[must_use]
     pub fn effective_brightness(&self) -> u8 {
-        self.pending_brightness.unwrap_or(self.cached_brightness)
+        self.pending.map_or(self.cached_brightness, |p| p.value)
     }
 
-    /// Confirms a pending brightness change after successful DDC write.
-    pub fn confirm_brightness(&mut self) {
-        if let Some(pending) = self.pending_brightness.take() {
-            self.cached_brightness = pending;
-            self.last_refresh = Instant::now();
+    /// Records a new optimistic brightness set (awaiting DDC confirmation).
+    pub fn set_pending(&mut self, value: u8, seq: u64, now: Instant) {
+        self.pending = Some(PendingSet {
+            value: value.min(100),
+            seq,
+            sent_at: now,
+        });
+    }
+
+    /// Reconciles a DDC set result against the current pending set.
+    ///
+    /// A result matching the pending `seq` confirms (success) or reverts
+    /// (failure). A result for an older `seq` than the current pending is
+    /// ignored (a newer set is in flight). A success arriving when nothing is
+    /// pending — e.g. after the watchdog already reverted — is authoritative:
+    /// the hardware did change, so the cached value is updated as ground truth.
+    pub fn apply_set_result(&mut self, seq: u64, value: u8, success: bool) -> SetOutcome {
+        match self.pending {
+            Some(pending) if pending.seq == seq => {
+                if success {
+                    self.cached_brightness = pending.value;
+                    self.last_refresh = Instant::now();
+                    self.pending = None;
+                    SetOutcome::Confirmed
+                } else {
+                    self.pending = None;
+                    SetOutcome::Reverted
+                }
+            }
+            Some(_) => SetOutcome::Ignored,
+            None => {
+                if success {
+                    self.cached_brightness = value.min(100);
+                    self.last_refresh = Instant::now();
+                    SetOutcome::GroundTruth
+                } else {
+                    SetOutcome::Ignored
+                }
+            }
         }
     }
 
-    /// Reverts a pending brightness change after DDC failure.
-    pub fn revert_pending(&mut self) {
-        self.pending_brightness = None;
+    /// Unconditionally clears any pending set (used by the state watchdog).
+    pub fn force_revert(&mut self) {
+        self.pending = None;
     }
 
-    /// Sets a new pending brightness value (optimistic update).
-    pub fn set_pending(&mut self, value: u8) {
-        self.pending_brightness = Some(value.min(100));
+    /// Whether a pending set has been outstanding for at least `timeout`.
+    #[must_use]
+    pub fn pending_timed_out(&self, now: Instant, timeout: Duration) -> bool {
+        self.pending
+            .is_some_and(|p| now.saturating_duration_since(p.sent_at) >= timeout)
     }
 
     /// Updates the cached brightness from a DDC read.
+    ///
+    /// Leaves any live pending set intact: a refresh read is older intent than
+    /// an optimistic set that is still awaiting its own result.
     pub fn update_from_ddc(&mut self, value: u8) {
         self.cached_brightness = value.min(100);
-        self.pending_brightness = None;
         self.last_refresh = Instant::now();
     }
 }
@@ -275,6 +337,8 @@ pub enum BrightnessMessage {
         monitor_id: MonitorId,
         /// The brightness value that was attempted.
         value: u8,
+        /// Sequence id echoed from the originating command.
+        seq: u64,
         /// Success or error message.
         success: bool,
         /// Error message if failed.
@@ -339,6 +403,94 @@ pub enum BrightnessMessage {
     Shutdown,
 }
 
+#[cfg(test)]
+mod pending_reconcile_tests {
+    use super::*;
+    use crate::core::reconcile::SET_TIMEOUT;
+    use std::time::Duration;
+
+    fn state() -> MonitorState {
+        MonitorState::new(50)
+    }
+
+    #[test]
+    fn matched_success_confirms() {
+        let mut s = state();
+        s.set_pending(70, 1, Instant::now());
+        assert_eq!(s.apply_set_result(1, 70, true), SetOutcome::Confirmed);
+        assert_eq!(s.cached_brightness, 70);
+        assert!(s.pending.is_none());
+        assert_eq!(s.effective_brightness(), 70);
+    }
+
+    #[test]
+    fn matched_failure_reverts() {
+        let mut s = state();
+        s.set_pending(70, 1, Instant::now());
+        assert_eq!(s.apply_set_result(1, 70, false), SetOutcome::Reverted);
+        assert_eq!(s.cached_brightness, 50);
+        assert!(s.pending.is_none());
+    }
+
+    #[test]
+    fn stale_failure_does_not_clear_newer_pending() {
+        // Repro for the un-correlated-result drift: an earlier command's failure
+        // must not clear the pending that belongs to a later in-flight command.
+        let mut s = state();
+        s.set_pending(60, 1, Instant::now());
+        s.set_pending(80, 2, Instant::now());
+        assert_eq!(s.apply_set_result(1, 60, false), SetOutcome::Ignored);
+        let pending = s.pending.expect("newer pending survives stale result");
+        assert_eq!(pending.value, 80);
+        assert_eq!(pending.seq, 2);
+    }
+
+    #[test]
+    fn late_success_after_force_revert_is_ground_truth() {
+        let mut s = state();
+        s.set_pending(90, 1, Instant::now());
+        s.force_revert(); // watchdog cleared the pending
+        assert!(s.pending.is_none());
+        assert_eq!(s.apply_set_result(1, 90, true), SetOutcome::GroundTruth);
+        assert_eq!(s.cached_brightness, 90);
+    }
+
+    #[test]
+    fn late_failure_with_no_pending_is_ignored() {
+        let mut s = state();
+        s.force_revert();
+        assert_eq!(s.apply_set_result(1, 90, false), SetOutcome::Ignored);
+        assert_eq!(s.cached_brightness, 50);
+    }
+
+    #[test]
+    fn refresh_datum_preserves_live_pending() {
+        // A refresh read is older intent than a live optimistic set.
+        let mut s = state();
+        s.set_pending(75, 1, Instant::now());
+        s.update_from_ddc(40);
+        assert_eq!(s.cached_brightness, 40);
+        let pending = s.pending.expect("live pending survives a refresh datum");
+        assert_eq!(pending.value, 75);
+        assert_eq!(s.effective_brightness(), 75);
+    }
+
+    #[test]
+    fn pending_timed_out_respects_deadline() {
+        let base = Instant::now();
+        let mut s = state();
+        s.set_pending(70, 1, base);
+        assert!(!s.pending_timed_out(base + Duration::from_secs(7), SET_TIMEOUT));
+        assert!(s.pending_timed_out(base + Duration::from_secs(8), SET_TIMEOUT));
+    }
+
+    #[test]
+    fn pending_timed_out_false_when_idle() {
+        let s = state();
+        assert!(!s.pending_timed_out(Instant::now(), SET_TIMEOUT));
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DDC Worker Commands
 // ─────────────────────────────────────────────────────────────────────────────
@@ -355,6 +507,8 @@ pub enum DdcCommand {
         monitor_id: MonitorId,
         /// Brightness value to set (0-100).
         value: u8,
+        /// Sequence id correlating this command to its result.
+        seq: u64,
     },
     /// Refresh all monitors: enumerate and read current brightness values.
     RefreshAll,

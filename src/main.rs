@@ -18,8 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
 use darkbright_helper::core::state::{
-    BrightnessMessage, DdcCommand, MonitorId, MonitorState, TrayMenuData, TrayMonitorInfo,
-    generate_display_names,
+    BrightnessMessage, DdcCommand, MonitorId, MonitorState, SetOutcome, TrayMenuData,
+    TrayMonitorInfo, generate_display_names,
 };
 use darkbright_helper::platform::windows::ddc::get_monitor_id;
 use darkbright_helper::platform::windows::get_monitor_under_cursor;
@@ -125,6 +125,8 @@ struct BrightnessController {
     last_refresh_successful: bool,
     /// Handle to the currently open usage window (if any).
     usage_window: Option<UsageWindow>,
+    /// Monotonic sequence id stamped on each DDC set command.
+    next_seq: u64,
 }
 
 impl BrightnessController {
@@ -154,6 +156,7 @@ impl BrightnessController {
             refresh_in_progress: false,
             last_refresh_successful: true,
             usage_window: None,
+            next_seq: 0,
         })
     }
 
@@ -209,10 +212,11 @@ impl BrightnessController {
             BrightnessMessage::DdcSetResult {
                 monitor_id,
                 value,
+                seq,
                 success,
                 error,
             } => {
-                self.handle_ddc_set_result(&monitor_id, value, success, error.as_deref())?;
+                self.handle_ddc_set_result(&monitor_id, value, seq, success, error.as_deref())?;
             }
             BrightnessMessage::DdcRefreshResult { monitors } => {
                 self.handle_ddc_refresh_result(monitors);
@@ -262,12 +266,14 @@ impl BrightnessController {
 
     /// Handles the result of a DDC brightness set operation.
     ///
-    /// On success, confirms the pending brightness. On failure, reverts to
-    /// the cached value and shows an error indicator in the OSD.
+    /// Reconciles the result against the monitor's pending set by sequence id.
+    /// A confirmed or authoritative-late result refreshes the OSD; a revert
+    /// shows the error state; a stale result is dropped.
     fn handle_ddc_set_result(
         &mut self,
         monitor_id: &MonitorId,
         value: u8,
+        seq: u64,
         success: bool,
         error: Option<&str>,
     ) -> Result<()> {
@@ -276,23 +282,22 @@ impl BrightnessController {
             return Ok(());
         };
 
-        if success {
-            state.confirm_brightness();
-            log::debug!(monitor_id:% = monitor_id, brightness = value; "DDC confirmed brightness");
-
-            // Update OSD to confirm (removes any error coloring)
-            if self.osd.is_visible() {
-                self.osd.update(state)?;
+        match state.apply_set_result(seq, value, success) {
+            SetOutcome::Confirmed | SetOutcome::GroundTruth => {
+                log::debug!(monitor_id:% = monitor_id, brightness = value; "DDC confirmed brightness");
+                if self.osd.is_visible() {
+                    self.osd.update(state)?;
+                }
             }
-        } else {
-            let error_msg = error.unwrap_or("unknown error");
-            log::error!(monitor_id:% = monitor_id, target_brightness = value, error = error_msg; "DDC failed to set brightness");
-
-            state.revert_pending();
-
-            // Show OSD error state
-            if self.osd.is_visible() {
-                self.osd.update_error(state)?;
+            SetOutcome::Reverted => {
+                let error_msg = error.unwrap_or("unknown error");
+                log::error!(monitor_id:% = monitor_id, target_brightness = value, error = error_msg; "DDC failed to set brightness");
+                if self.osd.is_visible() {
+                    self.osd.update_error(state)?;
+                }
+            }
+            SetOutcome::Ignored => {
+                log::debug!(monitor_id:% = monitor_id, seq = seq; "Ignoring stale/irrelevant DDC result");
             }
         }
 
@@ -402,8 +407,10 @@ impl BrightnessController {
         );
 
         // 4. Optimistic update (only set pending if hardware is changing)
+        let seq = self.next_seq;
         if new_hardware != old_hardware {
-            state.set_pending(new_hardware);
+            self.next_seq += 1;
+            state.set_pending(new_hardware, seq, Instant::now());
         }
         state.overlay_opacity = new_overlay;
 
@@ -428,6 +435,7 @@ impl BrightnessController {
             if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::SetBrightness {
                 monitor_id: target_id,
                 value: new_hardware,
+                seq,
             }) {
                 log::error!(error:% = e; "Failed to send DDC command");
             }

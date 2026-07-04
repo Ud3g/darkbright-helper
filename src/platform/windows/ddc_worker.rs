@@ -60,8 +60,12 @@ impl DdcWorker {
 
             log::trace!(command:? = cmd; "Received command");
             match cmd {
-                DdcCommand::SetBrightness { monitor_id, value } => {
-                    self.handle_set_brightness(&monitor_id, value);
+                DdcCommand::SetBrightness {
+                    monitor_id,
+                    value,
+                    seq,
+                } => {
+                    self.handle_set_brightness(&monitor_id, value, seq);
                 }
                 DdcCommand::RefreshAll => {
                     self.handle_refresh_all();
@@ -77,7 +81,7 @@ impl DdcWorker {
     }
 
     /// Handles a `SetBrightness` command.
-    fn handle_set_brightness(&mut self, monitor_id: &MonitorId, value: u8) {
+    fn handle_set_brightness(&mut self, monitor_id: &MonitorId, value: u8, seq: u64) {
         let result = if let Some(monitor) = self.monitors.get_mut(monitor_id) {
             monitor.set_brightness(u32::from(value))
         } else {
@@ -102,6 +106,7 @@ impl DdcWorker {
         let msg = BrightnessMessage::DdcSetResult {
             monitor_id: monitor_id.clone(),
             value,
+            seq,
             success,
             error,
         };
