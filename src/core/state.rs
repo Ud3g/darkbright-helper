@@ -346,6 +346,8 @@ pub enum BrightnessMessage {
     },
     /// Result of a DDC refresh operation (from DDC worker).
     DdcRefreshResult {
+        /// Generation echoed from the originating refresh command.
+        generation: u64,
         /// List of (`monitor_id`, brightness) pairs for all detected monitors.
         monitors: Vec<(MonitorId, u8)>,
     },
@@ -511,7 +513,10 @@ pub enum DdcCommand {
         seq: u64,
     },
     /// Refresh all monitors: enumerate and read current brightness values.
-    RefreshAll,
+    RefreshAll {
+        /// Generation correlating this refresh to its result.
+        generation: u64,
+    },
     /// Shutdown the DDC worker thread.
     Shutdown,
 }

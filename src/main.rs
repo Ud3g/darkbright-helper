@@ -17,6 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use darkbright_helper::core::brightness::calculate_adjustment;
 use darkbright_helper::core::config::Config;
+use darkbright_helper::core::reconcile::RefreshTracker;
 use darkbright_helper::core::state::{
     BrightnessMessage, DdcCommand, MonitorId, MonitorState, SetOutcome, TrayMenuData,
     TrayMonitorInfo, generate_display_names,
@@ -117,12 +118,8 @@ struct BrightnessController {
     ddc_cmd_tx: mpsc::Sender<DdcCommand>,
     /// Timestamp of last user-initiated brightness adjustment.
     last_activity: Instant,
-    /// Timestamp of last completed DDC refresh.
-    last_refresh: Instant,
-    /// Flag to prevent overlapping refresh requests.
-    refresh_in_progress: bool,
-    /// Whether the last refresh found any monitors.
-    last_refresh_successful: bool,
+    /// Refresh lifecycle: in-flight state, generation, and last outcome.
+    refresh: RefreshTracker,
     /// Handle to the currently open usage window (if any).
     usage_window: Option<UsageWindow>,
     /// Monotonic sequence id stamped on each DDC set command.
@@ -152,9 +149,7 @@ impl BrightnessController {
             id_cache: HashMap::new(),
             ddc_cmd_tx,
             last_activity: now,
-            last_refresh: now,
-            refresh_in_progress: false,
-            last_refresh_successful: true,
+            refresh: RefreshTracker::new(now),
             usage_window: None,
             next_seq: 0,
         })
@@ -218,8 +213,11 @@ impl BrightnessController {
             } => {
                 self.handle_ddc_set_result(&monitor_id, value, seq, success, error.as_deref())?;
             }
-            BrightnessMessage::DdcRefreshResult { monitors } => {
-                self.handle_ddc_refresh_result(monitors);
+            BrightnessMessage::DdcRefreshResult {
+                generation,
+                monitors,
+            } => {
+                self.handle_ddc_refresh_result(generation, monitors);
             }
             BrightnessMessage::Shutdown => {
                 self.handle_shutdown()?;
@@ -308,7 +306,7 @@ impl BrightnessController {
     ///
     /// Updates existing monitor states and creates new entries for
     /// newly detected monitors.
-    fn handle_ddc_refresh_result(&mut self, monitors: Vec<(MonitorId, u8)>) {
+    fn handle_ddc_refresh_result(&mut self, generation: u64, monitors: Vec<(MonitorId, u8)>) {
         let found_monitors = !monitors.is_empty();
 
         if found_monitors {
@@ -326,10 +324,8 @@ impl BrightnessController {
                 .or_insert_with(|| MonitorState::new(brightness));
         }
 
-        // Update refresh tracking state
-        self.last_refresh = Instant::now();
-        self.refresh_in_progress = false;
-        self.last_refresh_successful = found_monitors;
+        self.refresh
+            .complete(generation, Instant::now(), found_monitors);
     }
 
     /// Applies a relative brightness adjustment.
@@ -342,8 +338,8 @@ impl BrightnessController {
         // (must be checked BEFORE updating last_activity)
         self.check_inactivity_refresh();
 
-        // If last refresh failed, trigger a new one (user activity indicates they're back)
-        if !self.last_refresh_successful && !self.refresh_in_progress {
+        // If last refresh failed, trigger a new one (user activity indicates they're back).
+        if !self.refresh.last_successful() && !self.refresh.in_progress() {
             log::debug!("Triggering refresh on user activity (last refresh found no monitors)");
             self.handle_refresh();
         }
@@ -464,16 +460,15 @@ impl BrightnessController {
     fn handle_refresh(&mut self) {
         log::info!("Requesting monitor refresh from DDC worker");
 
-        // Clear ID cache since handles may change after refresh
+        // Clear ID cache since handles may change after refresh.
         self.id_cache.clear();
 
-        // Mark refresh in progress to prevent overlapping requests
-        self.refresh_in_progress = true;
+        let generation = self.refresh.begin(Instant::now());
 
-        // Send refresh command to worker (non-blocking)
-        if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::RefreshAll) {
+        // Send refresh command to worker (non-blocking).
+        if let Err(e) = self.ddc_cmd_tx.send(DdcCommand::RefreshAll { generation }) {
             log::error!(error:% = e; "Failed to send refresh command to DDC worker");
-            self.refresh_in_progress = false;
+            self.refresh.abort();
         }
     }
 
@@ -484,18 +479,18 @@ impl BrightnessController {
     fn check_periodic_refresh(&mut self) {
         let periodic_seconds = self.config.refresh.periodic_seconds;
 
-        // Skip if periodic refresh is disabled (0) or refresh already in progress
-        if periodic_seconds == 0 || self.refresh_in_progress {
+        // Skip if periodic refresh is disabled (0) or refresh already in progress.
+        if periodic_seconds == 0 || self.refresh.in_progress() {
             return;
         }
 
-        // Skip if last refresh found no monitors (will retry on user activity or resume)
-        if !self.last_refresh_successful {
+        // Skip if last refresh found no monitors (will retry on user activity or resume).
+        if !self.refresh.last_successful() {
             log::debug!("Skipping periodic refresh (last refresh found no monitors)");
             return;
         }
 
-        let elapsed = self.last_refresh.elapsed();
+        let elapsed = self.refresh.elapsed_since_refresh(Instant::now());
         let interval = Duration::from_secs(u64::from(periodic_seconds));
 
         if elapsed >= interval {
@@ -548,8 +543,8 @@ impl BrightnessController {
     fn check_inactivity_refresh(&mut self) {
         let inactivity_seconds = self.config.refresh.inactivity_seconds;
 
-        // Skip if inactivity refresh is disabled (0) or refresh already in progress
-        if inactivity_seconds == 0 || self.refresh_in_progress {
+        // Skip if inactivity refresh is disabled (0) or refresh already in progress.
+        if inactivity_seconds == 0 || self.refresh.in_progress() {
             return;
         }
 

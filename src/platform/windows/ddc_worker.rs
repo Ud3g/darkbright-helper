@@ -67,8 +67,8 @@ impl DdcWorker {
                 } => {
                     self.handle_set_brightness(&monitor_id, value, seq);
                 }
-                DdcCommand::RefreshAll => {
-                    self.handle_refresh_all();
+                DdcCommand::RefreshAll { generation } => {
+                    self.handle_refresh_all(generation);
                 }
                 DdcCommand::Shutdown => {
                     log::info!("DDC worker received shutdown command");
@@ -120,7 +120,7 @@ impl DdcWorker {
     ///
     /// Enumerates all monitors, reads their brightness values,
     /// and sends the results back to the main thread.
-    fn handle_refresh_all(&mut self) {
+    fn handle_refresh_all(&mut self, generation: u64) {
         log::debug!("Refreshing all monitors");
 
         // Clear existing state
@@ -135,7 +135,7 @@ impl DdcWorker {
             Err(e) => {
                 log::error!(error:% = e; "Failed to enumerate monitors");
                 // Send empty result
-                self.send_refresh_result(results);
+                self.send_refresh_result(generation, results);
                 return;
             }
         };
@@ -146,7 +146,7 @@ impl DdcWorker {
             }
         }
 
-        self.send_refresh_result(results);
+        self.send_refresh_result(generation, results);
     }
 
     /// Processes a single monitor during refresh.
@@ -186,8 +186,11 @@ impl DdcWorker {
     }
 
     /// Sends refresh results back to the main thread.
-    fn send_refresh_result(&self, monitors: Vec<(MonitorId, u8)>) {
-        let msg = BrightnessMessage::DdcRefreshResult { monitors };
+    fn send_refresh_result(&self, generation: u64, monitors: Vec<(MonitorId, u8)>) {
+        let msg = BrightnessMessage::DdcRefreshResult {
+            generation,
+            monitors,
+        };
 
         if let Err(e) = self.resp_tx.send(msg) {
             log::error!(error:% = e; "Failed to send refresh result");
