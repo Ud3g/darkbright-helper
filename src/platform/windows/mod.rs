@@ -11,10 +11,10 @@ use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorF
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRect, BS_DEFPUSHBUTTON, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    GetCursorPos, GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_OK, MessageBoxW,
-    RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW, SetForegroundWindow, ShowWindow, WM_CLOSE,
-    WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC, WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD,
-    WS_POPUP, WS_SYSMENU, WS_VISIBLE,
+    GetCursorPos, GetSystemMetrics, HMENU, IsWindow, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
+    MESSAGEBOX_STYLE, MessageBoxW, RegisterClassExW, SM_CXSCREEN, SM_CYSCREEN, SW_SHOW,
+    SetForegroundWindow, ShowWindow, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_CTLCOLORSTATIC,
+    WM_DESTROY, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_POPUP, WS_SYSMENU, WS_VISIBLE,
 };
 
 use std::sync::OnceLock;
@@ -32,11 +32,13 @@ pub mod osd;
 mod osd_render;
 pub mod overlay;
 pub mod power;
+pub mod single_instance;
 pub mod tray;
 
 // Re-export commonly used types
 pub use ddc_worker::{DdcSupervisor, DdcWorker, RespawnOutcome};
 pub use power::PowerEventListener;
+pub use single_instance::{InstanceLock, SingleInstance};
 pub use tray::TrayIcon;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -261,15 +263,10 @@ impl<T> WindowsResultExt<T> for windows::core::Result<T> {
 // Message Box Helper
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Shows an error message box to the user.
+/// Shows a message box with the given caption, text, and style.
 ///
-/// This is a blocking call that waits for the user to dismiss the dialog.
-///
-/// # Arguments
-///
-/// * `title` - The message box title.
-/// * `message` - The error message to display.
-pub fn show_error_message_box(title: &str, message: &str) {
+/// Blocks until the user dismisses the dialog.
+fn show_message_box(title: &str, message: &str, style: MESSAGEBOX_STYLE) {
     let title_wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
     let message_wide: Vec<u16> = message.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -279,9 +276,34 @@ pub fn show_error_message_box(title: &str, message: &str) {
             HWND::default(),
             windows::core::PCWSTR(message_wide.as_ptr()),
             windows::core::PCWSTR(title_wide.as_ptr()),
-            MB_OK | MB_ICONERROR,
+            style,
         );
     }
+}
+
+/// Shows an error message box (red error icon) to the user.
+///
+/// This is a blocking call that waits for the user to dismiss the dialog.
+///
+/// # Arguments
+///
+/// * `title` - The message box title.
+/// * `message` - The error message to display.
+pub fn show_error_message_box(title: &str, message: &str) {
+    show_message_box(title, message, MB_OK | MB_ICONERROR);
+}
+
+/// Shows an informational message box (info icon) to the user.
+///
+/// Use this for normal notices — situations that are expected, not errors.
+/// This is a blocking call that waits for the user to dismiss the dialog.
+///
+/// # Arguments
+///
+/// * `title` - The message box title.
+/// * `message` - The message to display.
+pub fn show_info_message_box(title: &str, message: &str) {
+    show_message_box(title, message, MB_OK | MB_ICONINFORMATION);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
