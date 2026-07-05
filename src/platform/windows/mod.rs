@@ -32,11 +32,13 @@ pub mod osd;
 mod osd_render;
 pub mod overlay;
 pub mod power;
+pub mod single_instance;
 pub mod tray;
 
 // Re-export commonly used types
 pub use ddc_worker::{DdcSupervisor, DdcWorker, RespawnOutcome};
 pub use power::PowerEventListener;
+pub use single_instance::{InstanceLock, SingleInstance};
 pub use tray::TrayIcon;
 
 // ─────────────────────────────────────────────────────────────────────────────
