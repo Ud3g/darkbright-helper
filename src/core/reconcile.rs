@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 /// in-flight refresh, and its deadline is measured from enqueue time. A dead
 /// worker is healed far faster by liveness detection, so this only ever fires
 /// for a worker that is alive but hung inside a blocking DDC call.
-pub const SET_TIMEOUT: Duration = Duration::from_millis(8000);
+pub const SET_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Deadline for a full monitor refresh (enumeration plus per-monitor EDID read
 /// and DDC brightness read, each up to ~120 ms across up to three attempts).
-pub const REFRESH_TIMEOUT: Duration = Duration::from_millis(5000);
+pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum worker respawns permitted within [`RESPAWN_WINDOW`] before giving up.
 pub const RESPAWN_MAX: usize = 3;
