@@ -32,10 +32,11 @@ use darkbright_helper::platform::windows::hotkey::{
 };
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
-use darkbright_helper::platform::windows::show_error_message_box;
+use darkbright_helper::platform::windows::single_instance::{self, InstanceLock, SingleInstance};
 use darkbright_helper::platform::windows::{
     DdcSupervisor, PowerEventListener, RespawnOutcome, TrayIcon, UsageWindow,
 };
+use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 use darkbright_helper::{BrightnessError, Result};
 
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
@@ -909,6 +910,24 @@ fn main() {
     }
 
     init_logging();
+
+    // Enforce a single instance per logon session before spawning any worker,
+    // window, or hotkey. A second launch informs the user and exits, so it
+    // leaves no duplicate tray icon, overlay, or failed hotkey registration.
+    let _instance_guard: Option<SingleInstance> = match single_instance::acquire() {
+        Ok(InstanceLock::Acquired(guard)) => Some(guard),
+        Ok(InstanceLock::AlreadyRunning) => {
+            log::info!("Another instance is already running; exiting");
+            show_info_message_box("darkbright-helper", "darkbright-helper is already running.");
+            return;
+        }
+        Err(e) => {
+            // Fail open: an unexpected guard failure must not block the user's
+            // only instance.
+            log::error!(error:% = e; "Single-instance check failed; continuing without guard");
+            None
+        }
+    };
 
     // Load configuration
     let config = load_config();
