@@ -64,25 +64,26 @@ Create `tests/single_instance_test.rs`:
 #[cfg(windows)]
 #[test]
 fn second_acquire_reports_already_running() {
-    use darkbright_helper::platform::windows::single_instance::{acquire, InstanceLock};
+    use darkbright_helper::platform::windows::single_instance::{InstanceLock, acquire};
 
-    // First acquisition: `Acquired` when no other instance holds the name in
-    // this session, or `AlreadyRunning` if the real app happens to be running
-    // while the test executes. When `Acquired`, `first` holds a live handle to
-    // the named object; when the app is running, the app holds the name. Either
-    // way the named object exists for the duration of `first`.
     let first = acquire().expect("acquire must not error on the happy path");
-
-    // A second acquisition while an instance holds the name must always observe
-    // it, regardless of whether `first` was `Acquired` or `AlreadyRunning`.
     let second = acquire().expect("acquire must not error on the happy path");
-    assert!(
-        matches!(second, InstanceLock::AlreadyRunning),
-        "a second acquire while an instance holds the name must report AlreadyRunning"
-    );
 
-    // Keep `first` alive until after the second check so its handle (when it
-    // holds one) is not dropped early.
+    // Assert only when THIS test holds the sole instance: then `first` owns a
+    // live handle to the named object, so the second acquire must observe it.
+    // If another instance (e.g. the real app running on the dev machine) already
+    // held the name, `first` is `AlreadyRunning` and holds no handle, so the
+    // second call's outcome is environment-dependent and nothing deterministic
+    // can be asserted. On CI (no app running) `first` is always `Acquired`, so
+    // the assertion always runs there.
+    if let InstanceLock::Acquired(_) = &first {
+        assert!(
+            matches!(second, InstanceLock::AlreadyRunning),
+            "while this test holds the only instance, a second acquire must report AlreadyRunning"
+        );
+    }
+
+    // Keep `first` alive until after the check so its handle is not dropped early.
     drop(first);
 }
 ```
@@ -219,7 +220,7 @@ Add the module declaration (keep the existing grouping; insert before `pub mod t
 pub mod single_instance;
 ```
 
-Add the re-export alongside the others (after `mod.rs:38-40`):
+Add the re-export alongside the others. It must sit in sorted order **between** `pub use power::PowerEventListener;` and `pub use tray::TrayIcon;` (rustfmt sorts these by path: `ddc_worker` < `power` < `single_instance` < `tray`):
 
 ```rust
 pub use single_instance::{InstanceLock, SingleInstance};
@@ -234,8 +235,8 @@ Expected: PASS — `second_acquire_reports_already_running` succeeds.
 
 Run: `cargo clippy --all-targets -- -D warnings`
 Expected: no warnings.
-Run: `cargo fmt -- --check`
-Expected: clean (no diff).
+Run: `cargo fmt` (applies formatting — rustfmt will normalize `use` ordering in the new files), then `cargo fmt -- --check`
+Expected: the second command is clean (no diff). If `cargo fmt` changed anything, re-stage those files in Step 8.
 
 - [ ] **Step 8: Commit**
 
@@ -273,7 +274,7 @@ In `src/platform/windows/mod.rs`, extend the `windows::Win32::UI::WindowsAndMess
 
 - [ ] **Step 2: Refactor the helper to share plumbing and add the info variant**
 
-Replace the existing `show_error_message_box` function (`mod.rs:272-285`) with a private core plus two public wrappers:
+Replace the existing `show_error_message_box` function **together with its doc comment** — the whole span `mod.rs:264-285` (the `///` block starts at line 264, `pub fn` at 272) — with a private core plus two public wrappers. Deleting the old doc block (264-271) is required; otherwise it would be left stranded above the new private `show_message_box`.
 
 ```rust
 /// Shows a message box with the given caption, text, and style.
@@ -326,8 +327,8 @@ Run: `cargo build`
 Expected: compiles.
 Run: `cargo clippy --all-targets -- -D warnings`
 Expected: no warnings.
-Run: `cargo fmt -- --check`
-Expected: clean.
+Run: `cargo fmt`, then `cargo fmt -- --check`
+Expected: the second command is clean.
 
 - [ ] **Step 4: Commit**
 
@@ -365,11 +366,13 @@ to:
 use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 ```
 
-And add a new import (next to the other `platform::windows` imports, e.g. after line 38):
+And add a new import next to the other `platform::windows` imports:
 
 ```rust
 use darkbright_helper::platform::windows::single_instance::{self, InstanceLock, SingleInstance};
 ```
+
+Exact placement doesn't need to be hand-perfect: after adding both edits, `cargo fmt` (Step 3) sorts the whole contiguous `use` block. For reference, rustfmt's final order puts the `single_instance::{...}` line right after `overlay::OverlayManager` and moves the now-braced `{show_error_message_box, show_info_message_box}` line below the `{DdcSupervisor, ...}` group.
 
 - [ ] **Step 2: Insert the gate after `init_logging()`**
 
@@ -406,8 +409,8 @@ Run: `cargo build`
 Expected: compiles.
 Run: `cargo clippy --all-targets -- -D warnings`
 Expected: no warnings.
-Run: `cargo fmt -- --check`
-Expected: clean.
+Run: `cargo fmt` (it will reorder the `use` block per the note above), then `cargo fmt -- --check`
+Expected: the second command is clean. Re-stage `main.rs` in Step 5 if `cargo fmt` changed it.
 
 - [ ] **Step 4: Manual verification matrix**
 
@@ -465,3 +468,28 @@ Expected: all clean/pass. Then update `docs/architecture-review.md` finding #6 w
 **Placeholder scan:** No TBD/TODO/"handle edge cases"/"similar to Task N" — every code step shows complete code. ✔
 
 **Type consistency:** `acquire() -> Result<InstanceLock>`, `InstanceLock::{Acquired(SingleInstance), AlreadyRunning}`, `SingleInstance`, `show_info_message_box(&str, &str)` used identically in Tasks 1→3. `SafeHandle::new` (unsafe), `get_last_error_code() -> u32`, `BrightnessError::windows_api(_, u32)`, `ERROR_ALREADY_EXISTS.0`/`ERROR_ACCESS_DENIED.0` (`u32`) all match verified source. ✔
+
+---
+
+## Review amendments
+
+A cold adversarial reviewer (Fable 5) checked the first draft of this plan against the repo, the
+vendored `windows` 0.52.0 source, and a live `rustfmt --edition 2024` probe. The FFI code, types,
+feature gates, lint-cleanliness, and `#[allow(dead_code)]` all held up as written. Three defects were
+fixed:
+
+- **P1 — three fmt gates were false.** rustfmt (reorder enabled; `rustfmt.toml` sets only edition /
+  width / tabs) reorders `use` items and sorts within brace lists, so verbatim paste would fail
+  `cargo fmt -- --check`. → Every fmt step now runs `cargo fmt` (apply) **then** `cargo fmt -- --check`;
+  the test's brace import is pre-sorted to `{InstanceLock, acquire}`; the `mod.rs` re-export slot is
+  pinned between `power` and `tray`; Task 3 notes rustfmt's final `use` order.
+- **P2 — Task 2 replace-range excluded the doc comment.** `show_error_message_box`'s `///` block is
+  `mod.rs:264-271`; replacing only `272-285` would strand it above the new private fn. → Task 2 now
+  replaces `264-285` and calls out deleting the old doc block.
+- **P3 — test could flake.** If the name's holder released it between the two `acquire()` calls the
+  assert could fail. → The test now asserts only inside `if let InstanceLock::Acquired(_) = &first`,
+  so it asserts exactly when it controls the handle (always, on CI) and no-ops otherwise.
+
+Reviewer item intentionally **not** changed: the "`CreateMutexW` resets last-error on fresh create"
+assumption is the canonical single-instance pattern and is already covered by manual verification
+case 6 (happy-path sanity).
