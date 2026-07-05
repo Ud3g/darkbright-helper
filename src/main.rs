@@ -918,7 +918,10 @@ fn main() {
         Ok(InstanceLock::Acquired(guard)) => Some(guard),
         Ok(InstanceLock::AlreadyRunning) => {
             log::info!("Another instance is already running; exiting");
-            show_info_message_box("darkbright-helper", "darkbright-helper is already running.");
+            show_info_message_box(
+                "Brightness Control",
+                "Brightness Control is already running.",
+            );
             return;
         }
         Err(e) => {

@@ -168,9 +168,11 @@ let _instance_guard: Option<SingleInstance> = match single_instance::acquire() {
     Ok(InstanceLock::Acquired(guard)) => Some(guard),   // first instance: hold to end of main
     Ok(InstanceLock::AlreadyRunning) => {
         log::info!("Another instance is already running; exiting");
+        // Use the "Brightness Control" brand shown on every other user-facing
+        // surface (tray, hotkey-error box, usage window), not the crate name.
         show_info_message_box(
-            "darkbright-helper",
-            "darkbright-helper is already running.",
+            "Brightness Control",
+            "Brightness Control is already running.",
         );
         return;                                          // no workers/windows/hotkeys spawned
     }
