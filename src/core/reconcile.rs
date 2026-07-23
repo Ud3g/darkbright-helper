@@ -47,6 +47,15 @@ pub fn respawn_allowed(recent: &[Instant], now: Instant, window: Duration, max: 
     count < max
 }
 
+/// Result of a supervisor respawn attempt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RespawnOutcome {
+    /// A fresh worker thread was spawned.
+    Respawned,
+    /// Too many respawns within the backoff window; the worker is left dead.
+    BackoffExceeded,
+}
+
 /// Tracks the single in-flight monitor refresh and its outcome.
 ///
 /// Enforces the "one refresh in flight" invariant: each [`begin`](Self::begin)

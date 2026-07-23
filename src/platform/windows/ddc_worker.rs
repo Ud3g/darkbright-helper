@@ -213,14 +213,7 @@ impl DdcWorker {
     }
 }
 
-/// Result of a supervisor respawn attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RespawnOutcome {
-    /// A fresh worker thread was spawned.
-    Respawned,
-    /// Too many respawns within the backoff window; the worker is left dead.
-    BackoffExceeded,
-}
+pub use crate::core::reconcile::RespawnOutcome;
 
 /// Owns the DDC worker thread and can respawn it after a confirmed death.
 ///
