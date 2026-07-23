@@ -11,7 +11,10 @@ use std::time::{Duration, Instant};
 
 use crate::core::brightness::calculate_adjustment;
 use crate::core::config::Config;
-use crate::core::reconcile::{PRUNE_ABSENCE_WINDOW, RefreshTracker, RespawnOutcome};
+use crate::core::reconcile::{
+    HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REFRESH_TIMEOUT, RefreshTracker, RespawnOutcome,
+    SET_TIMEOUT,
+};
 use crate::core::state::{DdcCommand, MonitorId, MonitorState, SetOutcome};
 use crate::error::{BrightnessError, Result};
 
@@ -128,8 +131,6 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     /// Monotonic sequence id stamped on each DDC set command.
     next_seq: u64,
     /// Throttle for the per-tick supervision/watchdog pass.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     last_health_check: Instant,
     /// Consecutive set timeouts while the worker is still alive (hang signal).
     consecutive_set_timeouts: u32,
@@ -232,12 +233,12 @@ where
     /// regardless of generation: a hardware value is true no matter which
     /// refresh produced it. Absence bookkeeping (pruning) is gated on the
     /// result being current and the enumerated set being non-empty.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     // The caller destructures an owned `enumerated: Vec<MonitorId>` straight out
     // of the refresh-result message; taking it by value here avoids an extra
     // borrow indirection even though this function only ever reads it.
     #[allow(clippy::needless_pass_by_value)]
+    // removed when the message dispatch lands
+    #[allow(dead_code)]
     fn handle_ddc_refresh_result(
         &mut self,
         generation: u64,
@@ -317,8 +318,6 @@ where
     /// disrupted: system resume, worker respawn). Evidence must span an
     /// undisturbed window; refresh bursts around resume/respawn can observe
     /// misses while a dock's DP link is still training.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn reset_absence_evidence(&mut self) {
         for state in self.states.values_mut() {
             state.missing_since = None;
@@ -560,6 +559,81 @@ where
                 log::warn!(error:% = e; "Failed to update OSD error state");
             }
         }
+    }
+
+    /// Runs one throttled supervision + watchdog pass (called each loop tick).
+    pub fn supervise_and_watchdog(&mut self, now: Instant) {
+        if now.saturating_duration_since(self.last_health_check) < Duration::from_millis(250) {
+            return;
+        }
+        self.last_health_check = now;
+        self.supervise_worker(now);
+        self.check_watchdogs(now);
+    }
+
+    /// Respawns the DDC worker if it has died (never merely because it is slow).
+    fn supervise_worker(&mut self, now: Instant) {
+        if self.ddc_disabled || self.ddc.is_alive() {
+            return;
+        }
+        match self.ddc.respawn(now) {
+            RespawnOutcome::Respawned => {
+                log::warn!("DDC worker died; respawned");
+                self.reconcile_all_pending();
+                self.refresh.abort();
+                self.consecutive_set_timeouts = 0;
+                self.reset_absence_evidence();
+                self.handle_refresh(now);
+            }
+            RespawnOutcome::BackoffExceeded => {
+                log::error!("DDC worker respawn backoff exceeded; disabling DDC until recovery");
+                self.ddc_disabled = true;
+                self.reconcile_all_pending();
+                self.reset_absence_evidence();
+            }
+        }
+    }
+
+    /// Reconciles state deadlines: stuck pendings and a latched refresh.
+    fn check_watchdogs(&mut self, now: Instant) {
+        let timed_out: Vec<MonitorId> = self
+            .states
+            .iter()
+            .filter(|(_, state)| state.pending_timed_out(now, SET_TIMEOUT))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        if !timed_out.is_empty() {
+            for id in &timed_out {
+                if let Some(state) = self.states.get_mut(id) {
+                    state.force_revert();
+                }
+                log::error!(monitor_id:% = id; "DDC set timed out with no result; reverted");
+            }
+            self.consecutive_set_timeouts += 1;
+            self.show_error_on_visible_osd();
+
+            if self.ddc.is_alive()
+                && !self.ddc_disabled
+                && self.consecutive_set_timeouts >= HUNG_TIMEOUT_LIMIT
+            {
+                log::error!(count = self.consecutive_set_timeouts; "DDC worker unresponsive; disabling DDC until restart or resume");
+                self.ddc_disabled = true;
+            }
+        }
+
+        if self.refresh.timed_out(now, REFRESH_TIMEOUT) {
+            log::error!("DDC refresh timed out with no result; aborting");
+            self.refresh.abort();
+        }
+    }
+
+    /// Force-reverts every pending set (used after a worker respawn).
+    fn reconcile_all_pending(&mut self) {
+        for state in self.states.values_mut() {
+            state.force_revert();
+        }
+        self.show_error_on_visible_osd();
     }
 }
 
@@ -1114,5 +1188,98 @@ mod tests {
         c.handle_ddc_set_result(&other_id(), 60, 0, true, None)
             .unwrap();
         assert!(c.states.is_empty(), "no ghost resurrection");
+    }
+
+    // ── Supervision / watchdogs ──────────────────────────────────────────
+
+    /// Advances past the 250 ms health-check throttle and runs one pass.
+    fn supervise_at(c: &mut TestController, now: Instant) {
+        c.last_health_check = now
+            .checked_sub(Duration::from_secs(1))
+            .expect("now is derived from an Instant::now() baseline with headroom");
+        c.supervise_and_watchdog(now);
+    }
+
+    #[test]
+    fn dead_worker_respawn_reconciles_resets_evidence_and_refreshes() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.handle_adjust(None, 10, base).unwrap();
+        deliver_refresh(&mut c, vec![], vec![other_id()], base); // stamps missing_since
+        c.ddc.alive = false;
+
+        supervise_at(&mut c, base + Duration::from_secs(1));
+
+        assert_eq!(c.ddc.respawns, 1);
+        assert!(c.states[&id].pending.is_none(), "pendings force-reverted");
+        assert!(
+            c.states[&id].missing_since.is_none(),
+            "evidence discarded on respawn"
+        );
+        assert!(c.refresh.in_progress(), "fresh refresh dispatched");
+    }
+
+    #[test]
+    fn backoff_exceeded_disables_ddc_and_resets_evidence() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        deliver_refresh(&mut c, vec![], vec![other_id()], base);
+        c.ddc.alive = false;
+        c.ddc.respawn_outcome = RespawnOutcome::BackoffExceeded;
+
+        supervise_at(&mut c, base + Duration::from_secs(1));
+
+        assert!(c.ddc_disabled);
+        assert!(c.states[&id].missing_since.is_none());
+    }
+
+    #[test]
+    fn set_timeout_reverts_counts_and_disables_after_limit() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+
+        for round in 0..HUNG_TIMEOUT_LIMIT {
+            let t = base + Duration::from_secs(u64::from(round) * 20);
+            c.handle_adjust(None, 10, t).unwrap();
+            assert!(c.states[&id].pending.is_some());
+            supervise_at(&mut c, t + SET_TIMEOUT);
+            assert!(
+                c.states[&id].pending.is_none(),
+                "watchdog reverted the pending"
+            );
+        }
+
+        assert_eq!(c.consecutive_set_timeouts, HUNG_TIMEOUT_LIMIT);
+        assert!(
+            c.ddc_disabled,
+            "alive-but-hung worker diagnosed after limit"
+        );
+    }
+
+    #[test]
+    fn refresh_timeout_aborts() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_refresh(base);
+        assert!(c.refresh.in_progress());
+
+        supervise_at(&mut c, base + REFRESH_TIMEOUT);
+        assert!(!c.refresh.in_progress());
+    }
+
+    #[test]
+    fn health_pass_is_throttled() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.ddc.alive = false;
+
+        // Constructor stamped last_health_check = base; within 250 ms nothing runs.
+        c.supervise_and_watchdog(base + Duration::from_millis(100));
+        assert_eq!(c.ddc.respawns, 0);
+        c.supervise_and_watchdog(base + Duration::from_millis(300));
+        assert_eq!(c.ddc.respawns, 1);
     }
 }
