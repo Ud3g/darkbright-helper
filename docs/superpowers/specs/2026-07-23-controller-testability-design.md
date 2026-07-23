@@ -1,6 +1,7 @@
 # Design: Testable controller orchestration (`core/controller.rs`)
 
-**Date:** 2026-07-23 (revised same day after two adversarial cold-review rounds)
+**Date:** 2026-07-23 (revised same day across three adversarial cold-review rounds, two
+independent reviewers)
 **Origin:** `docs/architecture-review-2026-07-19.md`, Finding #1 (untested, structurally
 untestable controller orchestration in `main.rs`) plus Finding #3 (monitor hot-unplug
 leaves permanent ghost state), which lives inside one of the methods being moved.
@@ -19,10 +20,11 @@ leaves permanent ghost state), which lives inside one of the methods being moved
 
 ## Non-goals
 
-- No behavior change other than: the pruning above, the periodic-refresh gate change that
-  sustains pruning while undocked (see "Ghost pruning"), clearing `osd_monitor` when its
-  monitor is pruned, and the sub-millisecond timestamp shift described under
-  "Time injection".
+- No behavior change other than: the pruning above **including its deliberate-forgetting
+  consequences** (overlay dim level and cached brightness do not survive a > 90 s absence;
+  see "Consequences" under Ghost pruning), the periodic-refresh gate change that sustains
+  pruning while undocked, clearing `osd_monitor` when its monitor is pruned, and the
+  sub-millisecond timestamp shift described under "Time injection".
 - No supervision of the hotkey/tray/power threads (Finding #2), no config atomicity
   (Finding #4), no other review findings. In particular, `MonitorId::Display` keeps its
   serial (Finding #8 is separate work); this spec merely avoids *adding* new serial-bearing
@@ -65,7 +67,9 @@ they are debug-log no-ops — visible in logs if wiring ever regresses, but neve
 
 **`main.rs` afterwards:** wiring (config load, thread spawns,
 `Controller::new(config, osd, overlay, ddc, locator, now)`), the event loop, and the small
-shell match described above.
+shell match described above. With the OSD injected, `Controller::new` has no remaining
+failure path and becomes **infallible** (today's `Result` existed only because `new`
+created the OSD; that creation now happens in `main` before injection).
 
 ## Seams
 
@@ -109,13 +113,17 @@ The `HMONITOR → MonitorId` cache stays inside the controller as
 ## Time injection
 
 No clock trait. Public controller methods take an explicit `now: Instant`
-(`handle_message(msg, now)`, `check_periodic_refresh(now)`, `supervise_and_watchdog(now)`),
-and `Controller::new(..., now)` stamps `last_activity`, `RefreshTracker::new`, and
-`last_health_check` from its parameter. Internal `Instant::now()` calls are replaced by the
-passed `now`; elapsed-time checks use `now.saturating_duration_since(..)` (never bare
-subtraction — the codebase avoids that panic surface throughout, and
-`check_inactivity_refresh`'s current `self.last_activity.elapsed()` is a hidden clock that
-must be converted the same way).
+(`handle_message(msg, now)`, `handle_refresh(now)` — public because `main` calls it
+directly for the startup enumeration — `check_periodic_refresh(now)`,
+`supervise_and_watchdog(now)`), and `Controller::new(..., now)` stamps `last_activity`,
+`RefreshTracker::new`, and `last_health_check` from its parameter. Internal
+`Instant::now()` calls **in controller-owned code** are replaced by the passed `now`;
+elapsed-time checks use `now.saturating_duration_since(..)` (never bare subtraction — the
+codebase avoids that panic surface throughout, and `check_inactivity_refresh`'s current
+`self.last_activity.elapsed()` is a hidden clock that must be converted the same way).
+Explicitly out of scope: `MonitorState`'s own internal `Instant::now()` stamps touch only
+its write-only `last_refresh` field — they stay as-is (no signature churn, no test impact);
+removing that dead field is separate cleanup.
 
 **Capture point:** the main loop captures `Instant::now()` immediately before each
 controller call — i.e., after `recv_timeout` returns for `handle_message`, and right before
@@ -155,15 +163,22 @@ Complete list — everything else moves or forwards without signature change:
 
 **Why the protocol must change:** today's `DdcRefreshResult.monitors` contains only
 monitors whose *brightness read succeeded* (`ddc_worker.rs` pushes results only in the `Ok`
-arm). Absence therefore means "momentarily unreadable" (standby, KVM, DDC hiccup surviving
-all 3 retries) at least as often as "unplugged". Pruning on absence from the readable set
+arm). Absence therefore means "momentarily unreadable" (standby, EDID-emulating KVM, DDC hiccup
+surviving all 3 retries) at least as often as "unplugged". (Ordinary KVMs without EDID
+emulation remove the display from the topology entirely — for those, a switch-away is
+genuine absence; see the deliberate-forgetting consequence below.) Pruning on absence from the readable set
 would destroy a deliberately dimmed monitor's black overlay on a transient read failure —
 and the motivating undock scenario (empty readable set) would never prune at all.
 
 **Worker change:** during `handle_refresh_all`, the worker additionally collects
 `enumerated: Vec<MonitorId>` — every monitor whose identification (`get_monitor_id`)
-succeeded this pass, regardless of whether the subsequent brightness read succeeded. By
-construction `enumerated ⊇` the readable set. No `MonitorState` is created for
+succeeded this pass, regardless of whether the subsequent brightness read succeeded. The
+push happens **immediately after `get_monitor_id` succeeds — before the physical-monitor
+handle is opened**: a `get_physical_monitors` or read failure counts as
+present-but-unreadable, never as topology absence (pushing on overall per-monitor success
+instead would silently reclassify handle-open failures as unplugs — the exact bug class
+this design exists to avoid, and one no automated test would catch since the worker is
+manual-test-only). By construction `enumerated ⊇` the readable set. No `MonitorState` is created for
 enumerated-but-unreadable monitors (there is no brightness value to hold); enumeration only
 proves physical presence. When `enumerate_monitors()` itself fails, the worker sends the
 usual empty result with `enumerated: vec![]` — the empty-set guard below then retains
@@ -188,9 +203,10 @@ keyed to the readable set.
      at the pruned monitor, and drop any `id_cache` entries mapping to the pruned id (a
      recycled `HMONITOR` value must not resurrect the ghost). Log at `info` using the
      serial-free `MonitorId::base_display_name()`; the serial-bearing form only at `debug`
-     (per the project's PII rule). Serial-less identical monitors share one state, so the
-     serial-free name is unambiguous per pruned state — do not "fix" this by re-adding the
-     serial.
+     (per the project's PII rule). Serial-less identical monitors collapse to one state;
+     same-model units with *distinct* serials keep separate states sharing one base name,
+     so the `info` line may be ambiguous between them — accepted, the `debug` line carries
+     the serial. Do not "fix" this by re-adding the serial at `info`.
 4. Empty `enumerated` set, or a stale/aborted generation (`current == false`) ⇒
    `missing_since` untouched, nothing pruned: no information is treated as no evidence.
 5. **Absence evidence is discarded on pipeline disruption:** every `missing_since` resets
@@ -215,9 +231,28 @@ failing DDC I/O per minute, on the worker thread.
 **Consequences, stated deliberately:**
 
 - Ghost tray rows disappear once absence has been observed spanning ≥ 90 s — at the default
-  60 s periodic cadence that is the third observation, ~2–2.5 min after unplug — instead of
+  60 s cadence that is the third missing observation, worst case ~3 min after unplug
+  (misses land at +60/+120/+180 s when the unplug follows a completion) — instead of
   lingering forever. Transient glitches and resume/respawn refresh bursts are non-events by
-  construction.
+  construction. Cadence scaling is declared, not hidden: `periodic_seconds = 3600` (valid)
+  stretches prune latency to ~2 h; `periodic_seconds = 0` ("disabled", also valid) leaves
+  only adjust-time/inactivity refreshes as observations, so ghosts can persist indefinitely
+  under that config — a declared limitation of the fix, matching that config's general
+  "no background resync" contract.
+- **Pruning forgets, deliberately.** Today's ghost state incidentally preserves the
+  sub-zero overlay level and cached brightness across a redock, and a first hotkey press
+  re-shows the OSD from the ghost cache. After a > 90 s absence — undock/redock, a DP
+  monitor powered off long enough to leave the topology, or an ordinary non-EDID-emulating
+  KVM switch-away — the monitor returns as a fresh `MonitorState` from the hardware read
+  with `overlay_opacity = 0`: the deliberate dim does not survive the round trip. A hotkey
+  press on a replugged monitor *before* the healing refresh yields `MonitorNotFound` with
+  no OSD (that press itself triggers the refresh via the activity path; the next press
+  works). This is the accepted price of removing ghost state; standby monitors and
+  EDID-emulating KVMs stay enumerated and are unaffected.
+- Between unplug and prune (bounded by window + cadence, ≤ ~3 min at defaults), an
+  orphaned *visible* overlay can migrate onto a surviving monitor as a topmost
+  click-through black sheet — exactly as today, but now bounded instead of permanent;
+  `overlay.remove` ends it.
 - A visible OSD showing a pruned monitor keeps its stale rendering until the auto-hide
   timer fires; no `OsdSink::hide` is added. Clearing `osd_monitor` disables
   `show_error_on_visible_osd` restyling until the next adjust — acceptable, the monitor is
@@ -244,7 +279,7 @@ liveness / respawn outcome, locator with fixed handle→id). Sequences covered:
 | Watchdog | `SET_TIMEOUT` exceeded ⇒ revert; ≥ `HUNG_TIMEOUT_LIMIT` ⇒ `ddc_disabled` |
 | Supervision | dead worker ⇒ respawn + `reconcile_all_pending` + refresh; `BackoffExceeded` ⇒ `ddc_disabled` |
 | Refresh lifecycle | generation gating, `REFRESH_TIMEOUT` abort, inactivity/periodic triggers |
-| Ghost pruning | absence spanning ≥ `PRUNE_ABSENCE_WINDOW` ⇒ state removed + `overlay.remove` + `id_cache` cleaned; reappearance resets `missing_since`; two misses seconds apart (resume/respawn burst) ⇒ no prune; `SystemResumed`/respawn ⇒ evidence reset; empty `enumerated` or stale generation ⇒ timestamps untouched |
+| Ghost pruning | absence spanning ≥ `PRUNE_ABSENCE_WINDOW` ⇒ state removed + `overlay.remove` + `id_cache` cleaned; reappearance resets `missing_since`; two misses seconds apart (resume/respawn burst) ⇒ no prune; `SystemResumed`/respawn ⇒ evidence reset; empty `enumerated` or stale generation ⇒ timestamps untouched; monitor re-added after prune starts fresh (`overlay_opacity = 0`) |
 | Undock cadence | readable = ∅ but `enumerated` non-empty ⇒ periodic refresh keeps running (gate on `last_enumerated`), pruning completes; `enumerated` = ∅ or `abort()` ⇒ periodic stays frozen as today |
 | Degraded recovery | adjust while `ddc_disabled` ⇒ `clear_degraded`; `SystemResumed` ⇒ clear + refresh |
 | Tray menu | display names + values from states |
@@ -254,7 +289,9 @@ Plus new `RefreshTracker` tests for the `bool` return of `complete` and the
 completions). The worker-side
 `enumerated` collection is FFI code and stays under the manual integration checks
 (architecture.md "Integration Testing"), with the unplug/replug and monitor-standby cycles
-added to that checklist. Existing tests remain untouched. Gates: `cargo fmt -- --check`,
+added to that checklist. Existing `state.rs` tests are untouched; the four `reconcile.rs`
+tests that call `complete` gain the new argument (call-site updates only, assertions
+unchanged). Gates: `cargo fmt -- --check`,
 `cargo clippy -- -D warnings`, `cargo test`.
 
 ## Documentation
