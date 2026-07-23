@@ -354,7 +354,7 @@ impl BrightnessController {
         }
 
         self.refresh
-            .complete(generation, Instant::now(), found_monitors);
+            .complete(generation, Instant::now(), found_monitors, found_monitors);
     }
 
     /// Runs one throttled supervision + watchdog pass (called each loop tick).

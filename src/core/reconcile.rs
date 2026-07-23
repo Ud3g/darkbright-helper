@@ -28,6 +28,12 @@ pub const RESPAWN_WINDOW: Duration = Duration::from_secs(60);
 /// Consecutive set timeouts (worker still alive) before it is diagnosed as hung.
 pub const HUNG_TIMEOUT_LIMIT: u32 = 3;
 
+/// Minimum continuously observed enumeration absence before a monitor's state
+/// is pruned. Spans at least two refresh observations, so a resume/respawn
+/// refresh burst (seconds apart, while a dock's DP link is still training)
+/// can never prune on its own.
+pub const PRUNE_ABSENCE_WINDOW: Duration = Duration::from_secs(90);
+
 /// Returns whether another worker respawn is permitted right now.
 ///
 /// `true` when fewer than `max` of the `recent` respawn timestamps fall within
@@ -53,6 +59,7 @@ pub struct RefreshTracker {
     started_at: Option<Instant>,
     last_refresh: Instant,
     last_successful: bool,
+    last_enumerated: bool,
 }
 
 impl RefreshTracker {
@@ -65,6 +72,7 @@ impl RefreshTracker {
             started_at: None,
             last_refresh: now,
             last_successful: true,
+            last_enumerated: true,
         }
     }
 
@@ -77,14 +85,27 @@ impl RefreshTracker {
     }
 
     /// Records a completed refresh; results from a stale generation are ignored.
-    pub fn complete(&mut self, generation: u64, now: Instant, found: bool) {
+    ///
+    /// Returns `true` when the result matched the current generation and was
+    /// recorded — the caller's license to treat it as absence evidence.
+    /// `enumerated_any` reports whether the refresh identified any monitor at
+    /// all (readable or not); it drives the periodic-refresh gate.
+    pub fn complete(
+        &mut self,
+        generation: u64,
+        now: Instant,
+        found: bool,
+        enumerated_any: bool,
+    ) -> bool {
         if generation != self.generation {
-            return;
+            return false;
         }
         self.in_progress = false;
         self.started_at = None;
         self.last_refresh = now;
         self.last_successful = found;
+        self.last_enumerated = enumerated_any;
+        true
     }
 
     /// Aborts an in-flight refresh and invalidates any outstanding result.
@@ -93,6 +114,7 @@ impl RefreshTracker {
         self.in_progress = false;
         self.started_at = None;
         self.last_successful = false;
+        self.last_enumerated = false;
     }
 
     /// Returns whether an in-flight refresh has exceeded `timeout` since it began.
@@ -114,6 +136,12 @@ impl RefreshTracker {
     #[must_use]
     pub fn last_successful(&self) -> bool {
         self.last_successful
+    }
+
+    /// Whether the last completed refresh enumerated any monitor (readable or not).
+    #[must_use]
+    pub fn last_enumerated(&self) -> bool {
+        self.last_enumerated
     }
 
     /// Time elapsed since the last completed refresh.
@@ -176,12 +204,12 @@ mod tests {
         let first = t.begin(base);
         let second = t.begin(base);
         assert_ne!(first, second, "each begin hands out a fresh generation");
-        t.complete(first, base + Duration::from_secs(1), true);
+        t.complete(first, base + Duration::from_secs(1), true, true);
         assert!(
             t.in_progress(),
             "stale completion left the newer refresh in progress"
         );
-        t.complete(second, base + Duration::from_secs(1), true);
+        t.complete(second, base + Duration::from_secs(1), true, true);
         assert!(!t.in_progress());
         assert!(t.last_successful());
     }
@@ -191,7 +219,7 @@ mod tests {
         let base = Instant::now();
         let mut t = RefreshTracker::new(base);
         let r#gen = t.begin(base);
-        t.complete(r#gen, base + Duration::from_secs(1), false);
+        t.complete(r#gen, base + Duration::from_secs(1), false, false);
         assert!(!t.in_progress());
         assert!(!t.last_successful());
     }
@@ -215,8 +243,48 @@ mod tests {
         assert!(!t.in_progress());
         assert!(!t.last_successful());
         // A late result for the aborted generation must not resurrect state.
-        t.complete(generation, base + Duration::from_secs(1), true);
+        t.complete(generation, base + Duration::from_secs(1), true, true);
         assert!(!t.in_progress());
         assert!(!t.last_successful());
+    }
+
+    #[test]
+    fn complete_returns_true_only_for_current_generation() {
+        let base = Instant::now();
+        let mut t = RefreshTracker::new(base);
+        let stale = t.begin(base);
+        let current = t.begin(base);
+        assert!(!t.complete(stale, base + Duration::from_secs(1), true, true));
+        assert!(t.complete(current, base + Duration::from_secs(1), true, true));
+    }
+
+    #[test]
+    fn last_enumerated_lifecycle() {
+        let base = Instant::now();
+        let mut t = RefreshTracker::new(base);
+        // Starts true so the periodic gate is open before the first refresh.
+        assert!(t.last_enumerated());
+
+        let g = t.begin(base);
+        assert!(t.complete(g, base, false, false));
+        assert!(!t.last_enumerated(), "empty enumerated set closes the gate");
+
+        let g = t.begin(base);
+        assert!(t.complete(g, base, false, true));
+        assert!(
+            t.last_enumerated(),
+            "enumerable-but-unreadable keeps the gate open"
+        );
+
+        let stale = t.begin(base);
+        let _ = t.begin(base);
+        assert!(!t.complete(stale, base, false, false));
+        assert!(
+            t.last_enumerated(),
+            "stale completion must not touch the gate"
+        );
+
+        t.abort();
+        assert!(!t.last_enumerated(), "abort freezes the periodic path");
     }
 }
