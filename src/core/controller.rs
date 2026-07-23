@@ -15,7 +15,10 @@ use crate::core::reconcile::{
     HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REFRESH_TIMEOUT, RefreshTracker, RespawnOutcome,
     SET_TIMEOUT,
 };
-use crate::core::state::{DdcCommand, MonitorId, MonitorState, SetOutcome};
+use crate::core::state::{
+    BrightnessMessage, DdcCommand, MonitorId, MonitorState, SetOutcome, TrayMenuData,
+    TrayMonitorInfo, generate_display_names,
+};
 use crate::error::{BrightnessError, Result};
 
 /// Opaque per-monitor display handle.
@@ -233,8 +236,6 @@ where
     /// regardless of generation: a hardware value is true no matter which
     /// refresh produced it. Absence bookkeeping (pruning) is gated on the
     /// result being current and the enumerated set being non-empty.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     // The caller destructures an owned `enumerated: Vec<MonitorId>` straight out
     // of the refresh-result message; taking it by value here avoids an extra
     // borrow indirection even though this function only ever reads it.
@@ -280,8 +281,6 @@ where
     /// first miss and is pruned when a later miss shows the absence has been
     /// continuous for at least `PRUNE_ABSENCE_WINDOW` — so a prune always
     /// spans two observations and a sustained window, never a refresh burst.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn apply_absence_evidence(&mut self, enumerated: &[MonitorId], now: Instant) {
         let mut pruned: Vec<MonitorId> = Vec::new();
 
@@ -366,8 +365,6 @@ where
     ///
     /// Returns an error if the target monitor cannot be resolved or is
     /// unknown, or if an OSD/overlay update fails.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn handle_adjust(
         &mut self,
         monitor_id: Option<MonitorId>,
@@ -505,8 +502,6 @@ where
     /// # Errors
     ///
     /// Returns an error if an OSD update fails.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn handle_ddc_set_result(
         &mut self,
         monitor_id: &MonitorId,
@@ -635,11 +630,136 @@ where
         }
         self.show_error_on_visible_osd();
     }
+
+    /// Processes a brightness control message.
+    ///
+    /// Returns `Ok(true)` if the application should continue running,
+    /// or `Ok(false)` if shutdown was requested.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if message processing fails.
+    pub fn handle_message(&mut self, message: BrightnessMessage, now: Instant) -> Result<bool> {
+        match message {
+            BrightnessMessage::Adjust { monitor_id, delta } => {
+                self.handle_adjust(monitor_id, delta, now)?;
+            }
+            BrightnessMessage::SetAbsolute { monitor_id, value } => {
+                self.handle_set_absolute(monitor_id, value)?;
+            }
+            BrightnessMessage::Refresh => {
+                self.handle_refresh(now);
+            }
+            BrightnessMessage::SystemResumed => {
+                self.clear_degraded();
+                // A refresh burst around resume can miss monitors while a
+                // dock's link is still training; stale absence evidence must
+                // not combine with it into a prune.
+                self.reset_absence_evidence();
+                log::info!(reason = "system_resume"; "Triggering refresh");
+                self.handle_refresh(now);
+            }
+            // ── Tray Icon Messages ───────────────────────────────────────
+            BrightnessMessage::TrayOpenUsage | BrightnessMessage::TrayOpenSettings => {
+                // Shell side effects; the binary's loop handles them before
+                // forwarding. Reaching this arm means a wiring regression.
+                log::debug!("Shell message reached core controller (no-op)");
+            }
+            BrightnessMessage::TrayRequestQuit => {
+                log::info!("Quit requested from tray menu");
+                self.handle_shutdown()?;
+                return Ok(false);
+            }
+            BrightnessMessage::TrayMenuOpening { reply_tx } => {
+                log::debug!("TrayMenuOpening received");
+                let menu_data = self.build_tray_menu_data();
+                if let Err(e) = reply_tx.send(menu_data) {
+                    log::warn!(error:? = e; "Failed to send tray menu data");
+                }
+            }
+            BrightnessMessage::DdcSetResult {
+                monitor_id,
+                value,
+                seq,
+                success,
+                error,
+            } => {
+                self.handle_ddc_set_result(&monitor_id, value, seq, success, error.as_deref())?;
+            }
+            BrightnessMessage::DdcRefreshResult {
+                generation,
+                monitors,
+                enumerated,
+            } => {
+                self.handle_ddc_refresh_result(generation, monitors, enumerated, now);
+            }
+            BrightnessMessage::Shutdown => {
+                self.handle_shutdown()?;
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Handles the shutdown process.
+    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
+    fn handle_shutdown(&mut self) -> Result<()> {
+        Ok(())
+    }
+
+    /// Sets an absolute brightness value for a monitor.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; placeholder for future extensions.
+    #[allow(
+        clippy::unused_self,
+        clippy::unnecessary_wraps,
+        clippy::needless_pass_by_value
+    )]
+    fn handle_set_absolute(&mut self, _monitor_id: Option<MonitorId>, _value: u8) -> Result<()> {
+        // Placeholder for future extensions (e.g., fixed brightness via CLI command)
+        Ok(())
+    }
+
+    /// Builds the data needed to populate the tray menu.
+    ///
+    /// Generates display names with duplicate suffixes (e.g., "Dell U2722D #1")
+    /// when multiple monitors with identical manufacturer and model are connected.
+    fn build_tray_menu_data(&self) -> TrayMenuData {
+        // Collect monitor IDs and generate unique display names
+        let monitor_ids: Vec<MonitorId> = self.states.keys().cloned().collect();
+        let display_names = generate_display_names(&monitor_ids);
+
+        let monitors: Vec<TrayMonitorInfo> = self
+            .states
+            .iter()
+            .map(|(monitor_id, state)| {
+                let display_name = display_names
+                    .get(monitor_id)
+                    .cloned()
+                    .unwrap_or_else(|| monitor_id.base_display_name());
+
+                TrayMonitorInfo {
+                    display_name,
+                    hardware_brightness: state.effective_brightness(),
+                    overlay_opacity: state.overlay_opacity,
+                }
+            })
+            .collect();
+
+        TrayMenuData {
+            monitors,
+            hotkey_up: self.config.hotkeys.brightness_up.clone(),
+            hotkey_down: self.config.hotkeys.brightness_down.clone(),
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::mpsc;
 
     // ── Fakes ────────────────────────────────────────────────────────────
 
@@ -1307,5 +1427,93 @@ mod tests {
         assert_eq!(c.ddc.respawns, 0);
         c.supervise_and_watchdog(base + Duration::from_millis(300));
         assert_eq!(c.ddc.respawns, 1);
+    }
+
+    // ── Dispatch ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn system_resumed_clears_degraded_resets_evidence_and_refreshes() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        deliver_refresh(&mut c, vec![], vec![other_id()], base);
+        c.ddc_disabled = true;
+
+        let cont = c
+            .handle_message(BrightnessMessage::SystemResumed, base)
+            .unwrap();
+
+        assert!(cont);
+        assert!(!c.ddc_disabled);
+        assert!(
+            c.states[&id].missing_since.is_none(),
+            "evidence discarded on resume"
+        );
+        assert!(c.refresh.in_progress());
+    }
+
+    #[test]
+    fn quit_and_shutdown_stop_the_loop() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        assert!(
+            !c.handle_message(BrightnessMessage::TrayRequestQuit, base)
+                .unwrap()
+        );
+        assert!(!c.handle_message(BrightnessMessage::Shutdown, base).unwrap());
+    }
+
+    #[test]
+    fn shell_variants_are_noops_here() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        assert!(
+            c.handle_message(BrightnessMessage::TrayOpenUsage, base)
+                .unwrap()
+        );
+        assert!(
+            c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+                .unwrap()
+        );
+        assert!(c.ddc.sent.is_empty());
+    }
+
+    #[test]
+    fn tray_menu_opening_replies_with_names_and_values() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 55);
+        c.states.get_mut(&id).unwrap().overlay_opacity = 20;
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+
+        let data = reply_rx.try_recv().expect("menu data sent");
+        assert_eq!(data.monitors.len(), 1);
+        assert_eq!(data.monitors[0].display_name, "DEL U2722D");
+        assert_eq!(data.monitors[0].hardware_brightness, 55);
+        assert_eq!(data.monitors[0].overlay_opacity, 20);
+        assert_eq!(data.hotkey_up, c.config.hotkeys.brightness_up);
+    }
+
+    #[test]
+    fn refresh_result_message_routes_with_enumerated_set() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let generation = c.refresh.begin(base);
+
+        c.handle_message(
+            BrightnessMessage::DdcRefreshResult {
+                generation,
+                monitors: vec![(test_id(), 33)],
+                enumerated: vec![test_id()],
+            },
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(c.states[&test_id()].cached_brightness, 33);
+        assert!(!c.refresh.in_progress());
     }
 }
