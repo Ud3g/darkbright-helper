@@ -233,12 +233,12 @@ where
     /// regardless of generation: a hardware value is true no matter which
     /// refresh produced it. Absence bookkeeping (pruning) is gated on the
     /// result being current and the enumerated set being non-empty.
+    // removed when the message dispatch lands
+    #[allow(dead_code)]
     // The caller destructures an owned `enumerated: Vec<MonitorId>` straight out
     // of the refresh-result message; taking it by value here avoids an extra
     // borrow indirection even though this function only ever reads it.
     #[allow(clippy::needless_pass_by_value)]
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn handle_ddc_refresh_result(
         &mut self,
         generation: u64,
@@ -1256,6 +1256,32 @@ mod tests {
         assert!(
             c.ddc_disabled,
             "alive-but-hung worker diagnosed after limit"
+        );
+    }
+
+    #[test]
+    fn multi_monitor_timeout_counts_one_hang_signal_per_pass() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let a = seed(&mut c, test_id(), 50);
+        let b = seed(&mut c, other_id(), 50);
+
+        c.handle_adjust(Some(a.clone()), 10, base).unwrap();
+        c.handle_adjust(Some(b.clone()), 10, base).unwrap();
+        assert!(c.states[&a].pending.is_some());
+        assert!(c.states[&b].pending.is_some());
+
+        supervise_at(&mut c, base + SET_TIMEOUT);
+
+        assert!(c.states[&a].pending.is_none(), "both pendings reverted");
+        assert!(c.states[&b].pending.is_none(), "both pendings reverted");
+        assert_eq!(
+            c.consecutive_set_timeouts, 1,
+            "one pass is one hang signal regardless of monitor count"
+        );
+        assert!(
+            !c.ddc_disabled,
+            "a single pass must not reach the hang limit"
         );
     }
 
