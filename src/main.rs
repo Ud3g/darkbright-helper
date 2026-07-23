@@ -234,6 +234,7 @@ impl BrightnessController {
             BrightnessMessage::DdcRefreshResult {
                 generation,
                 monitors,
+                enumerated: _,
             } => {
                 self.handle_ddc_refresh_result(generation, monitors);
             }
