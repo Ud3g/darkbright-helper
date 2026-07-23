@@ -254,7 +254,13 @@ failing DDC I/O per minute, on the worker thread.
   `last_successful`): in a partial replug with surviving readable monitors the press would
   stay dead for up to `periodic_seconds`, with repeated presses even suppressing the
   inactivity path by resetting `last_activity`. With it, the healing refresh lands in
-  ~1–2 s and the following press works, in every topology. This is the accepted price of
+  ~1–2 s and the following press works, in every topology. Declared sustained cost:
+  holding the hotkey over a *permanently* enumerable-but-unreadable monitor (a DDC-less
+  TV, the internal panel) re-triggers a full refresh per round trip for as long as the key
+  is held — the refresh can never create the missing state, so each one is futile. This is
+  bounded to one refresh in flight by the gate and identical in kind to today's
+  empty-readable retrigger; an additional throttle was considered and rejected
+  (user-initiated, self-limiting, worker-thread load only). This is the accepted price of
   removing ghost state; standby monitors and EDID-emulating KVMs stay enumerated and are
   unaffected.
 - Between unplug and prune (bounded by window + cadence, ≤ ~3 min at defaults), an
