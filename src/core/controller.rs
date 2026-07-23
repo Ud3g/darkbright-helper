@@ -9,10 +9,11 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
+use crate::core::brightness::calculate_adjustment;
 use crate::core::config::Config;
 use crate::core::reconcile::{PRUNE_ABSENCE_WINDOW, RefreshTracker, RespawnOutcome};
-use crate::core::state::{DdcCommand, MonitorId, MonitorState};
-use crate::error::Result;
+use crate::core::state::{DdcCommand, MonitorId, MonitorState, SetOutcome};
+use crate::error::{BrightnessError, Result};
 
 /// Opaque per-monitor display handle.
 ///
@@ -111,8 +112,6 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     /// Dimming overlay windows.
     overlay: Ovl,
     /// On-screen display.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     osd: Osd,
     /// Loaded configuration.
     config: Config,
@@ -121,16 +120,12 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     /// Supervised DDC worker.
     ddc: Ddc,
     /// Cursor-to-monitor resolution.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     locator: Loc,
     /// Timestamp of last user-initiated brightness adjustment.
     last_activity: Instant,
     /// Refresh lifecycle: in-flight state, generation, and last outcome.
     refresh: RefreshTracker,
     /// Monotonic sequence id stamped on each DDC set command.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     next_seq: u64,
     /// Throttle for the per-tick supervision/watchdog pass.
     // removed when the message dispatch lands
@@ -335,8 +330,6 @@ where
     /// Called at the start of a brightness adjustment to resync with external
     /// changes after the user has been away. Non-blocking: the adjustment
     /// proceeds optimistically and reconciles when the result arrives.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn check_inactivity_refresh(&mut self, now: Instant) {
         let inactivity_seconds = self.config.refresh.inactivity_seconds;
 
@@ -355,8 +348,6 @@ where
     }
 
     /// Clears the degraded DDC state so a fresh attempt can be made.
-    // removed when the message dispatch lands
-    #[allow(dead_code)]
     fn clear_degraded(&mut self) {
         if self.ddc_disabled {
             log::info!("Recovering from degraded DDC state");
@@ -365,12 +356,216 @@ where
         self.ddc.clear_backoff();
         self.consecutive_set_timeouts = 0;
     }
+
+    /// Applies a relative brightness adjustment.
+    ///
+    /// Determines the target monitor (mouse position), calculates new values,
+    /// shows the OSD immediately with optimistic update, and sends the DDC
+    /// command to the worker thread (non-blocking).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target monitor cannot be resolved or is
+    /// unknown, or if an OSD/overlay update fails.
+    // removed when the message dispatch lands
+    #[allow(dead_code)]
+    fn handle_adjust(
+        &mut self,
+        monitor_id: Option<MonitorId>,
+        delta: i8,
+        now: Instant,
+    ) -> Result<()> {
+        // Check if we need an inactivity-based refresh before processing
+        // (must be checked BEFORE updating last_activity)
+        self.check_inactivity_refresh(now);
+
+        // User activity is a recovery signal for a degraded DDC state.
+        if self.ddc_disabled {
+            self.clear_degraded();
+        }
+
+        // If last refresh failed, trigger a new one (user activity indicates they're back).
+        if !self.refresh.last_successful() && !self.refresh.in_progress() {
+            log::debug!("Triggering refresh on user activity (last refresh found no monitors)");
+            self.handle_refresh(now);
+        }
+
+        // Update activity timestamp for inactivity-based refresh tracking
+        self.last_activity = now;
+
+        // 1. Determine target monitor and handle
+        // The handle is needed for OSD and overlay positioning.
+        let handle = self.locator.monitor_under_cursor()?;
+
+        // If no ID was provided, identify the monitor under the cursor.
+        // A cache avoids repeated slow identity lookups.
+        let target_id = match monitor_id {
+            Some(id) => id,
+            None => {
+                if let Some(id) = self.id_cache.get(&handle) {
+                    id.clone()
+                } else {
+                    let id = self.locator.resolve_id(handle)?;
+                    self.id_cache.insert(handle, id.clone());
+                    id
+                }
+            }
+        };
+
+        // 2. Find state for this monitor
+        let Some(state) = self.states.get_mut(&target_id) else {
+            // Recovery after pruning: a press on an unknown monitor dispatches
+            // a refresh (at most one in flight) so a following press works in
+            // every topology — the activity retrigger above only fires when
+            // nothing was readable at all.
+            if !self.refresh.in_progress() {
+                self.handle_refresh(now);
+            }
+            return Err(BrightnessError::MonitorNotFound(target_id.to_string()));
+        };
+
+        // 3. Calculate new brightness
+        let old_hardware = state.effective_brightness();
+        let old_overlay = state.overlay_opacity;
+
+        let adjustment = calculate_adjustment(old_hardware, old_overlay, delta);
+        let new_hardware = adjustment.hardware_brightness;
+        let new_overlay = adjustment.overlay_opacity;
+
+        let changed = (old_hardware != new_hardware) || (old_overlay != new_overlay);
+
+        if !changed {
+            log::trace!(monitor_id:% = target_id, hardware = old_hardware, overlay = old_overlay; "No brightness change needed");
+            // Still show/update OSD to reset timer and provide feedback.
+            self.osd_monitor = Some(target_id.clone());
+            if self.osd.is_visible() {
+                self.osd.update(state)?;
+            } else {
+                self.osd.show(handle, state)?;
+            }
+            return Ok(());
+        }
+
+        log::trace!(
+            monitor_id:% = target_id,
+            old_hw = old_hardware,
+            new_hw = new_hardware,
+            old_overlay = old_overlay,
+            new_overlay = new_overlay;
+            "Attempting brightness adjustment"
+        );
+
+        // 4. Optimistic update (only set pending if hardware is changing)
+        let seq = self.next_seq;
+        if new_hardware != old_hardware {
+            self.next_seq += 1;
+            state.set_pending(new_hardware, seq, now);
+        }
+        state.overlay_opacity = new_overlay;
+
+        // 5. Update overlay (software layer is immediately effective)
+        if new_overlay != old_overlay {
+            self.overlay.update(&target_id, handle, new_overlay)?;
+        }
+
+        // 6. Show or update OSD with optimistic values.
+        self.osd_monitor = Some(target_id.clone());
+        if self.osd.is_visible() {
+            self.osd.update(state)?;
+        } else {
+            self.osd.show(handle, state)?;
+        }
+
+        // 7. Send DDC command to worker (non-blocking)
+        if new_hardware == old_hardware {
+            log::debug!(monitor_id:% = target_id, old_overlay = old_overlay, new_overlay = new_overlay; "Adjusting overlay only");
+        } else {
+            log::debug!(monitor_id:% = target_id, old_hw = old_hardware, new_hw = new_hardware; "Sending DDC command");
+            if let Err(e) = self.ddc.send(DdcCommand::SetBrightness {
+                monitor_id: target_id.clone(),
+                value: new_hardware,
+                seq,
+            }) {
+                log::error!(error:% = e; "DDC worker send failed; reverting optimistic value");
+                if let Some(state) = self.states.get_mut(&target_id) {
+                    state.force_revert();
+                }
+                self.show_error_on_visible_osd();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Handles the result of a DDC brightness set operation.
+    ///
+    /// Reconciles the result against the monitor's pending set by sequence id.
+    /// A confirmed or authoritative-late result refreshes the OSD; a revert
+    /// shows the error state; a stale result is dropped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if an OSD update fails.
+    // removed when the message dispatch lands
+    #[allow(dead_code)]
+    fn handle_ddc_set_result(
+        &mut self,
+        monitor_id: &MonitorId,
+        value: u8,
+        seq: u64,
+        success: bool,
+        error: Option<&str>,
+    ) -> Result<()> {
+        let Some(state) = self.states.get_mut(monitor_id) else {
+            log::warn!(monitor_id:% = monitor_id; "Received DDC result for unknown monitor");
+            return Ok(());
+        };
+
+        match state.apply_set_result(seq, value, success) {
+            SetOutcome::Confirmed | SetOutcome::GroundTruth => {
+                self.consecutive_set_timeouts = 0;
+                log::debug!(monitor_id:% = monitor_id, brightness = value; "DDC confirmed brightness");
+                if self.osd.is_visible() {
+                    self.osd.update(state)?;
+                }
+            }
+            SetOutcome::Reverted => {
+                let error_msg = error.unwrap_or("unknown error");
+                log::error!(monitor_id:% = monitor_id, target_brightness = value, error = error_msg; "DDC failed to set brightness");
+                if self.osd.is_visible() {
+                    self.osd.update_error(state)?;
+                }
+            }
+            SetOutcome::Ignored => {
+                log::debug!(monitor_id:% = monitor_id, seq = seq; "Ignoring stale/irrelevant DDC result");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Restyles the OSD to its error state, only if it is currently visible.
+    ///
+    /// Never spontaneously shows a hidden OSD: the watchdog fires seconds after
+    /// the keypress and the cached value is authoritative for the next display.
+    fn show_error_on_visible_osd(&mut self) {
+        if !self.osd.is_visible() {
+            return;
+        }
+        let Some(id) = self.osd_monitor.clone() else {
+            return;
+        };
+        if let Some(state) = self.states.get(&id) {
+            if let Err(e) = self.osd.update_error(state) {
+                log::warn!(error:% = e; "Failed to update OSD error state");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::error::BrightnessError;
 
     // ── Fakes ────────────────────────────────────────────────────────────
 
@@ -750,5 +945,154 @@ mod tests {
         assert_eq!(sent_refresh_count(&c), 0);
         c.check_inactivity_refresh(base + Duration::from_secs(30));
         assert_eq!(sent_refresh_count(&c), 1);
+    }
+
+    // ── Adjust / optimistic update ───────────────────────────────────────
+
+    #[test]
+    fn adjust_applies_optimistic_update_and_sends_seq_stamped_command() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+
+        c.handle_adjust(None, 10, base).unwrap();
+
+        let state = &c.states[&id];
+        assert_eq!(
+            state.effective_brightness(),
+            60,
+            "optimistic pending visible"
+        );
+        assert_eq!(state.cached_brightness, 50, "cache untouched until confirm");
+        assert!(c.osd.visible, "OSD shown immediately");
+        assert!(matches!(
+            c.ddc.sent.last(),
+            Some(DdcCommand::SetBrightness {
+                value: 60,
+                seq: 0,
+                ..
+            })
+        ));
+        assert_eq!(c.osd_monitor.as_ref(), Some(&id));
+    }
+
+    #[test]
+    fn adjust_without_change_still_shows_osd_but_sends_nothing() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 100);
+
+        c.handle_adjust(None, 10, base).unwrap();
+
+        assert!(c.osd.visible);
+        assert!(
+            c.ddc.sent.is_empty(),
+            "no hardware or overlay change to apply"
+        );
+    }
+
+    #[test]
+    fn adjust_unknown_monitor_errors_and_triggers_one_refresh() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        // Pretend a previous refresh succeeded so only the new trigger can fire.
+        deliver_refresh(&mut c, vec![(other_id(), 50)], vec![other_id()], base);
+
+        let err = c.handle_adjust(None, 10, base).unwrap_err();
+        assert!(matches!(err, BrightnessError::MonitorNotFound(_)));
+        assert_eq!(sent_refresh_count(&c), 1, "recovery refresh dispatched");
+
+        // While that refresh is in flight, a second press must not stack another.
+        let _ = c.handle_adjust(None, 10, base).unwrap_err();
+        assert_eq!(sent_refresh_count(&c), 1, "gated on in-flight refresh");
+    }
+
+    #[test]
+    fn adjust_send_failure_reverts_and_marks_visible_osd() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.ddc.fail_send = true;
+
+        c.handle_adjust(None, 10, base).unwrap();
+
+        assert!(c.states[&id].pending.is_none(), "optimistic value reverted");
+        assert_eq!(c.states[&id].effective_brightness(), 50);
+        assert!(!c.osd.error_updates.is_empty(), "OSD restyled to error");
+    }
+
+    #[test]
+    fn adjust_while_degraded_clears_degraded_state() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+        c.ddc_disabled = true;
+
+        c.handle_adjust(None, 10, base).unwrap();
+
+        assert!(!c.ddc_disabled, "user activity is the recovery signal");
+        assert_eq!(c.ddc.backoff_clears, 1);
+    }
+
+    // ── Set results ──────────────────────────────────────────────────────
+
+    #[test]
+    fn set_result_confirms_updates_visible_osd_and_resets_hang_counter() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.consecutive_set_timeouts = 2;
+        c.handle_adjust(None, 10, base).unwrap();
+
+        c.handle_ddc_set_result(&id, 60, 0, true, None).unwrap();
+
+        let state = &c.states[&id];
+        assert_eq!(state.cached_brightness, 60);
+        assert!(state.pending.is_none());
+        assert_eq!(c.consecutive_set_timeouts, 0);
+        assert!(!c.osd.updates.is_empty());
+    }
+
+    #[test]
+    fn set_result_failure_reverts_and_shows_error() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.handle_adjust(None, 10, base).unwrap();
+
+        c.handle_ddc_set_result(&id, 60, 0, false, Some("nak"))
+            .unwrap();
+
+        assert_eq!(
+            c.states[&id].effective_brightness(),
+            50,
+            "reverted to cache"
+        );
+        assert!(!c.osd.error_updates.is_empty());
+    }
+
+    #[test]
+    fn stale_set_result_is_ignored() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.handle_adjust(None, 10, base).unwrap(); // seq 0
+        c.handle_adjust(None, 10, base).unwrap(); // seq 1, pending 70
+
+        c.handle_ddc_set_result(&id, 60, 0, false, Some("late"))
+            .unwrap();
+
+        let pending = c.states[&id].pending.expect("newer pending survives");
+        assert_eq!(pending.seq, 1);
+    }
+
+    #[test]
+    fn set_result_for_unknown_monitor_is_dropped() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        // Routine after pruning: a late result for a removed monitor.
+        c.handle_ddc_set_result(&other_id(), 60, 0, true, None)
+            .unwrap();
+        assert!(c.states.is_empty(), "no ghost resurrection");
     }
 }
