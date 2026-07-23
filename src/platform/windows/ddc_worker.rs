@@ -294,6 +294,24 @@ impl DdcSupervisor {
     }
 }
 
+impl crate::core::controller::DdcPort for DdcSupervisor {
+    fn send(&mut self, cmd: DdcCommand) -> crate::Result<()> {
+        DdcSupervisor::send(self, cmd).map_err(|_| crate::BrightnessError::ChannelSend)
+    }
+    fn is_alive(&self) -> bool {
+        DdcSupervisor::is_alive(self)
+    }
+    fn respawn(&mut self, now: Instant) -> RespawnOutcome {
+        DdcSupervisor::respawn(self, now)
+    }
+    fn clear_backoff(&mut self) {
+        DdcSupervisor::clear_backoff(self);
+    }
+    fn shutdown(&self) {
+        DdcSupervisor::shutdown(self);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

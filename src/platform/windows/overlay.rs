@@ -354,4 +354,29 @@ impl OverlayManager {
 
         Ok(())
     }
+
+    /// Removes and destroys a monitor's overlay window, if one exists.
+    ///
+    /// Dropping the overlay destroys its window via the RAII handle; used
+    /// when a monitor is pruned so the orphaned fullscreen window cannot
+    /// migrate onto a surviving monitor.
+    pub fn remove(&mut self, monitor_id: &MonitorId) {
+        if self.overlays.remove(monitor_id).is_some() {
+            log::debug!(monitor_id:% = monitor_id; "Overlay removed");
+        }
+    }
+}
+
+impl crate::core::controller::OverlaySink for OverlayManager {
+    fn update(
+        &mut self,
+        id: &MonitorId,
+        handle: crate::core::controller::MonitorHandle,
+        opacity: u8,
+    ) -> Result<()> {
+        OverlayManager::update(self, id, HMONITOR(handle.0), opacity)
+    }
+    fn remove(&mut self, id: &MonitorId) {
+        OverlayManager::remove(self, id);
+    }
 }

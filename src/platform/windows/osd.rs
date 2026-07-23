@@ -645,3 +645,22 @@ impl OsdWindow {
         self.hwnd.as_raw()
     }
 }
+
+impl crate::core::controller::OsdSink for OsdWindow {
+    fn show(
+        &mut self,
+        handle: crate::core::controller::MonitorHandle,
+        state: &MonitorState,
+    ) -> Result<()> {
+        OsdWindow::show(self, HMONITOR(handle.0), state)
+    }
+    fn update(&mut self, state: &MonitorState) -> Result<()> {
+        OsdWindow::update(self, state)
+    }
+    fn update_error(&mut self, state: &MonitorState) -> Result<()> {
+        OsdWindow::update_error(self, state)
+    }
+    fn is_visible(&self) -> bool {
+        OsdWindow::is_visible(self)
+    }
+}
