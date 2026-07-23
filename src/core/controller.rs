@@ -14,14 +14,6 @@ use crate::core::reconcile::{PRUNE_ABSENCE_WINDOW, RefreshTracker, RespawnOutcom
 use crate::core::state::{DdcCommand, MonitorId, MonitorState};
 use crate::error::Result;
 
-// NOTE for later tasks — imports are added exactly when first used, to keep
-// `-D warnings` green at every commit:
-//   Task 5 adds: crate::core::brightness::calculate_adjustment;
-//                SetOutcome (to the state import); BrightnessError (to the error import)
-//   Task 6 adds: HUNG_TIMEOUT_LIMIT, REFRESH_TIMEOUT, SET_TIMEOUT (to the reconcile import)
-//   Task 7 adds: BrightnessMessage, TrayMenuData, TrayMonitorInfo, generate_display_names
-//                (to the state import)
-
 /// Opaque per-monitor display handle.
 ///
 /// Carries the platform's monitor handle value (`HMONITOR` on Windows) through
@@ -562,6 +554,7 @@ mod tests {
     fn refresh_result_applies_ground_truth_even_when_stale() {
         let base = Instant::now();
         let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
         let stale = c.refresh.begin(base);
         let _current = c.refresh.begin(base);
         c.handle_ddc_refresh_result(stale, vec![(test_id(), 42)], vec![test_id()], base);
