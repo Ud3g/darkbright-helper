@@ -987,6 +987,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn periodic_refresh_frozen_after_abort() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.refresh.periodic_seconds = 60;
+
+        // A send failure aborts the refresh, same gate as an empty enumerated set.
+        c.ddc.fail_send = true;
+        c.handle_refresh(base);
+        c.ddc.fail_send = false;
+
+        let before = sent_refresh_count(&c);
+        c.check_periodic_refresh(base + Duration::from_secs(61));
+        assert_eq!(
+            sent_refresh_count(&c),
+            before,
+            "abort freezes cadence same as an empty enumerated set"
+        );
+    }
+
     // ── Ghost pruning ────────────────────────────────────────────────────
 
     #[test]
