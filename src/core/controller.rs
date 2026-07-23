@@ -1501,6 +1501,7 @@ mod tests {
     fn refresh_result_message_routes_with_enumerated_set() {
         let base = Instant::now();
         let mut c = test_controller(base);
+        let ghost = seed(&mut c, other_id(), 50);
         let generation = c.refresh.begin(base);
 
         c.handle_message(
@@ -1515,5 +1516,20 @@ mod tests {
 
         assert_eq!(c.states[&test_id()].cached_brightness, 33);
         assert!(!c.refresh.in_progress());
+        assert!(
+            c.states[&ghost].missing_since.is_some(),
+            "enumerated set reached absence bookkeeping"
+        );
+    }
+
+    #[test]
+    fn refresh_message_requests_refresh_unconditionally() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        assert!(c.handle_message(BrightnessMessage::Refresh, base).unwrap());
+
+        assert_eq!(sent_refresh_count(&c), 1);
+        assert!(c.refresh.in_progress());
     }
 }
