@@ -992,6 +992,26 @@ mod tests {
     }
 
     #[test]
+    fn adjust_below_zero_dims_via_overlay_without_pending_or_ddc() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 0);
+
+        c.handle_adjust(None, -10, base).unwrap();
+
+        assert!(
+            c.states[&id].pending.is_none(),
+            "no hardware set to confirm"
+        );
+        assert_eq!(c.states[&id].overlay_opacity, 10);
+        assert_eq!(c.overlay.updates, vec![(id, 10)]);
+        assert!(
+            c.ddc.sent.is_empty(),
+            "overlay-only change sends no DDC command"
+        );
+    }
+
+    #[test]
     fn adjust_unknown_monitor_errors_and_triggers_one_refresh() {
         let base = Instant::now();
         let mut c = test_controller(base);
