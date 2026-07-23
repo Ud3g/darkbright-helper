@@ -23,8 +23,10 @@ leaves permanent ghost state), which lives inside one of the methods being moved
 - No behavior change other than: the pruning above **including its deliberate-forgetting
   consequences** (overlay dim level and cached brightness do not survive a > 90 s absence;
   see "Consequences" under Ghost pruning), the periodic-refresh gate change that sustains
-  pruning while undocked, clearing `osd_monitor` when its monitor is pruned, and the
-  sub-millisecond timestamp shift described under "Time injection".
+  pruning while undocked, the refresh triggered from `handle_adjust`'s `MonitorNotFound`
+  path (recovery after pruning, see "Consequences"), clearing `osd_monitor` when its
+  monitor is pruned, and the sub-millisecond timestamp shift described under
+  "Time injection".
 - No supervision of the hotkey/tray/power threads (Finding #2), no config atomicity
   (Finding #4), no other review findings. In particular, `MonitorId::Display` keeps its
   serial (Finding #8 is separate work); this spec merely avoids *adding* new serial-bearing
@@ -245,10 +247,16 @@ failing DDC I/O per minute, on the worker thread.
   monitor powered off long enough to leave the topology, or an ordinary non-EDID-emulating
   KVM switch-away — the monitor returns as a fresh `MonitorState` from the hardware read
   with `overlay_opacity = 0`: the deliberate dim does not survive the round trip. A hotkey
-  press on a replugged monitor *before* the healing refresh yields `MonitorNotFound` with
-  no OSD (that press itself triggers the refresh via the activity path; the next press
-  works). This is the accepted price of removing ghost state; standby monitors and
-  EDID-emulating KVMs stay enumerated and are unaffected.
+  press on a monitor with no state yields `MonitorNotFound` with no OSD — and to make
+  recovery topology-independent, the `MonitorNotFound` path in `handle_adjust` now also
+  triggers a refresh (gated on none in flight). Without that trigger, only the
+  empty-readable case would self-heal (the activity retrigger is keyed to
+  `last_successful`): in a partial replug with surviving readable monitors the press would
+  stay dead for up to `periodic_seconds`, with repeated presses even suppressing the
+  inactivity path by resetting `last_activity`. With it, the healing refresh lands in
+  ~1–2 s and the following press works, in every topology. This is the accepted price of
+  removing ghost state; standby monitors and EDID-emulating KVMs stay enumerated and are
+  unaffected.
 - Between unplug and prune (bounded by window + cadence, ≤ ~3 min at defaults), an
   orphaned *visible* overlay can migrate onto a surviving monitor as a topmost
   click-through black sheet — exactly as today, but now bounded instead of permanent;
@@ -272,7 +280,7 @@ liveness / respawn outcome, locator with fixed handle→id). Sequences covered:
 | Sequence | verifies |
 |---|---|
 | Optimistic adjust | pending set, overlay + OSD updated, `DdcCommand` sent with correct `seq` |
-| Adjust on unknown monitor | `MonitorNotFound` error path |
+| Adjust on unknown monitor | `MonitorNotFound` error path; triggers a refresh when none in flight (recovery after pruning), no refresh when one is in flight |
 | Confirm / revert / stale | OSD update on confirm, OSD error on revert, stale ignored; timeout-counter reset |
 | Set result for pruned/unknown monitor | warn + drop, no panic, no ghost resurrection |
 | Send failure | failed `send()` ⇒ `force_revert` + OSD error |
@@ -289,9 +297,9 @@ Plus new `RefreshTracker` tests for the `bool` return of `complete` and the
 completions). The worker-side
 `enumerated` collection is FFI code and stays under the manual integration checks
 (architecture.md "Integration Testing"), with the unplug/replug and monitor-standby cycles
-added to that checklist. Existing `state.rs` tests are untouched; the four `reconcile.rs`
-tests that call `complete` gain the new argument (call-site updates only, assertions
-unchanged). Gates: `cargo fmt -- --check`,
+added to that checklist. Existing `state.rs` tests are untouched; the four `complete` call
+sites across three `reconcile.rs` tests gain the new argument (call-site updates only,
+assertions unchanged). Gates: `cargo fmt -- --check`,
 `cargo clippy -- -D warnings`, `cargo test`.
 
 ## Documentation
