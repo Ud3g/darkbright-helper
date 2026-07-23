@@ -495,7 +495,7 @@ The application maintains cached brightness values for instant OSD response. The
 
 **Behavior:**
 
-1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead. Gated on whether the last refresh *enumerated* any monitor (identification succeeded, whether or not the brightness read that followed did), not merely whether one was *readable* — so the cadence keeps running while monitors are enumerable but unreadable (e.g. undocked), which is what lets ghost pruning below complete without any user activity.
+1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead. Gated on whether the last refresh *enumerated* any monitor (identification succeeded, whether or not the brightness read that followed did), not merely whether one was *readable* — so the cadence keeps running while monitors are enumerable but unreadable (e.g. undocked), which is what lets ghost pruning below complete without any user activity. An aborted refresh (a failed send to the worker, or a watchdog timeout) freezes the cadence the same way an empty enumerated set does — `RefreshTracker::abort()` clears the same flag — until a refresh completes normally again.
 
 2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
 
@@ -516,8 +516,10 @@ refreshes are never permanently suppressed.
 Each `DdcRefreshResult` reports two sets: `monitors`, the brightness values
 that were successfully read, and `enumerated`, every monitor whose EDID
 identification succeeded this pass, regardless of whether the brightness
-read that followed it did. `enumerated` is always a superset of `monitors`'s
-ids, and is empty only when enumeration itself failed. The distinction
+read that followed it did. The ids in `enumerated` are always a superset of
+`monitors`'s, and the set is empty when nothing could be identified: either
+the top-level enumeration call failed outright, or it succeeded but every
+discovered monitor's individual identity read failed. The distinction
 matters because "unreadable" is common and often transient — standby, an
 EDID-emulating KVM, a DDC hiccup surviving all 3 retries — while
 "unenumerated" is a much closer proxy for "not physically present."
@@ -530,7 +532,8 @@ and a later miss showing the absence has been continuous for at least
 `PRUNE_ABSENCE_WINDOW` (90s) prunes the monitor — its state, its overlay
 window, and its `id_cache` entries are all removed. A stale or aborted
 refresh generation, or an empty `enumerated` set, carries no evidence and
-leaves `missing_since` untouched: no information is not evidence of absence.
+leaves `missing_since` untouched: the absence of information is not
+evidence of absence.
 
 All accumulated absence evidence is discarded on `SystemResumed` and on a
 DDC worker respawn, because a refresh burst around either event can observe
@@ -760,8 +763,8 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 
 #### Unplug/Replug (Ghost Pruning) Test
 1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config so the 90s absence window is reached quickly
-2. Start the application with `RUST_LOG=debug` and at least one monitor connected
-3. Unplug a monitor (or switch away on a non-EDID-emulating KVM)
+2. Start the application with `RUST_LOG=debug` and **at least two monitors connected** — unplugging the only monitor would empty `enumerated` entirely, which freezes the periodic cadence (see above) before 90 seconds of absence evidence can accumulate; a second monitor must stay enumerable for the whole wait
+3. Unplug one monitor (or switch it away on a non-EDID-emulating KVM), leaving the other connected
 4. Wait for periodic refreshes to observe the absence continuously for at least 90 seconds
 5. **Expected**: Log shows "Pruned monitor absent from topology"; the tray menu no longer lists the monitor; a dimming overlay left active on it, if any, is removed
 6. Replug the monitor
