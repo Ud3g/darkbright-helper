@@ -123,7 +123,9 @@ In the moved `handle_ddc_refresh_result`:
 3. Only if `current && found` (current generation **and** non-empty result): remove every
    `states` key absent from the result. Per removed monitor: call `overlay.remove(id)`
    (otherwise Windows may migrate the orphaned fullscreen black window onto a remaining
-   monitor), and clear `osd_monitor` if it pointed at the removed monitor. Log at `info`.
+   monitor), clear `osd_monitor` if it pointed at the removed monitor, and drop any
+   `id_cache` entries mapping to the removed id (a recycled `HMONITOR` value must not
+   resurrect the ghost). Log at `info`.
 4. Empty result ⇒ retain everything, as today (a transient enumeration failure must not
    wipe state).
 
