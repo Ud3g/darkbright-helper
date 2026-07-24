@@ -1278,6 +1278,49 @@ mod tests {
     }
 
     #[test]
+    fn adjust_overlay_failure_reverts_real_pending_and_restyles_visible_osd() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 0);
+
+        // Setup press: hardware is already 0, so `-10` only spills onto the
+        // overlay (0 -> 10) and leaves no hardware pending -- see
+        // `calculate_decrease`. It also shows the OSD the same way
+        // `adjust_send_failure_reverts_and_marks_visible_osd` does, since
+        // showing happens before the failure this test injects next.
+        c.handle_adjust(None, -10, base).unwrap();
+        assert!(c.osd.is_visible(), "setup press shows the OSD");
+        assert!(
+            c.states[&id].pending.is_none(),
+            "setup press is overlay-only"
+        );
+        let prior_overlay = c.states[&id].overlay_opacity;
+        assert_eq!(prior_overlay, 10);
+
+        // From (hardware=0, overlay=10), +15 drains the overlay first
+        // (10 -> 0, using 10 of the delta) then spills the remaining 5 onto
+        // hardware (0 -> 5) -- see `calculate_increase`. This single press
+        // changes both, so it sets a real hardware pending before the
+        // overlay call fails; the failure must revert that pending.
+        c.overlay.fail_update = true;
+        let err = c.handle_adjust(None, 15, base).unwrap_err();
+
+        assert!(matches!(err, BrightnessError::ChannelSend));
+        assert!(
+            c.states[&id].pending.is_none(),
+            "hardware pending set this press must be reverted"
+        );
+        assert_eq!(
+            c.states[&id].overlay_opacity, prior_overlay,
+            "opacity must not be committed when the platform call fails"
+        );
+        assert!(
+            !c.osd.error_updates.is_empty(),
+            "visible OSD restyled to error"
+        );
+    }
+
+    #[test]
     fn adjust_unknown_monitor_errors_and_triggers_one_refresh() {
         let base = Instant::now();
         let mut c = test_controller(base);
