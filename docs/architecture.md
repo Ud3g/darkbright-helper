@@ -188,7 +188,9 @@ Hotkeys affect the monitor containing the mouse cursor:
 
 **Implementation:**
 
-Primary hotkey registration failures are fatal. The application displays an error message box explaining the failure and suggesting solutions, then exits.
+Primary hotkey *registration* failures (e.g. the combination is already taken by another application) are fatal. The application displays an error message box explaining the failure and suggesting solutions, then exits.
+
+An *invalid hotkey string* in the config is **not** fatal: it is repaired to the default with an error log at load time (`Config::repair_hotkeys`, fed by the platform parser), per the "Invalid Config Handling" contract in section 4. The parse step before registration remains only as a defensive guard.
 
 ```rust
 // Register primary hotkeys (fail = fatal error with message box)

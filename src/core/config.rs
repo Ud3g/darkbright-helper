@@ -512,6 +512,36 @@ impl Config {
             self.refresh.inactivity_seconds = DEFAULT_REFRESH_INACTIVITY_SECONDS;
         }
     }
+
+    /// Replaces hotkey strings that `is_valid` rejects with the defaults,
+    /// logging an error for each — the "invalid config is never fatal"
+    /// contract applies to hotkey strings just like to numeric fields.
+    ///
+    /// Hotkey validity is platform knowledge (the parser and its key-name
+    /// table live in the platform layer), so it is injected as a predicate
+    /// instead of being implemented here. Callers pass e.g.
+    /// `|s| parse_hotkey(s).is_ok()`.
+    pub fn repair_hotkeys(&mut self, is_valid: impl Fn(&str) -> bool) {
+        if !is_valid(&self.hotkeys.brightness_up) {
+            log::error!(
+                field = "hotkeys.brightness_up",
+                value:% = self.hotkeys.brightness_up,
+                default = DEFAULT_HOTKEY_UP;
+                "Invalid hotkey string, using default"
+            );
+            self.hotkeys.brightness_up = DEFAULT_HOTKEY_UP.to_string();
+        }
+
+        if !is_valid(&self.hotkeys.brightness_down) {
+            log::error!(
+                field = "hotkeys.brightness_down",
+                value:% = self.hotkeys.brightness_down,
+                default = DEFAULT_HOTKEY_DOWN;
+                "Invalid hotkey string, using default"
+            );
+            self.hotkeys.brightness_down = DEFAULT_HOTKEY_DOWN.to_string();
+        }
+    }
 }
 
 #[cfg(test)]
@@ -705,6 +735,31 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_repair_hotkeys_replaces_invalid_with_default() {
+        let mut config = Config::default();
+        config.hotkeys.brightness_up = "Ctrl+Shift+Banana".to_string();
+        config.hotkeys.brightness_down = "Alt+Down".to_string();
+
+        // Stand-in for the platform parser: rejects the unknown key name.
+        config.repair_hotkeys(|s| !s.contains("Banana"));
+
+        assert_eq!(config.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
+        assert_eq!(config.hotkeys.brightness_down, "Alt+Down");
+    }
+
+    #[test]
+    fn test_repair_hotkeys_keeps_valid_values() {
+        let mut config = Config::default();
+        config.hotkeys.brightness_up = "Alt+F1".to_string();
+        config.hotkeys.brightness_down = "Alt+F2".to_string();
+
+        config.repair_hotkeys(|_| true);
+
+        assert_eq!(config.hotkeys.brightness_up, "Alt+F1");
+        assert_eq!(config.hotkeys.brightness_down, "Alt+F2");
     }
 
     #[test]

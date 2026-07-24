@@ -155,9 +155,10 @@ fn pump_windows_messages() {
 ///
 /// Attempts to load from the default path. If the file doesn't exist,
 /// creates a default config file. If parsing fails, uses defaults.
+/// Invalid hotkey strings are repaired to defaults, never fatal.
 fn load_config() -> Config {
     let config_path = Config::default_path();
-    match &config_path {
+    let mut config = match &config_path {
         Some(path) if path.exists() => {
             // Absolute config paths contain the user name; log them at debug only.
             log::debug!(path:% = path.display(); "Loading configuration");
@@ -199,7 +200,11 @@ fn load_config() -> Config {
             log::warn!("Could not determine config directory, using defaults");
             Config::default()
         }
-    }
+    };
+    // Hotkey validity needs the platform parser, so the repair runs here
+    // rather than inside core's validate_and_fix.
+    config.repair_hotkeys(|s| parse_hotkey(s).is_ok());
+    config
 }
 
 /// Initializes the logging subsystem.
@@ -268,7 +273,9 @@ fn spawn_tray_thread(tx: mpsc::Sender<BrightnessMessage>) {
 }
 
 fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> Result<()> {
-    // Parse and validate primary hotkeys before spawning thread (fail fast on parse errors)
+    // Parse the primary hotkeys before spawning the thread. Config loading
+    // already repaired invalid strings to defaults, so a failure here is a
+    // defensive guard, not an expected path.
     let up_hotkey = parse_hotkey(&config.hotkeys.brightness_up)
         .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_up", e.to_string()))?;
 
