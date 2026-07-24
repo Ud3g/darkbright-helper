@@ -243,6 +243,15 @@ Never log personally identifiable information (PII) or secrets:
 - Serial numbers in production logs (use `debug!` level only)
 - Any credentials or API keys
 
+Enforced structurally where possible:
+- `MonitorId`'s `Display` is serial-free by design, so `monitor_id:% = id` is
+  safe at any level. The serial-bearing form is only available via the
+  explicitly named `MonitorId::full_identity()` — call it only in `debug!`
+  statements.
+- Config errors (`ConfigRead`/`ConfigParse`/`ConfigWrite`/`ConfigFileOpen`)
+  embed only the file name, not the absolute path, because they surface in
+  warn/error logs. Log full paths at `debug!` only.
+
 ### Antipatterns
 
 - **Don't log the same event at multiple levels** — pick one appropriate level

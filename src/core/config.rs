@@ -221,6 +221,19 @@ impl Default for RefreshConfig {
 // Configuration Loading and Saving
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Returns just the file name of `path` for embedding in errors.
+///
+/// Config errors end up in warn/error logs; parent directories are omitted
+/// because absolute config paths contain the Windows user name (PII). The
+/// config location is fixed and documented, so the file name alone is enough
+/// to identify the file.
+fn log_safe_file_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    )
+}
+
 /// How [`Config::load_or_recover`] obtained its result.
 ///
 /// Returned alongside the config so the caller can log or surface the
@@ -280,7 +293,7 @@ impl Config {
     /// Returns `ConfigRead` if the file cannot be read, or `ConfigParse` if
     /// the JSON is invalid.
     pub fn load_from(path: &std::path::Path) -> Result<Self> {
-        let path_str = path.display().to_string();
+        let path_str = log_safe_file_name(path);
 
         let contents = std::fs::read_to_string(path)
             .map_err(|e| BrightnessError::config_read(&path_str, e))?;
@@ -415,7 +428,7 @@ impl Config {
     ///
     /// Panics if JSON serialization fails.
     pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
-        let path_str = path.display().to_string();
+        let path_str = log_safe_file_name(path);
 
         // Create parent directory if needed
         if let Some(parent) = path.parent() {
@@ -689,6 +702,29 @@ mod tests {
         assert!(
             !test_dir.join("config.json.tmp").exists(),
             "failed save must not leave an orphaned temp file"
+        );
+
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_config_errors_omit_parent_directories() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_err_no_path");
+        let _ = fs::remove_dir_all(&test_dir);
+        fs::create_dir_all(&test_dir).expect("create test dir");
+        let config_path = test_dir.join("config.json");
+        fs::write(&config_path, "{ not json").expect("write corrupt");
+
+        let err = Config::load_from(&config_path).expect_err("parse must fail");
+        let msg = err.to_string();
+
+        assert!(
+            msg.contains("config.json"),
+            "error should name the file: {msg}"
+        );
+        assert!(
+            !msg.contains("darkbright_test_err_no_path"),
+            "error must not embed parent directories (they can contain the user name): {msg}"
         );
 
         let _ = fs::remove_dir_all(test_dir);

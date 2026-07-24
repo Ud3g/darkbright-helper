@@ -41,12 +41,17 @@ impl MonitorId {
         }
     }
 
-    /// Returns a display-friendly string for this monitor.
+    /// Returns the full identity including the serial number when present.
+    ///
+    /// The serial number is treated as PII: log this form at `debug!` level
+    /// only — never at info/warn/error — and never show it in user-facing UI.
+    /// For all other purposes use `Display`/[`Self::base_display_name`],
+    /// which are serial-free.
     #[must_use]
-    pub fn display_name(&self) -> String {
+    pub fn full_identity(&self) -> String {
         match &self.serial_number {
-            Some(sn) => format!("{} {} (SN:{})", self.manufacturer, self.model_name, sn),
-            None => format!("{} {}", self.manufacturer, self.model_name),
+            Some(sn) => format!("{} (SN:{})", self.base_display_name(), sn),
+            None => self.base_display_name(),
         }
     }
 
@@ -77,9 +82,13 @@ impl MonitorId {
     }
 }
 
+// Serial-free by design: `Display` is what log statements emit at every
+// level via `:%`, so the PII-bearing serial must never appear here. The
+// serial-bearing form is only available through the explicitly named
+// `full_identity()`, reserved for `debug!`-level logging.
 impl std::fmt::Display for MonitorId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.display_name())
+        write!(f, "{}", self.base_display_name())
     }
 }
 
@@ -112,6 +121,26 @@ mod monitor_id_tests {
         // "PHLEGM" starts with "PHL" but not "PHL " - should NOT skip
         let id = MonitorId::new("PHL", "PHLEGM 123", None);
         assert_eq!(id.base_display_name(), "PHL PHLEGM 123");
+    }
+
+    #[test]
+    fn display_omits_serial_number() {
+        // Display is used by log statements at every level, so it must never
+        // carry the serial (PII rule: serials at debug! only, via full_identity).
+        let id = MonitorId::new("DEL", "U2722D", Some("ABC123".to_string()));
+        assert_eq!(id.to_string(), "DEL U2722D");
+    }
+
+    #[test]
+    fn full_identity_includes_serial_number() {
+        let id = MonitorId::new("DEL", "U2722D", Some("ABC123".to_string()));
+        assert_eq!(id.full_identity(), "DEL U2722D (SN:ABC123)");
+    }
+
+    #[test]
+    fn full_identity_without_serial_is_base_name() {
+        let id = MonitorId::new("DEL", "U2722D", None);
+        assert_eq!(id.full_identity(), "DEL U2722D");
     }
 }
 

@@ -76,8 +76,14 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
         // ShellExecuteW error codes fit in i32; truncation is safe here
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let error_code = result.0 as i32;
+        log::debug!(path:% = path.display(); "ShellExecuteW failed for file");
+        // The error ends up in error-level logs; embed only the file name,
+        // since the absolute path contains the user name.
         Err(BrightnessError::config_file_open(
-            path.display().to_string(),
+            path.file_name().map_or_else(
+                || path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            ),
             std::io::Error::from_raw_os_error(error_code),
         ))
     }
@@ -153,14 +159,16 @@ fn load_config() -> Config {
     let config_path = Config::default_path();
     match &config_path {
         Some(path) if path.exists() => {
+            // Absolute config paths contain the user name; log them at debug only.
+            log::debug!(path:% = path.display(); "Loading configuration");
             let (cfg, outcome) = Config::load_or_recover(path);
             match outcome {
                 ConfigLoadOutcome::Loaded => {
-                    log::info!(path:% = path.display(); "Configuration loaded from file");
+                    log::info!("Configuration loaded from file");
                 }
                 ConfigLoadOutcome::RecoveredFromBackup { primary_error } => {
                     log::warn!(
-                        path:% = path.display(), error:% = primary_error;
+                        error:% = primary_error;
                         "Config file corrupt; settings recovered from backup — fix or delete config.json to stop this warning"
                     );
                 }
@@ -169,7 +177,6 @@ fn load_config() -> Config {
                     backup_error,
                 } => {
                     log::error!(
-                        path:% = path.display(),
                         error:% = primary_error,
                         backup_error:? = backup_error.map(|e| e.to_string());
                         "Failed to parse config and no usable backup, using defaults"
@@ -179,12 +186,12 @@ fn load_config() -> Config {
             cfg
         }
         Some(path) => {
-            log::info!(path:% = path.display(); "Config file not found, creating default");
+            log::debug!(path:% = path.display(); "Config file not found, creating default");
             let config = Config::default();
             if let Err(e) = config.save_to(path) {
-                log::warn!(path:% = path.display(), error:% = e; "Failed to save default config file");
+                log::warn!(error:% = e; "Failed to save default config file");
             } else {
-                log::info!(path:% = path.display(); "Default config file created");
+                log::info!("Default config file created");
             }
             config
         }

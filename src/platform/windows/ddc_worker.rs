@@ -96,7 +96,7 @@ impl DdcWorker {
 
         let (success, error) = match result {
             Ok(()) => {
-                log::debug!(monitor_id:% = monitor_id, brightness = value; "Set brightness");
+                log::debug!(monitor_id:% = monitor_id.full_identity(), brightness = value; "Set brightness");
                 (true, None)
             }
             Err(e) => {
@@ -180,7 +180,7 @@ impl DdcWorker {
                     #[allow(clippy::cast_possible_truncation)]
                     let brightness_u8 = brightness as u8;
 
-                    log::debug!(monitor_id:% = monitor_id, brightness = brightness_u8; "Read monitor brightness");
+                    log::debug!(monitor_id:% = monitor_id.full_identity(), brightness = brightness_u8; "Read monitor brightness");
 
                     results.push((monitor_id.clone(), brightness_u8));
                     self.monitors.insert(monitor_id.clone(), ddc_mon);

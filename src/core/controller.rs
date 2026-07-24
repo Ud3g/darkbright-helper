@@ -309,7 +309,7 @@ where
             // must not resurrect the ghost.
             self.id_cache.retain(|_, cached| cached != &id);
             log::info!(monitor:% = id.base_display_name(); "Pruned monitor absent from topology");
-            log::debug!(monitor_id:% = id; "Pruned monitor identity");
+            log::debug!(monitor_id:% = id.full_identity(); "Pruned monitor identity");
         }
     }
 
@@ -524,7 +524,7 @@ where
     ) -> Result<()> {
         let Some(state) = self.states.get_mut(monitor_id) else {
             log::warn!(monitor:% = monitor_id.base_display_name(); "Received DDC result for unknown monitor");
-            log::debug!(monitor_id:% = monitor_id; "Unknown-monitor DDC result identity");
+            log::debug!(monitor_id:% = monitor_id.full_identity(); "Unknown-monitor DDC result identity");
             return Ok(());
         };
 
@@ -539,7 +539,7 @@ where
             SetOutcome::Reverted => {
                 let error_msg = error.unwrap_or("unknown error");
                 log::error!(monitor:% = monitor_id.base_display_name(), target_brightness = value, error = error_msg; "DDC failed to set brightness");
-                log::debug!(monitor_id:% = monitor_id; "DDC set failure identity");
+                log::debug!(monitor_id:% = monitor_id.full_identity(); "DDC set failure identity");
                 if self.osd.is_visible() {
                     self.osd.update_error(state)?;
                 }
@@ -618,7 +618,7 @@ where
                     state.force_revert();
                 }
                 log::error!(monitor:% = id.base_display_name(); "DDC set timed out with no result; reverted");
-                log::debug!(monitor_id:% = id; "Timed-out set identity");
+                log::debug!(monitor_id:% = id.full_identity(); "Timed-out set identity");
             }
             self.consecutive_set_timeouts += 1;
             self.show_error_on_visible_osd();
