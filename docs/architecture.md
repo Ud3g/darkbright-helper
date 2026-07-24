@@ -495,7 +495,7 @@ The application maintains cached brightness values for instant OSD response. The
 
 **Behavior:**
 
-1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead. Gated on whether the last refresh *enumerated* any monitor (identification succeeded, whether or not the brightness read that followed did), not merely whether one was *readable* — so the cadence keeps running while monitors are enumerable but unreadable (e.g. undocked), which is what lets ghost pruning below complete without any user activity. An aborted refresh (a failed send to the worker, or a watchdog timeout) freezes the cadence the same way an empty enumerated set does — `RefreshTracker::abort()` clears the same flag — until a refresh completes normally again.
+1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead. Gated on whether the last refresh *enumerated* any monitor (identification succeeded, whether or not the brightness read that followed did), not merely whether one was *readable* — so the cadence keeps running while monitors are enumerable but unreadable (e.g. undocked), which is what lets ghost pruning below complete without any user activity. An aborted refresh (a failed send to the worker, or a watchdog timeout) freezes the cadence the same way an empty enumerated set does — `RefreshTracker::abort()` clears the same flag — until a refresh completes with something enumerated again.
 
 2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
 
@@ -517,7 +517,7 @@ Each `DdcRefreshResult` reports two sets: `monitors`, the brightness values
 that were successfully read, and `enumerated`, every monitor whose EDID
 identification succeeded this pass, regardless of whether the brightness
 read that followed it did. The ids in `enumerated` are always a superset of
-`monitors`'s, and the set is empty when nothing could be identified: either
+the ids in `monitors`, and the set is empty when nothing could be identified: either
 the top-level enumeration call failed outright, or it succeeded but every
 discovered monitor's individual identity read failed. The distinction
 matters because "unreadable" is common and often transient — standby, an
