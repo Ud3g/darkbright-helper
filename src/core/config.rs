@@ -224,10 +224,17 @@ impl Default for RefreshConfig {
 impl Config {
     /// Returns the default configuration file path.
     ///
-    /// Location: `%APPDATA%\BrightnessControl\config.json`
+    /// Location: `%APPDATA%\BrightnessControl\config.json`, resolved via the
+    /// `APPDATA` environment variable (always set in a normal Windows logon
+    /// session). Returns `None` when the variable is absent — e.g. on
+    /// non-Windows hosts running the platform-agnostic tests.
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        dirs_next::config_dir().map(|p| p.join("BrightnessControl").join("config.json"))
+        std::env::var_os("APPDATA").map(|appdata| {
+            PathBuf::from(appdata)
+                .join("BrightnessControl")
+                .join("config.json")
+        })
     }
 
     /// Loads configuration from the default path, or returns defaults if not found.

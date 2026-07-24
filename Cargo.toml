@@ -35,9 +35,6 @@ serde_json = "1.0"
 log = { version = "0.4", features = ["kv_unstable"] }
 env_logger = "0.11"
 
-# Directory paths
-dirs-next = "2.0"
-
 # Linter Configuration (from code-conventions.md)
 [lints.clippy]
 all = "warn"
