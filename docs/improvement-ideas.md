@@ -32,7 +32,7 @@ This document tracks potential future enhancements for the Brightness Control To
   Add a hotkey capture interface in the settings GUI that allows users to press keys directly to set custom hotkey combinations. This would eliminate the need for manual text input and provide immediate validation of key combinations, integrating with the existing hotkey parsing system.
 
 - **Sleep/wake brightness restoration**
-  Enhance the existing power event listener in `src/platform/windows/power.rs` to save current brightness settings before system sleep and restore them on wake. This would ensure users maintain their preferred brightness levels across system restarts and sleep cycles, improving the overall user experience.
+  *Partially implemented:* the power event listener in `src/platform/windows/power.rs` already triggers a cache refresh on system resume, resyncing state with whatever the monitors report. Remaining idea: save the pre-sleep brightness values and actively *restore* them on wake for monitors that reset themselves during sleep, instead of adopting the reset values.
 
 - **Basic internationalization foundation**
   Implement the technical infrastructure needed to support multiple languages, including string externalization and locale-aware formatting. This would involve creating a translation system that can be extended later with actual language translations.
@@ -62,7 +62,7 @@ This document tracks potential future enhancements for the Brightness Control To
 **Developer and advanced user features:**
 
 - **Debug mode with detailed logging**
-  Implement a comprehensive debug mode that provides detailed logging of DDC/CI communications, state changes, and performance metrics. This would help developers and power users troubleshoot issues and understand the application's internal behavior.
+  *Largely implemented:* structured key-value debug logging of DDC/CI communication and state changes already exists via `env_logger` (`RUST_LOG=debug`). Remaining ideas: performance metrics, and making logs retrievable from release builds (no console) — the latter is tracked separately as an architecture-review finding (opt-in file logging under `%APPDATA%`).
 
 - **Command-line interface for automation**
   Add a command-line interface that allows users to control brightness settings from scripts or the command line. This would enable automation scenarios and integration with existing workflow tools, supporting operations like setting specific brightness levels or applying presets.

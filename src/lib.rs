@@ -17,34 +17,19 @@
 //!
 //! # Example
 //!
-//! ```no_run
-//! use darkbright_helper::Result;
+//! ```
+//! use darkbright_helper::core::brightness::calculate_adjustment;
 //!
-//! fn main() -> Result<()> {
-//!     // Application initialization will go here
-//!     Ok(())
-//! }
+//! // +10 from 50% hardware brightness with no overlay dimming active.
+//! let adj = calculate_adjustment(50, 0, 10);
+//! assert_eq!(adj.hardware_brightness, 60);
+//! assert_eq!(adj.overlay_opacity, 0);
 //! ```
 
 pub mod core;
 pub mod error;
 pub mod platform;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Public API Re-exports
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Error handling
+// Re-exported for ergonomic `darkbright_helper::Result<T>` signatures in the
+// binary and integration tests; everything else is imported via full paths.
 pub use error::{BrightnessError, Result};
-
-// Core types
-pub use core::brightness::{BrightnessAdjustment, calculate_adjustment};
-pub use core::config::Config;
-pub use core::state::{BrightnessMessage, MonitorId, MonitorState, TrayMenuData, TrayMonitorInfo};
-
-// Platform traits
-pub use platform::DimmingOverlay;
-
-// Platform-specific types (Windows)
-#[cfg(windows)]
-pub use platform::windows::TrayIcon;

@@ -102,7 +102,6 @@ Message-passing with single ownership:
 // Messages TO main thread (from hotkey thread, DDC worker, power thread, or tray thread)
 enum BrightnessMessage {
     Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
-    SetAbsolute { monitor_id: Option<MonitorId>, value: u8 }, // None = monitor under cursor
     DdcSetResult { monitor_id, value, seq, success, error }, // DDC worker → main
     DdcRefreshResult { generation, monitors },               // DDC worker → main
     Refresh,

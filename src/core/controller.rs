@@ -122,6 +122,10 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     /// Loaded configuration.
     config: Config,
     /// Cache mapping platform handles to monitor ids (avoids repeated EDID reads).
+    ///
+    /// The DDC worker keeps its own independent handle→id cache (thread
+    /// ownership, no shared state), each side invalidating on refresh under
+    /// its own rules. Changes to handle→identity mapping must cover both.
     id_cache: HashMap<MonitorHandle, MonitorId>,
     /// Supervised DDC worker.
     ddc: Ddc,
@@ -659,9 +663,6 @@ where
             BrightnessMessage::Adjust { monitor_id, delta } => {
                 self.handle_adjust(monitor_id, delta, now)?;
             }
-            BrightnessMessage::SetAbsolute { monitor_id, value } => {
-                self.handle_set_absolute(monitor_id, value)?;
-            }
             BrightnessMessage::Refresh => {
                 self.handle_refresh(now);
             }
@@ -686,7 +687,6 @@ where
             }
             BrightnessMessage::TrayRequestQuit => {
                 log::info!("Quit requested from tray menu");
-                self.handle_shutdown()?;
                 return Ok(false);
             }
             BrightnessMessage::TrayMenuOpening { reply_tx } => {
@@ -712,34 +712,9 @@ where
             } => {
                 self.handle_ddc_refresh_result(generation, monitors, enumerated, now);
             }
-            BrightnessMessage::Shutdown => {
-                self.handle_shutdown()?;
-                return Ok(false);
-            }
+            BrightnessMessage::Shutdown => return Ok(false),
         }
         Ok(true)
-    }
-
-    /// Handles the shutdown process.
-    #[allow(clippy::unused_self, clippy::unnecessary_wraps)]
-    fn handle_shutdown(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    /// Sets an absolute brightness value for a monitor.
-    ///
-    /// # Errors
-    ///
-    /// Currently infallible; placeholder for future extensions.
-    #[allow(
-        clippy::unused_self,
-        clippy::unnecessary_wraps,
-        clippy::needless_pass_by_value
-    )]
-    fn handle_set_absolute(&mut self, _monitor_id: Option<MonitorId>, _value: u8) -> Result<()> {
-        // Placeholder for future extensions (e.g., fixed brightness via CLI command)
-        log::debug!("Absolute brightness set received; not yet implemented");
-        Ok(())
     }
 
     /// Builds the data needed to populate the tray menu.

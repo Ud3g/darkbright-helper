@@ -292,6 +292,11 @@ impl MonitorState {
             }
             Some(_) => SetOutcome::Ignored,
             None => {
+                // No seq/recency check here — safe only because the single DDC
+                // worker executes sets sequentially and delivers results in
+                // issue order, so a success arriving with nothing pending is
+                // always the most recent hardware write. Multiple workers or
+                // out-of-order delivery would need a seq gate on this branch.
                 if success {
                     self.cached_brightness = value.min(100);
                     self.last_refresh = Instant::now();
@@ -397,13 +402,6 @@ pub enum BrightnessMessage {
         monitor_id: Option<MonitorId>,
         /// Brightness change (-100 to +100).
         delta: i8,
-    },
-    /// Set brightness to an absolute value.
-    SetAbsolute {
-        /// Target monitor (None = monitor under cursor).
-        monitor_id: Option<MonitorId>,
-        /// Target brightness (0-100).
-        value: u8,
     },
     /// Refresh cached brightness values from all monitors.
     Refresh,

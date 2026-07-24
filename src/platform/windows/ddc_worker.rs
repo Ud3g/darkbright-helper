@@ -24,6 +24,10 @@ pub struct DdcWorker {
     /// DDC monitors indexed by their `MonitorId`.
     monitors: HashMap<MonitorId, DdcMonitor>,
     /// Maps `HMONITOR` handles to `MonitorId` for quick lookup.
+    ///
+    /// The core controller keeps its own independent handle→id cache (thread
+    /// ownership, no shared state), each side invalidating on refresh under
+    /// its own rules. Changes to handle→identity mapping must cover both.
     handle_cache: HashMap<isize, MonitorId>,
     /// Receiver for commands from the main thread.
     cmd_rx: Receiver<DdcCommand>,
