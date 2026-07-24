@@ -39,7 +39,7 @@ pub mod tray;
 pub use ddc_worker::{DdcSupervisor, DdcWorker, RespawnOutcome};
 pub use power::PowerEventListener;
 pub use single_instance::{InstanceLock, SingleInstance};
-pub use tray::TrayIcon;
+pub use tray::{TrayIcon, TrayStatusHandle};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Helpers

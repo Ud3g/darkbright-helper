@@ -19,7 +19,7 @@ use darkbright_helper::core::controller::Controller;
 use darkbright_helper::core::reconcile::{
     RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate,
 };
-use darkbright_helper::core::state::BrightnessMessage;
+use darkbright_helper::core::state::{BrightnessMessage, HealthWarnings};
 use darkbright_helper::platform::windows::CursorLocator;
 use darkbright_helper::platform::windows::hotkey::{
     BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
@@ -29,7 +29,7 @@ use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::single_instance::{self, InstanceLock, SingleInstance};
 use darkbright_helper::platform::windows::{
-    DdcSupervisor, PowerEventListener, TrayIcon, UsageWindow,
+    DdcSupervisor, PowerEventListener, TrayIcon, TrayStatusHandle, UsageWindow,
 };
 use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 use darkbright_helper::{BrightnessError, Result};
@@ -224,7 +224,7 @@ fn init_logging() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
         .init();
 
-    log::info!("Brightness Control Tool Starting");
+    log::info!(version = env!("CARGO_PKG_VERSION"); "Brightness Control Tool Starting");
 }
 
 /// Spawns the power event listener thread.
@@ -258,11 +258,17 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// # Arguments
 ///
 /// * `tx` - Channel sender to notify the main thread of tray events.
-fn spawn_tray_thread(tx: mpsc::Sender<BrightnessMessage>) {
+/// * `status_tx` - Hands the tray's status handle back to the main thread so
+///   it can push degraded-state icon/tooltip updates.
+fn spawn_tray_thread(
+    tx: mpsc::Sender<BrightnessMessage>,
+    status_tx: mpsc::Sender<TrayStatusHandle>,
+) {
     std::thread::spawn(move || {
         match TrayIcon::new(tx) {
             Ok(tray) => {
                 log::info!("System tray icon created");
+                let _ = status_tx.send(tray.status_handle());
                 if let Err(e) = tray.run_message_loop() {
                     log::error!(error:% = e; "Tray message loop error");
                 }
@@ -443,8 +449,12 @@ fn main() {
     // Spawn power event listener thread (for sleep/resume detection)
     spawn_power_listener(tx.clone());
 
-    // Spawn system tray icon thread
-    spawn_tray_thread(tx.clone());
+    // Spawn system tray icon thread; it hands back a status handle for
+    // pushing degraded-state icon/tooltip updates.
+    let (tray_status_tx, tray_status_rx) = mpsc::channel();
+    spawn_tray_thread(tx.clone(), tray_status_tx);
+    let mut tray_status: Option<TrayStatusHandle> = None;
+    let mut last_warnings = HealthWarnings::default();
 
     // Register hotkeys and start hotkey thread
 
@@ -504,6 +514,7 @@ fn main() {
                         }
                         Err(e) => {
                             hotkey_gate.record_spawn_failure();
+                            controller.set_hotkeys_lost();
                             log::error!(
                                 error:% = e;
                                 "Hotkey thread restart failed; hotkeys unavailable until app restart"
@@ -512,11 +523,31 @@ fn main() {
                     }
                 }
                 RespawnDecision::GaveUpNow => {
+                    controller.set_hotkeys_lost();
                     log::error!(
                         "Hotkey thread died repeatedly; giving up — hotkeys unavailable until app restart"
                     );
                 }
                 RespawnDecision::AlreadyGaveUp => {}
+            }
+        }
+
+        // Push degraded-state changes to the tray (icon + tooltip). The menu
+        // itself always pulls fresh data when opened; this is the passive path.
+        if tray_status.is_none()
+            && let Ok(handle) = tray_status_rx.try_recv()
+        {
+            tray_status = Some(handle);
+            // A warning may have activated before the tray came up; sync it.
+            if last_warnings != HealthWarnings::default() {
+                handle.notify(last_warnings);
+            }
+        }
+        let warnings = controller.health_warnings();
+        if warnings != last_warnings {
+            last_warnings = warnings;
+            if let Some(handle) = tray_status {
+                handle.notify(warnings);
             }
         }
 

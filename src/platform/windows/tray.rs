@@ -13,23 +13,29 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, TRUE, WPARAM};
+use windows::Win32::Graphics::Gdi::{
+    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateCompatibleDC, CreateDIBSection,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, GetDC, HBITMAP, HDC, HGDIOBJ, ReleaseDC,
+    SelectObject,
+};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFY_ICON_DATA_FLAGS,
-    NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
+    NOTIFY_ICON_DATA_FLAGS, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
-    GetCursorPos, GetMessageW, HICON, HWND_MESSAGE, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE,
-    LR_SHARED, LoadImageW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL,
-    WNDCLASSEXW, WS_OVERLAPPED,
+    AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
+    DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos, GetMessageW, HICON, HWND_MESSAGE,
+    ICONINFO, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
+    SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
+    TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL, WNDCLASSEXW,
+    WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, w};
 
-use crate::core::state::{BrightnessMessage, TrayMenuData};
+use crate::core::state::{BrightnessMessage, HealthWarnings, TrayMenuData};
 use crate::error::{BrightnessError, Result};
 
 use super::{SafeHwnd, last_error_as_brightness_error};
@@ -45,6 +51,10 @@ const TRAY_ICON_ID: u32 = 1;
 /// Using `WM_APP` + offset to avoid conflicts with system messages.
 const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 100;
 
+/// Custom message posted by the main thread when degraded-state warnings
+/// change; wparam bit 0 = DDC degraded, bit 1 = hotkeys lost.
+const WM_TRAY_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 101;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu Item IDs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -58,9 +68,15 @@ const MENU_ID_SETTINGS: u32 = 1001;
 /// Menu item ID for the "Quit" option.
 const MENU_ID_QUIT: u32 = 1002;
 
+/// Menu item ID for the grayed version line.
+const MENU_ID_VERSION: u32 = 1003;
+
 /// Base ID for monitor info rows (non-clickable).
 /// Each monitor uses `MENU_ID_MONITOR_BASE` + index.
 const MENU_ID_MONITOR_BASE: u32 = 2000;
+
+/// Base ID for degraded-subsystem warning rows (non-clickable).
+const MENU_ID_WARNING_BASE: u32 = 3000;
 
 /// Tooltip text shown when hovering over the tray icon.
 const TRAY_TOOLTIP: &str = "Brightness Control";
@@ -74,6 +90,59 @@ const APP_NAME: &str = "Brightness Control";
 
 /// Timeout for waiting for menu data from the main thread.
 const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Warning Presentation (pure helpers)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Composes the tray tooltip text from the active warnings.
+fn compose_tooltip(warnings: HealthWarnings) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    if warnings.ddc_degraded {
+        parts.push("DDC unavailable");
+    }
+    if warnings.hotkeys_lost {
+        parts.push("hotkeys stopped");
+    }
+    if parts.is_empty() {
+        TRAY_TOOLTIP.to_string()
+    } else {
+        format!("{TRAY_TOOLTIP} – {}", parts.join(", "))
+    }
+}
+
+/// Grayed warning lines shown at the top of the tray menu.
+fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
+    let mut lines = Vec::new();
+    if warnings.ddc_degraded {
+        // User activity is the recovery signal for a degraded DDC state.
+        lines.push("⚠ DDC unavailable — press a brightness hotkey to retry");
+    }
+    if warnings.hotkeys_lost {
+        // The give-up latch only clears with a fresh process.
+        lines.push("⚠ Hotkeys stopped working — restart the app");
+    }
+    lines
+}
+
+/// Paints an amber warning badge (filled circle in the lower-right quadrant)
+/// into a top-down 32-bit BGRA pixel buffer of `size`×`size` pixels.
+fn paint_warning_badge(pixels: &mut [u8], size: usize) {
+    /// Amber #FFB300, fully opaque, in BGRA byte order.
+    const BADGE: [u8; 4] = [0x00, 0xB3, 0xFF, 0xFF];
+    let center = (size * 3) / 4;
+    let radius = size / 4;
+    for y in center.saturating_sub(radius)..size.min(center + radius + 1) {
+        for x in center.saturating_sub(radius)..size.min(center + radius + 1) {
+            let dx = x.abs_diff(center);
+            let dy = y.abs_diff(center);
+            if dx * dx + dy * dy <= radius * radius {
+                let i = (y * size + x) * 4;
+                pixels[i..i + 4].copy_from_slice(&BADGE);
+            }
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Thread-Local Sender Storage
@@ -215,6 +284,162 @@ fn load_icon_from_file() -> Result<HICON> {
     }
 }
 
+/// Pixel edge length of the generated warning icon.
+const WARNING_ICON_SIZE: usize = 32;
+
+/// Base and warning-badged tray icons, chosen from on status updates.
+#[derive(Clone, Copy)]
+struct StatusIcons {
+    normal: HICON,
+    warning: HICON,
+}
+
+thread_local! {
+    /// Icon pair for status updates; set once by `TrayIcon::new` (tray thread).
+    static STATUS_ICONS: RefCell<Option<StatusIcons>> = const { RefCell::new(None) };
+}
+
+/// RAII: memory DC with a 32-bit top-down DIB section selected into it.
+/// On drop it restores the old bitmap, deletes the DIB, then deletes the DC.
+struct BadgeCanvas {
+    dc: HDC,
+    dib: HBITMAP,
+    old: HGDIOBJ,
+    bits: *mut u8,
+}
+
+impl BadgeCanvas {
+    /// Allocates a `size`×`size` BGRA canvas. Returns `None` on GDI failure.
+    fn new(size: i32) -> Option<Self> {
+        unsafe {
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(screen);
+            ReleaseDC(None, screen);
+            if dc.is_invalid() {
+                return None;
+            }
+
+            let bmi = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: u32::try_from(std::mem::size_of::<BITMAPINFOHEADER>()).unwrap_or(0),
+                    biWidth: size,
+                    // Negative height = top-down rows, so buffer row 0 is the
+                    // top of the image and the badge quadrant is bottom-right.
+                    biHeight: -size,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let Ok(dib) =
+                CreateDIBSection(dc, &raw const bmi, DIB_RGB_COLORS, &raw mut bits, None, 0)
+            else {
+                let _ = DeleteDC(dc);
+                return None;
+            };
+            let old = SelectObject(dc, dib);
+            Some(Self {
+                dc,
+                dib,
+                old,
+                bits: bits.cast(),
+            })
+        }
+    }
+}
+
+impl Drop for BadgeCanvas {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.old);
+            let _ = DeleteObject(self.dib);
+            let _ = DeleteDC(self.dc);
+        }
+    }
+}
+
+/// Creates the warning variant of the tray icon: the base icon with an amber
+/// badge painted into the lower-right quadrant.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::TrayIconCreation` if any GDI/icon call fails.
+fn create_warning_icon(base: HICON) -> Result<HICON> {
+    let size = i32::try_from(WARNING_ICON_SIZE)
+        .map_err(|_| BrightnessError::tray_icon_creation("icon size exceeds i32"))?;
+
+    let canvas = BadgeCanvas::new(size)
+        .ok_or_else(|| BrightnessError::tray_icon_creation("badge canvas allocation failed"))?;
+
+    unsafe {
+        DrawIconEx(canvas.dc, 0, 0, base, size, size, 0, None, DI_NORMAL)
+            .map_err(|e| BrightnessError::tray_icon_creation(format!("DrawIconEx failed: {e}")))?;
+        // Flush pending GDI drawing before touching the DIB bits directly.
+        let _ = GdiFlush();
+
+        let pixels =
+            std::slice::from_raw_parts_mut(canvas.bits, WARNING_ICON_SIZE * WARNING_ICON_SIZE * 4);
+        paint_warning_badge(pixels, WARNING_ICON_SIZE);
+
+        // A monochrome mask is required by ICONINFO even though the 32-bit
+        // color bitmap's alpha channel is what actually shapes the icon.
+        let mask = CreateBitmap(size, size, 1, 1, None);
+        if mask.is_invalid() {
+            return Err(BrightnessError::tray_icon_creation("mask bitmap failed"));
+        }
+
+        let info = ICONINFO {
+            fIcon: TRUE,
+            xHotspot: 0,
+            yHotspot: 0,
+            hbmMask: mask,
+            hbmColor: canvas.dib,
+        };
+        // CreateIconIndirect copies both bitmaps; canvas + mask can be freed.
+        let icon = CreateIconIndirect(&raw const info);
+        let _ = DeleteObject(mask);
+        icon.map_err(|e| {
+            BrightnessError::tray_icon_creation(format!("CreateIconIndirect failed: {e}"))
+        })
+    }
+}
+
+/// Applies a posted status update: swaps the tray icon and tooltip to match
+/// the active warnings.
+fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
+    let warnings = HealthWarnings {
+        ddc_degraded: wparam.0 & 0b01 != 0,
+        hotkeys_lost: wparam.0 & 0b10 != 0,
+    };
+
+    let Some(icons) = STATUS_ICONS.with(|s| *s.borrow()) else {
+        return;
+    };
+    let icon = if warnings.ddc_degraded || warnings.hotkeys_lost {
+        icons.warning
+    } else {
+        icons.normal
+    };
+
+    let tooltip = compose_tooltip(warnings);
+    let nid = create_notify_icon_data(hwnd, icon, &tooltip, NIF_ICON | NIF_TIP | NIF_SHOWTIP);
+    unsafe {
+        if !Shell_NotifyIconW(NIM_MODIFY, &raw const nid).as_bool() {
+            log::warn!(error_code = super::get_last_error_code(); "Failed to update tray status");
+            return;
+        }
+    }
+    log::debug!(
+        ddc_degraded = warnings.ddc_degraded,
+        hotkeys_lost = warnings.hotkeys_lost;
+        "Tray status updated"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shell Notification Icon
 // ─────────────────────────────────────────────────────────────────────────────
@@ -225,10 +450,12 @@ fn load_icon_from_file() -> Result<HICON> {
 ///
 /// * `hwnd` - Window handle for receiving tray messages.
 /// * `icon` - Icon handle to display in the tray.
+/// * `tooltip` - Tooltip text (truncated to the fixed `szTip` capacity).
 /// * `flags` - Which fields are valid in the structure.
 fn create_notify_icon_data(
     hwnd: HWND,
     icon: HICON,
+    tooltip: &str,
     flags: NOTIFY_ICON_DATA_FLAGS,
 ) -> NOTIFYICONDATAW {
     let mut nid = NOTIFYICONDATAW {
@@ -242,7 +469,7 @@ fn create_notify_icon_data(
     };
 
     // Set tooltip text (szTip is a fixed-size array)
-    let tooltip_wide: Vec<u16> = TRAY_TOOLTIP.encode_utf16().collect();
+    let tooltip_wide: Vec<u16> = tooltip.encode_utf16().collect();
     let copy_len = tooltip_wide.len().min(nid.szTip.len() - 1);
     nid.szTip[..copy_len].copy_from_slice(&tooltip_wide[..copy_len]);
     // Null terminator is already set by Default
@@ -261,7 +488,12 @@ fn create_notify_icon_data(
 ///
 /// Returns `BrightnessError::TrayIconCreation` if `Shell_NotifyIconW` fails.
 fn add_tray_icon(hwnd: HWND, icon: HICON) -> Result<()> {
-    let nid = create_notify_icon_data(hwnd, icon, NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP);
+    let nid = create_notify_icon_data(
+        hwnd,
+        icon,
+        TRAY_TOOLTIP,
+        NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
+    );
 
     unsafe {
         if !Shell_NotifyIconW(NIM_ADD, &raw const nid).as_bool() {
@@ -317,6 +549,27 @@ fn show_context_menu(hwnd: HWND) {
 
         // Add monitor info rows at the top (disabled/non-clickable)
         if let Some(ref data) = menu_data {
+            // Degraded-subsystem warnings come first so they cannot be missed.
+            let warn_lines = warning_menu_lines(data.warnings);
+            for (index, line) in warn_lines.iter().enumerate() {
+                let line_text = format!("{line}\0");
+                let line_wide: Vec<u16> = line_text.encode_utf16().collect();
+
+                // Menu IDs are u32; the warning count is at most 2
+                #[allow(clippy::cast_possible_truncation)]
+                let menu_id = MENU_ID_WARNING_BASE + (index as u32);
+
+                let _ = AppendMenuW(
+                    hmenu,
+                    MF_STRING | MF_GRAYED,
+                    menu_id as usize,
+                    PCWSTR(line_wide.as_ptr()),
+                );
+            }
+            if !warn_lines.is_empty() {
+                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+            }
+
             for (index, monitor) in data.monitors.iter().enumerate() {
                 let monitor_text = format!(
                     "{}: 🕶{}% 🔆{}%\0",
@@ -368,6 +621,17 @@ fn show_context_menu(hwnd: HWND) {
             MF_STRING,
             MENU_ID_QUIT as usize,
             PCWSTR(quit_wide.as_ptr()),
+        );
+
+        // Version line (grayed, informational)
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+        let version_text = format!("{APP_NAME} v{}\0", env!("CARGO_PKG_VERSION"));
+        let version_wide: Vec<u16> = version_text.encode_utf16().collect();
+        let _ = AppendMenuW(
+            hmenu,
+            MF_STRING | MF_GRAYED,
+            MENU_ID_VERSION as usize,
+            PCWSTR(version_wide.as_ptr()),
         );
 
         // Get cursor position for menu placement
@@ -519,6 +783,10 @@ unsafe extern "system" fn tray_wnd_proc(
                 handle_tray_callback(hwnd, lparam);
                 LRESULT(0)
             }
+            WM_TRAY_STATUS => {
+                handle_status_update(hwnd, wparam);
+                LRESULT(0)
+            }
             WM_DESTROY => {
                 log::debug!("Tray window WM_DESTROY received");
                 PostQuitMessage(0);
@@ -631,6 +899,22 @@ impl TrayIcon {
         // Load the application icon
         let icon_handle = load_tray_icon()?;
 
+        // Derive the warning variant; on failure the base icon doubles as the
+        // warning icon (the tooltip and menu still carry the warning text).
+        let warning_icon = match create_warning_icon(icon_handle) {
+            Ok(icon) => icon,
+            Err(e) => {
+                log::warn!(error:% = e; "Failed to create warning tray icon, using base icon");
+                icon_handle
+            }
+        };
+        STATUS_ICONS.with(|s| {
+            *s.borrow_mut() = Some(StatusIcons {
+                normal: icon_handle,
+                warning: warning_icon,
+            });
+        });
+
         // Register the tray icon with the shell
         add_tray_icon(hwnd, icon_handle)?;
 
@@ -691,6 +975,31 @@ impl TrayIcon {
     pub fn sender(&self) -> Sender<BrightnessMessage> {
         self.sender.clone()
     }
+
+    /// Returns a cross-thread handle for posting status updates.
+    #[must_use]
+    pub fn status_handle(&self) -> TrayStatusHandle {
+        TrayStatusHandle(self.hwnd.as_raw().0)
+    }
+}
+
+/// Cross-thread handle for posting degraded-state updates to the tray window.
+///
+/// Wraps the raw window handle value; `PostMessageW` may be called from any
+/// thread and fails harmlessly once the window is gone.
+#[derive(Debug, Clone, Copy)]
+pub struct TrayStatusHandle(isize);
+
+impl TrayStatusHandle {
+    /// Posts the current warnings to the tray thread (fire-and-forget).
+    pub fn notify(self, warnings: HealthWarnings) {
+        let bits = usize::from(warnings.ddc_degraded) | (usize::from(warnings.hotkeys_lost) << 1);
+        unsafe {
+            if let Err(e) = PostMessageW(HWND(self.0), WM_TRAY_STATUS, WPARAM(bits), LPARAM(0)) {
+                log::debug!(error:% = e; "Tray status post failed (tray window gone?)");
+            }
+        }
+    }
 }
 
 impl Drop for TrayIcon {
@@ -698,5 +1007,77 @@ impl Drop for TrayIcon {
         // Remove tray icon from notification area
         remove_tray_icon(self.hwnd.as_raw());
         log::debug!("TrayIcon dropped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tooltip_plain_when_healthy() {
+        assert_eq!(
+            compose_tooltip(HealthWarnings::default()),
+            "Brightness Control"
+        );
+    }
+
+    #[test]
+    fn tooltip_lists_active_warnings() {
+        let ddc = HealthWarnings {
+            ddc_degraded: true,
+            hotkeys_lost: false,
+        };
+        assert_eq!(compose_tooltip(ddc), "Brightness Control – DDC unavailable");
+
+        let keys = HealthWarnings {
+            ddc_degraded: false,
+            hotkeys_lost: true,
+        };
+        assert_eq!(
+            compose_tooltip(keys),
+            "Brightness Control – hotkeys stopped"
+        );
+
+        let both = HealthWarnings {
+            ddc_degraded: true,
+            hotkeys_lost: true,
+        };
+        assert_eq!(
+            compose_tooltip(both),
+            "Brightness Control – DDC unavailable, hotkeys stopped"
+        );
+    }
+
+    #[test]
+    fn menu_warning_lines_match_active_warnings() {
+        assert!(warning_menu_lines(HealthWarnings::default()).is_empty());
+
+        let both = HealthWarnings {
+            ddc_degraded: true,
+            hotkeys_lost: true,
+        };
+        let lines = warning_menu_lines(both);
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("DDC"));
+        assert!(lines[1].contains("Hotkeys"));
+    }
+
+    #[test]
+    fn warning_badge_paints_amber_circle_bottom_right() {
+        const SIZE: usize = 32;
+        let mut pixels = vec![0u8; SIZE * SIZE * 4];
+        paint_warning_badge(&mut pixels, SIZE);
+
+        // Badge center at (3/4, 3/4) of the icon is amber, fully opaque (BGRA).
+        let center = (24 * SIZE + 24) * 4;
+        assert_eq!(&pixels[center..center + 4], &[0x00, 0xB3, 0xFF, 0xFF]);
+
+        // Top-left corner (base image area) stays untouched.
+        assert_eq!(&pixels[0..4], &[0, 0, 0, 0]);
+
+        // Inside the badge bounding box but outside the circle: untouched.
+        let outside = (31 * SIZE + 16) * 4;
+        assert_eq!(&pixels[outside..outside + 4], &[0, 0, 0, 0]);
     }
 }

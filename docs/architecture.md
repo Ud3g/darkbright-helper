@@ -690,6 +690,10 @@ restart attempt) latches into a logged give-up state until the app is
 restarted. The tray and power threads remain unsupervised by design — both are
 non-fatal conveniences.
 
+Both degraded states — DDC disabled and hotkeys given up — are surfaced to the
+user through the tray icon, tooltip, and menu (see §13, "Degraded-State
+Indicator"), not just the log.
+
 ### 13. System Tray
 
 The application runs as a background process with a system tray icon for user interaction.
@@ -704,20 +708,46 @@ The application runs as a background process with a system tray icon for user in
 **Context Menu Structure:**
 
 ```
-┌─────────────────────────────────┐
-│ DEL U2722D: 🕶 0% 🔆 50%        │  ← Monitor status (disabled/info only)
-│ LG 27UK850: 🕶 0% 🔆 75%        │
-│─────────────────────────────────│
-│ Usage                           │  → Opens usage instructions window
-│ Settings                        │  → Opens config.json in default editor
-│ Quit Brightness Control         │  → Graceful shutdown
-└─────────────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│ ⚠ DDC unavailable — press a brightness hotkey…  │  ← Warnings (only while degraded)
+│─────────────────────────────────────────────────│
+│ DEL U2722D: 🕶 0% 🔆 50%                        │  ← Monitor status (disabled/info only)
+│ LG 27UK850: 🕶 0% 🔆 75%                        │
+│─────────────────────────────────────────────────│
+│ Usage                                           │  → Opens usage instructions window
+│ Settings                                        │  → Opens config.json in default editor
+│ Quit Brightness Control                         │  → Graceful shutdown
+│─────────────────────────────────────────────────│
+│ Brightness Control v0.8.0                       │  ← Version (disabled/info only)
+└─────────────────────────────────────────────────┘
 ```
 
 **Monitor Status Rows:**
 - Displayed at the top of the menu as disabled (non-clickable) items
 - Show current overlay opacity (🕶) and hardware brightness (🔆) for each monitor
 - Updated each time the menu is opened via `TrayMenuOpening` request/response
+
+**Degraded-State Indicator:**
+
+The two supervision give-up states (§12) — DDC disabled and hotkeys lost — are
+visible in the tray through two complementary paths:
+
+- **Pull (menu):** `TrayMenuData` carries a `HealthWarnings` snapshot; while a
+  warning is active the menu opens with grayed warning lines at the very top
+  ("⚠ DDC unavailable — press a brightness hotkey to retry", "⚠ Hotkeys
+  stopped working — restart the app"). Always current because the menu is
+  populated on open.
+- **Push (icon + tooltip):** the main loop compares the controller's
+  `HealthWarnings` each tick and, on a transition, posts a custom window
+  message to the tray thread via `TrayStatusHandle` (`PostMessageW`, safe
+  cross-thread, fire-and-forget). The tray thread then swaps icon and tooltip
+  via `NIM_MODIFY`: while degraded the icon carries an amber corner badge
+  (generated at startup by drawing the base icon into a DIB and painting the
+  badge — no second icon asset), and the tooltip appends the active warnings
+  (e.g. "Brightness Control – DDC unavailable").
+
+Recovery follows §12: DDC warnings clear on user activity or resume (the icon
+reverts automatically); the hotkey warning is latched until the app restarts.
 
 **Usage Window:**
 
@@ -820,5 +850,12 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 3. **Expected**: The monitor's tray row persists — it is still enumerable, just momentarily unreadable — and no ghost pruning occurs
 4. Wake the monitor
 5. **Expected**: DDC reads resume on the next refresh with no special recovery needed
+
+#### Degraded-State Tray Indicator Test
+1. Start the application with `RUST_LOG=debug`
+2. Force a degraded DDC state (e.g. temporarily lower `HUNG_TIMEOUT_LIMIT`/`SET_TIMEOUT` in a test build and use a monitor/cable that drops DDC, or unplug all DDC-capable monitors and adjust repeatedly until "disabling DDC" is logged)
+3. **Expected**: The tray icon gains an amber corner badge; hovering shows "Brightness Control – DDC unavailable"; the menu opens with the grayed "⚠ DDC unavailable" line at the top; the menu's bottom line shows the running version
+4. Press a brightness hotkey (user activity is the recovery signal)
+5. **Expected**: Log shows "Recovering from degraded DDC state"; icon, tooltip, and menu revert to normal
 
 ---

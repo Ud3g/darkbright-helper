@@ -351,6 +351,15 @@ pub struct TrayMonitorInfo {
     pub overlay_opacity: u8,
 }
 
+/// Degraded-subsystem warnings surfaced to the user via the tray icon/menu.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HealthWarnings {
+    /// DDC is disabled after respawn backoff or a diagnosed worker hang.
+    pub ddc_degraded: bool,
+    /// The hotkey thread died repeatedly and supervision gave up.
+    pub hotkeys_lost: bool,
+}
+
 /// Data sent from the main thread to the tray thread for menu population.
 #[derive(Debug, Clone)]
 pub struct TrayMenuData {
@@ -360,6 +369,8 @@ pub struct TrayMenuData {
     pub hotkey_up: String,
     /// Configured hotkey string for brightness down (e.g., "Ctrl+Shift+Down").
     pub hotkey_down: String,
+    /// Active degraded-subsystem warnings to show in the menu.
+    pub warnings: HealthWarnings,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

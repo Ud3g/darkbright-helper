@@ -16,8 +16,8 @@ use crate::core::reconcile::{
     SET_TIMEOUT,
 };
 use crate::core::state::{
-    BrightnessMessage, DdcCommand, MonitorId, MonitorState, SetOutcome, TrayMenuData,
-    TrayMonitorInfo, generate_display_names,
+    BrightnessMessage, DdcCommand, HealthWarnings, MonitorId, MonitorState, SetOutcome,
+    TrayMenuData, TrayMonitorInfo, generate_display_names,
 };
 use crate::error::{BrightnessError, Result};
 
@@ -143,6 +143,8 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     consecutive_set_timeouts: u32,
     /// True when DDC is disabled after respawn backoff or a diagnosed hang.
     ddc_disabled: bool,
+    /// True once hotkey supervision gave up; latched until app restart.
+    hotkeys_lost: bool,
     /// Monitor whose state the OSD is currently showing (for error restyling).
     osd_monitor: Option<MonitorId>,
 }
@@ -178,6 +180,7 @@ where
             last_health_check: now,
             consecutive_set_timeouts: 0,
             ddc_disabled: false,
+            hotkeys_lost: false,
             osd_monitor: None,
         }
     }
@@ -185,6 +188,20 @@ where
     /// Asks the supervised DDC worker to shut down.
     pub fn shutdown_worker(&self) {
         self.ddc.shutdown();
+    }
+
+    /// Records that hotkey supervision gave up (latched until app restart).
+    pub fn set_hotkeys_lost(&mut self) {
+        self.hotkeys_lost = true;
+    }
+
+    /// Returns the currently active degraded-subsystem warnings.
+    #[must_use]
+    pub fn health_warnings(&self) -> HealthWarnings {
+        HealthWarnings {
+            ddc_degraded: self.ddc_disabled,
+            hotkeys_lost: self.hotkeys_lost,
+        }
     }
 
     /// Requests a refresh of monitor list and brightness values.
@@ -751,6 +768,7 @@ where
             monitors,
             hotkey_up: self.config.hotkeys.brightness_up.clone(),
             hotkey_down: self.config.hotkeys.brightness_down.clone(),
+            warnings: self.health_warnings(),
         }
     }
 }
@@ -1610,6 +1628,53 @@ mod tests {
             vec!["DEL U2722D", "PHL 346B1C"],
             "monitor list must be in stable, sorted order regardless of HashMap iteration"
         );
+    }
+
+    #[test]
+    fn tray_menu_data_reports_ddc_degraded() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.ddc_disabled = true;
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+
+        let data = reply_rx.try_recv().expect("menu data sent");
+        assert!(data.warnings.ddc_degraded);
+        assert!(!data.warnings.hotkeys_lost);
+    }
+
+    #[test]
+    fn tray_menu_data_reports_hotkeys_lost_latch() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.set_hotkeys_lost();
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+
+        let data = reply_rx.try_recv().expect("menu data sent");
+        assert!(data.warnings.hotkeys_lost);
+        assert!(!data.warnings.ddc_degraded);
+    }
+
+    #[test]
+    fn hotkeys_lost_latch_survives_ddc_recovery() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+        c.ddc_disabled = true;
+        c.set_hotkeys_lost();
+
+        // User activity clears the degraded DDC state, but a dead hotkey
+        // thread cannot come back without an app restart.
+        c.handle_adjust(None, 10, base).unwrap();
+
+        let warnings = c.health_warnings();
+        assert!(!warnings.ddc_degraded, "activity recovers DDC");
+        assert!(warnings.hotkeys_lost, "hotkey give-up is latched");
     }
 
     #[test]
