@@ -681,6 +681,16 @@ recovers on user activity (a hotkey adjustment) or on system resume.
 | `RESPAWN_MAX` / `RESPAWN_WINDOW` | 3 / 60 s | Respawn backoff before disabling DDC |
 | `HUNG_TIMEOUT_LIMIT` | 3 | Consecutive set timeouts before diagnosing a hang |
 
+**Hotkey thread liveness.** The hotkey thread — the app's primary input — gets
+the same treatment: its message loop logs both exit paths (`WM_QUIT` and a
+`GetMessageW` error), and the main loop polls its `JoinHandle::is_finished()`.
+A dead hotkey thread is restarted (fresh message window, hotkeys re-registered)
+under a `RespawnGate` with the same `RESPAWN_MAX`/`RESPAWN_WINDOW` backoff:
+deaths spaced apart restart indefinitely, a rapid crash loop (or a failed
+restart attempt) latches into a logged give-up state until the app is
+restarted. The tray and power threads remain unsupervised by design — both are
+non-fatal conveniences.
+
 ### 13. System Tray
 
 The application runs as a background process with a system tray icon for user interaction.

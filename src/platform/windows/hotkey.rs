@@ -390,7 +390,24 @@ impl HotkeyManager {
             // > 0: Message retrieved
             // 0: WM_QUIT received
             // -1: Error
-            while GetMessageW(&raw mut msg, HWND::default(), 0, 0).0 > 0 {
+            //
+            // Both exit paths are logged: when this loop ends, the hotkey
+            // thread dies and the app loses its primary input, so the exit
+            // must never be silent. The main loop's liveness check detects
+            // the dead thread and attempts a restart.
+            loop {
+                let ret = GetMessageW(&raw mut msg, HWND::default(), 0, 0).0;
+                if ret == 0 {
+                    log::info!("Hotkey message loop received WM_QUIT, exiting");
+                    break;
+                }
+                if ret == -1 {
+                    log::error!(
+                        error:% = last_error_as_brightness_error("GetMessageW");
+                        "Hotkey message loop failed, exiting"
+                    );
+                    break;
+                }
                 if msg.message == WM_HOTKEY {
                     // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey.
                     // Cast is safe as we only register small positive IDs (1-4).

@@ -16,6 +16,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use darkbright_helper::core::config::{Config, ConfigLoadOutcome};
 use darkbright_helper::core::controller::Controller;
+use darkbright_helper::core::reconcile::{
+    RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate,
+};
 use darkbright_helper::core::state::BrightnessMessage;
 use darkbright_helper::platform::windows::CursorLocator;
 use darkbright_helper::platform::windows::hotkey::{
@@ -272,7 +275,12 @@ fn spawn_tray_thread(tx: mpsc::Sender<BrightnessMessage>) {
     });
 }
 
-fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> Result<()> {
+/// Spawns the hotkey thread and returns its `JoinHandle` for liveness
+/// supervision. Blocks until the thread reports its registration result.
+fn start_hotkey_thread(
+    config: &Config,
+    tx: mpsc::Sender<BrightnessMessage>,
+) -> Result<std::thread::JoinHandle<()>> {
     // Parse the primary hotkeys before spawning the thread. Config loading
     // already repaired invalid strings to defaults, so a failure here is a
     // defensive guard, not an expected path.
@@ -288,7 +296,7 @@ fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> 
     let (result_tx, result_rx) = mpsc::channel::<Result<()>>();
 
     let config_clone = config.clone();
-    std::thread::spawn(move || {
+    let handle = std::thread::spawn(move || {
         // Create hotkey manager on THIS thread (creates message window here)
         let mut hotkey_manager = match HotkeyManager::new(tx, config_clone.brightness.step_percent)
         {
@@ -362,7 +370,10 @@ fn start_hotkey_thread(config: &Config, tx: mpsc::Sender<BrightnessMessage>) -> 
     });
 
     // Wait for registration result from hotkey thread
-    result_rx.recv().map_err(|_| BrightnessError::ChannelRecv)?
+    result_rx
+        .recv()
+        .map_err(|_| BrightnessError::ChannelRecv)??;
+    Ok(handle)
 }
 
 // Sequential startup wiring (DPI, config, threads, controller, main loop,
@@ -446,23 +457,30 @@ fn main() {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), TRUE);
     }
 
-    if let Err(e) = start_hotkey_thread(&config, tx) {
-        log::error!(error:% = e; "Fatal error during hotkey registration");
-        let config_path = Config::default_path().map_or_else(
-            || "config file".to_string(),
-            |p| p.to_string_lossy().to_string(),
-        );
-        let message = format!(
-            "Failed to register hotkeys:\n\n\
-             {e}\n\n\
-             Possible solutions:\n\
-             • Close other applications that might be using these hotkeys\n\
-             • Change the hotkey configuration in:\n  {config_path}\n\
-             • Restart the application after making changes"
-        );
-        show_error_message_box("Brightness Control - Hotkey Error", &message);
-        return;
-    }
+    let mut hotkey_handle = match start_hotkey_thread(&config, tx.clone()) {
+        Ok(handle) => handle,
+        Err(e) => {
+            log::error!(error:% = e; "Fatal error during hotkey registration");
+            let config_path = Config::default_path().map_or_else(
+                || "config file".to_string(),
+                |p| p.to_string_lossy().to_string(),
+            );
+            let message = format!(
+                "Failed to register hotkeys:\n\n\
+                 {e}\n\n\
+                 Possible solutions:\n\
+                 • Close other applications that might be using these hotkeys\n\
+                 • Change the hotkey configuration in:\n  {config_path}\n\
+                 • Restart the application after making changes"
+            );
+            show_error_message_box("Brightness Control - Hotkey Error", &message);
+            return;
+        }
+    };
+    // Hotkeys are the app's primary input: if their thread dies (message
+    // window destroyed, GetMessageW error), restart it — with the same
+    // crash-loop backoff the DDC worker gets.
+    let mut hotkey_gate = RespawnGate::new(RESPAWN_WINDOW, RESPAWN_MAX);
 
     // Main Loop
     log::info!("Entering main event loop");
@@ -474,6 +492,33 @@ fn main() {
         let now = Instant::now();
         controller.check_periodic_refresh(now);
         controller.supervise_and_watchdog(now);
+
+        if hotkey_handle.is_finished() {
+            match hotkey_gate.on_death(now) {
+                RespawnDecision::Attempt => {
+                    log::error!("Hotkey thread died; attempting restart");
+                    match start_hotkey_thread(&config, tx.clone()) {
+                        Ok(handle) => {
+                            hotkey_handle = handle;
+                            log::info!("Hotkey thread restarted");
+                        }
+                        Err(e) => {
+                            hotkey_gate.record_spawn_failure();
+                            log::error!(
+                                error:% = e;
+                                "Hotkey thread restart failed; hotkeys unavailable until app restart"
+                            );
+                        }
+                    }
+                }
+                RespawnDecision::GaveUpNow => {
+                    log::error!(
+                        "Hotkey thread died repeatedly; giving up — hotkeys unavailable until app restart"
+                    );
+                }
+                RespawnDecision::AlreadyGaveUp => {}
+            }
+        }
 
         // Check for brightness messages with a short timeout
         match rx.recv_timeout(Duration::from_millis(16)) {

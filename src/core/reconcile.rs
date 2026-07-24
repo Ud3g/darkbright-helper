@@ -47,6 +47,68 @@ pub fn respawn_allowed(recent: &[Instant], now: Instant, window: Duration, max: 
     count < max
 }
 
+/// Decision returned by [`RespawnGate::on_death`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RespawnDecision {
+    /// A restart attempt is permitted; the death was recorded.
+    Attempt,
+    /// Too many deaths within the window — the gate gives up now. Returned
+    /// exactly once so the caller can log/surface it without spamming.
+    GaveUpNow,
+    /// The gate already gave up earlier; do nothing.
+    AlreadyGaveUp,
+}
+
+/// Restart policy for a supervised thread: allows respawns until a crash
+/// loop is detected (more than `max` deaths within `window`), then latches
+/// into a permanent given-up state — the same treatment the DDC worker gets
+/// when its respawn backoff is exceeded.
+///
+/// Deaths spaced further apart than `window` never latch; only rapid
+/// crash loops do.
+#[derive(Debug)]
+pub struct RespawnGate {
+    recent: Vec<Instant>,
+    gave_up: bool,
+    window: Duration,
+    max: usize,
+}
+
+impl RespawnGate {
+    /// Creates a gate permitting at most `max` restarts per sliding `window`.
+    #[must_use]
+    pub fn new(window: Duration, max: usize) -> Self {
+        Self {
+            recent: Vec::new(),
+            gave_up: false,
+            window,
+            max,
+        }
+    }
+
+    /// Reports a detected thread death and decides whether to restart.
+    pub fn on_death(&mut self, now: Instant) -> RespawnDecision {
+        if self.gave_up {
+            return RespawnDecision::AlreadyGaveUp;
+        }
+        self.recent
+            .retain(|&t| now.saturating_duration_since(t) < self.window);
+        if respawn_allowed(&self.recent, now, self.window, self.max) {
+            self.recent.push(now);
+            RespawnDecision::Attempt
+        } else {
+            self.gave_up = true;
+            RespawnDecision::GaveUpNow
+        }
+    }
+
+    /// Latches the gate after a restart attempt itself failed — retrying
+    /// would fail the same way, so no further attempts are made.
+    pub fn record_spawn_failure(&mut self) {
+        self.gave_up = true;
+    }
+}
+
 /// Result of a supervisor respawn attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RespawnOutcome {
@@ -193,6 +255,58 @@ mod tests {
     fn respawn_allowed_permits_empty_history() {
         let now = Instant::now();
         assert!(respawn_allowed(&[], now, Duration::from_secs(60), 3));
+    }
+
+    #[test]
+    fn respawn_gate_allows_attempts_until_max_in_window() {
+        let base = Instant::now();
+        let mut gate = RespawnGate::new(Duration::from_secs(60), 3);
+
+        assert_eq!(gate.on_death(base), RespawnDecision::Attempt);
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(1)),
+            RespawnDecision::Attempt
+        );
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(2)),
+            RespawnDecision::Attempt
+        );
+        // Fourth death within the window: crash loop, give up once…
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(3)),
+            RespawnDecision::GaveUpNow
+        );
+        // …and stay given up silently afterwards.
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(4)),
+            RespawnDecision::AlreadyGaveUp
+        );
+    }
+
+    #[test]
+    fn respawn_gate_allows_spaced_deaths_indefinitely() {
+        let base = Instant::now();
+        let mut gate = RespawnGate::new(Duration::from_secs(60), 3);
+
+        // Deaths spaced beyond the window never accumulate into a crash loop.
+        for i in 0..10 {
+            let now = base + Duration::from_secs(120 * i);
+            assert_eq!(gate.on_death(now), RespawnDecision::Attempt);
+        }
+    }
+
+    #[test]
+    fn respawn_gate_latches_after_spawn_failure() {
+        let base = Instant::now();
+        let mut gate = RespawnGate::new(Duration::from_secs(60), 3);
+
+        assert_eq!(gate.on_death(base), RespawnDecision::Attempt);
+        // The restart attempt itself failed: retrying would fail the same way.
+        gate.record_spawn_failure();
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(1)),
+            RespawnDecision::AlreadyGaveUp
+        );
     }
 
     #[test]
