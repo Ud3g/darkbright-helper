@@ -4,10 +4,12 @@
 //!
 //! - [`brightness`] - Brightness calculation and value mapping
 //! - [`config`] - Configuration types and file handling
+//! - [`controller`] - Message-driven orchestration behind platform seams
 //! - [`state`] - Application state and inter-thread messages
 
 pub mod brightness;
 pub mod config;
+pub mod controller;
 pub mod reconcile;
 pub mod state;
 

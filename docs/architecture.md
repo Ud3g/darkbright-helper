@@ -31,6 +31,7 @@ src/
 ├── core/                 # Platform-agnostic logic
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
+│   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc>: message-driven orchestration behind OSD/overlay/DDC/locator seams, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
 │   └── state.rs          # Application state, messages, DDC commands
 └── platform/
     ├── mod.rs            # Platform trait definitions
@@ -494,7 +495,7 @@ The application maintains cached brightness values for instant OSD response. The
 
 **Behavior:**
 
-1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead.
+1. **Periodic Refresh**: Background poll every N seconds (0 = disabled). Conservative default balances freshness with DDC overhead. Gated on whether the last refresh *enumerated* any monitor (identification succeeded, whether or not the brightness read that followed did), not merely whether one was *readable* — so the cadence keeps running while monitors are enumerable but unreadable (e.g. undocked), which is what lets ghost pruning below complete without any user activity. An aborted refresh (a failed send to the worker, or a watchdog timeout) freezes the cadence the same way an empty enumerated set does — `RefreshTracker::abort()` clears the same flag — until a refresh completes with something enumerated again.
 
 2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
 
@@ -509,6 +510,44 @@ avoids DDC bus congestion when multiple triggers fire simultaneously (e.g.,
 resume + periodic + inactivity at once). If a refresh result never returns
 (hung or dead worker), a watchdog aborts it after `REFRESH_TIMEOUT` so
 refreshes are never permanently suppressed.
+
+**Enumerated vs. Readable Monitors:**
+
+Each `DdcRefreshResult` reports two sets: `monitors`, the brightness values
+that were successfully read, and `enumerated`, every monitor whose EDID
+identification succeeded this pass, regardless of whether the brightness
+read that followed it did. The ids in `enumerated` are always a superset of
+the ids in `monitors`, and the set is empty when nothing could be identified: either
+the top-level enumeration call failed outright, or it succeeded but every
+discovered monitor's individual identity read failed. The distinction
+matters because "unreadable" is common and often transient — standby, an
+EDID-emulating KVM, a DDC hiccup surviving all 3 retries — while
+"unenumerated" is a much closer proxy for "not physically present."
+
+**Ghost Pruning:**
+
+A monitor's absence from a current-generation, non-empty `enumerated` set is
+tracked in its `missing_since` field: the first miss stamps the timestamp,
+and a later miss showing the absence has been continuous for at least
+`PRUNE_ABSENCE_WINDOW` (90s) prunes the monitor — its state, its overlay
+window, and its `id_cache` entries are all removed. A stale or aborted
+refresh generation, or an empty `enumerated` set, carries no evidence and
+leaves `missing_since` untouched: the absence of information is not
+evidence of absence.
+
+All accumulated absence evidence is discarded on `SystemResumed` and on a
+DDC worker respawn, because a refresh burst around either event can observe
+a monitor missing for a few seconds while, for example, a dock's DP link is
+still training — absence evidence must span an undisturbed window, not
+survive a burst.
+
+Pruning forgets deliberately: cached brightness and overlay dim level do not
+survive a > 90s absence. A monitor that reappears after being pruned starts
+from a fresh state read from hardware, with its overlay back at 0%. Because
+a hotkey press on a pruned (now-unknown) monitor would otherwise stay dead
+until the next periodic or inactivity refresh, the unknown-monitor path in
+the adjust handler also triggers a refresh (at most one in flight), so
+recovery works regardless of which other monitors are still readable.
 
 **Configuration:**
 
@@ -577,10 +616,11 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
 **Cache Management:**
 ```rust
 struct MonitorState {
-    cached_brightness: u8,         // Last confirmed DDC value
-    pending: Option<PendingSet>,   // Optimistic value + seq + sent-at, awaiting confirmation
-    overlay_opacity: u8,           // Current overlay dimming level
+    cached_brightness: u8,          // Last confirmed DDC value
+    pending: Option<PendingSet>,    // Optimistic value + seq + sent-at, awaiting confirmation
+    overlay_opacity: u8,            // Current overlay dimming level
     last_refresh: Instant,
+    missing_since: Option<Instant>, // First observed miss from the enumerated set; None while present
 }
 ```
 
@@ -689,10 +729,11 @@ Key test areas:
 - **Config validation**: Ensures invalid values are clamped to defaults
 - **Brightness calculations**: Tests adjustment logic in `core/brightness.rs`
 - **State management**: Tests `MonitorState` transitions
+- **Controller orchestration**: `core/controller.rs` drives the optimistic-update, supervision, watchdog, refresh, and ghost-pruning sequences against fakes for the OSD/overlay/DDC/locator seams — the message-driven control flow is unit-tested on any host, no Windows target or physical monitor required
 
 ### Integration Testing (Manual)
 
-Since DDC/CI requires physical monitor hardware, refresh functionality must be tested manually:
+Controller orchestration is unit-tested (see above); what remains hardware-dependent and must be tested manually is DDC/CI I/O against real monitors, the DDC worker's EDID enumeration (including the `enumerated` set it reports), and topology changes:
 
 #### Periodic Refresh Test
 1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config
@@ -719,5 +760,21 @@ Since DDC/CI requires physical monitor hardware, refresh functionality must be t
 1. Set both `periodic_seconds` and `inactivity_seconds` to low values
 2. Trigger conditions where multiple refresh triggers fire simultaneously
 3. **Expected**: Only one refresh executes (log shows single "Requesting monitor refresh")
+
+#### Unplug/Replug (Ghost Pruning) Test
+1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config so the 90s absence window is reached quickly
+2. Start the application with `RUST_LOG=debug` and **at least two monitors connected** — unplugging the only monitor would empty `enumerated` entirely, which freezes the periodic cadence (see above) before 90 seconds of absence evidence can accumulate; a second monitor must stay enumerable for the whole wait
+3. Unplug one monitor (or switch it away on a non-EDID-emulating KVM), leaving the other connected
+4. Wait for periodic refreshes to observe the absence continuously for at least 90 seconds
+5. **Expected**: Log shows "Pruned monitor absent from topology"; the tray menu no longer lists the monitor; a dimming overlay left active on it, if any, is removed
+6. Replug the monitor
+7. **Expected**: The monitor reappears with brightness read fresh from hardware and overlay back at 0% — the prior dim level is not restored
+
+#### Monitor Standby Cycle Test
+1. Start the application with `RUST_LOG=debug`
+2. Put one monitor into standby via its own power button (not system sleep) while others stay awake
+3. **Expected**: The monitor's tray row persists — it is still enumerable, just momentarily unreadable — and no ghost pruning occurs
+4. Wake the monitor
+5. **Expected**: DDC reads resume on the next refresh with no special recovery needed
 
 ---

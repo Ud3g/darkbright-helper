@@ -131,6 +131,7 @@ impl DdcWorker {
         self.handle_cache.clear();
 
         let mut results: Vec<(MonitorId, u8)> = Vec::new();
+        let mut enumerated: Vec<MonitorId> = Vec::new();
 
         // Enumerate monitors
         let hmonitors = match enumerate_monitors() {
@@ -138,18 +139,18 @@ impl DdcWorker {
             Err(e) => {
                 log::error!(error:% = e; "Failed to enumerate monitors");
                 // Send empty result
-                self.send_refresh_result(generation, results);
+                self.send_refresh_result(generation, results, enumerated);
                 return;
             }
         };
 
         for hmonitor in hmonitors {
-            if let Err(e) = self.process_monitor(hmonitor, &mut results) {
+            if let Err(e) = self.process_monitor(hmonitor, &mut results, &mut enumerated) {
                 log::warn!(error:% = e; "Failed to process monitor");
             }
         }
 
-        self.send_refresh_result(generation, results);
+        self.send_refresh_result(generation, results, enumerated);
     }
 
     /// Processes a single monitor during refresh.
@@ -157,9 +158,14 @@ impl DdcWorker {
         &mut self,
         hmonitor: HMONITOR,
         results: &mut Vec<(MonitorId, u8)>,
+        enumerated: &mut Vec<MonitorId>,
     ) -> crate::Result<()> {
         // Get monitor ID from EDID
         let monitor_id = get_monitor_id(hmonitor)?;
+        // Identified ⇒ physically present. Push before opening the physical
+        // handle: a handle-open or brightness-read failure below must count
+        // as unreadable, not as absent from the topology.
+        enumerated.push(monitor_id.clone());
         self.handle_cache.insert(hmonitor.0, monitor_id.clone());
 
         // Get physical monitors for DDC
@@ -189,10 +195,16 @@ impl DdcWorker {
     }
 
     /// Sends refresh results back to the main thread.
-    fn send_refresh_result(&self, generation: u64, monitors: Vec<(MonitorId, u8)>) {
+    fn send_refresh_result(
+        &self,
+        generation: u64,
+        monitors: Vec<(MonitorId, u8)>,
+        enumerated: Vec<MonitorId>,
+    ) {
         let msg = BrightnessMessage::DdcRefreshResult {
             generation,
             monitors,
+            enumerated,
         };
 
         if let Err(e) = self.resp_tx.send(msg) {
@@ -201,14 +213,7 @@ impl DdcWorker {
     }
 }
 
-/// Result of a supervisor respawn attempt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RespawnOutcome {
-    /// A fresh worker thread was spawned.
-    Respawned,
-    /// Too many respawns within the backoff window; the worker is left dead.
-    BackoffExceeded,
-}
+pub use crate::core::reconcile::RespawnOutcome;
 
 /// Owns the DDC worker thread and can respawn it after a confirmed death.
 ///
@@ -286,6 +291,24 @@ impl DdcSupervisor {
     /// Asks the worker to shut down (best-effort; does not join).
     pub fn shutdown(&self) {
         let _ = self.cmd_tx.send(DdcCommand::Shutdown);
+    }
+}
+
+impl crate::core::controller::DdcPort for DdcSupervisor {
+    fn send(&mut self, cmd: DdcCommand) -> crate::Result<()> {
+        DdcSupervisor::send(self, cmd).map_err(|_| crate::BrightnessError::ChannelSend)
+    }
+    fn is_alive(&self) -> bool {
+        DdcSupervisor::is_alive(self)
+    }
+    fn respawn(&mut self, now: Instant) -> RespawnOutcome {
+        DdcSupervisor::respawn(self, now)
+    }
+    fn clear_backoff(&mut self) {
+        DdcSupervisor::clear_backoff(self);
+    }
+    fn shutdown(&self) {
+        DdcSupervisor::shutdown(self);
     }
 }
 

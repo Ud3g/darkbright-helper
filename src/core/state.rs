@@ -203,6 +203,12 @@ pub struct MonitorState {
     pub overlay_opacity: u8,
     /// Timestamp of last successful DDC read/write.
     pub last_refresh: Instant,
+    /// First observation of this monitor's current run of enumeration absence.
+    ///
+    /// `None` while the monitor is present (or absence was never observed).
+    /// Stamped by the controller on the first current-generation refresh that
+    /// does not enumerate the monitor; a later miss ≥ the prune window prunes.
+    pub missing_since: Option<Instant>,
 }
 
 impl MonitorState {
@@ -214,6 +220,7 @@ impl MonitorState {
             pending: None,
             overlay_opacity: 0,
             last_refresh: Instant::now(),
+            missing_since: None,
         }
     }
 
@@ -350,6 +357,10 @@ pub enum BrightnessMessage {
         generation: u64,
         /// List of (`monitor_id`, brightness) pairs for all detected monitors.
         monitors: Vec<(MonitorId, u8)>,
+        /// Every monitor whose identification succeeded this pass, readable or
+        /// not. Superset of `monitors`' ids; empty when enumeration itself
+        /// failed. Presence proof for absence-based pruning.
+        enumerated: Vec<MonitorId>,
     },
     /// Adjust brightness by a relative delta.
     Adjust {
@@ -490,6 +501,12 @@ mod pending_reconcile_tests {
     fn pending_timed_out_false_when_idle() {
         let s = state();
         assert!(!s.pending_timed_out(Instant::now(), SET_TIMEOUT));
+    }
+
+    #[test]
+    fn new_state_has_no_absence_evidence() {
+        let s = MonitorState::new(50);
+        assert!(s.missing_since.is_none());
     }
 }
 
