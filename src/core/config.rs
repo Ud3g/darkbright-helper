@@ -221,6 +221,30 @@ impl Default for RefreshConfig {
 // Configuration Loading and Saving
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// How [`Config::load_or_recover`] obtained its result.
+///
+/// Returned alongside the config so the caller can log or surface the
+/// outcome; the recovery decision itself stays in testable core code.
+#[derive(Debug)]
+pub enum ConfigLoadOutcome {
+    /// The primary config file parsed successfully.
+    Loaded,
+    /// The primary file was unreadable or corrupt; settings were recovered
+    /// from the `.bak` sibling written after the last successful load.
+    RecoveredFromBackup {
+        /// Why the primary file could not be used.
+        primary_error: BrightnessError,
+    },
+    /// Neither the primary file nor a backup was usable; defaults were
+    /// substituted.
+    DefaultsSubstituted {
+        /// Why the primary file could not be used.
+        primary_error: BrightnessError,
+        /// Why the backup could not be used, or `None` if none existed.
+        backup_error: Option<BrightnessError>,
+    },
+}
+
 impl Config {
     /// Returns the default configuration file path.
     ///
@@ -268,6 +292,96 @@ impl Config {
         Ok(config)
     }
 
+    /// Loads configuration from `path`, recovering from the `.bak` sibling
+    /// when the primary file is unreadable or corrupt.
+    ///
+    /// On a successful load the backup is refreshed (best-effort) so it
+    /// always holds the last settings that parsed successfully — regardless
+    /// of whether the primary file was last written by the app or edited by
+    /// hand. On failure the corrupt primary file is left untouched for
+    /// inspection. Never fails: when neither file is usable, defaults are
+    /// returned, per the "invalid config is never fatal" contract.
+    ///
+    /// # Panics
+    ///
+    /// Panics if JSON serialization fails while refreshing the backup.
+    #[must_use]
+    pub fn load_or_recover(path: &std::path::Path) -> (Self, ConfigLoadOutcome) {
+        match Self::load_from(path) {
+            Ok(config) => {
+                config.refresh_backup(path);
+                (config, ConfigLoadOutcome::Loaded)
+            }
+            Err(primary_error) => {
+                let backup = Self::backup_path(path);
+                if backup.exists() {
+                    match Self::load_from(&backup) {
+                        Ok(config) => (
+                            config,
+                            ConfigLoadOutcome::RecoveredFromBackup { primary_error },
+                        ),
+                        Err(backup_error) => (
+                            Self::default(),
+                            ConfigLoadOutcome::DefaultsSubstituted {
+                                primary_error,
+                                backup_error: Some(backup_error),
+                            },
+                        ),
+                    }
+                } else {
+                    (
+                        Self::default(),
+                        ConfigLoadOutcome::DefaultsSubstituted {
+                            primary_error,
+                            backup_error: None,
+                        },
+                    )
+                }
+            }
+        }
+    }
+
+    /// Returns the backup sibling of `path` (`config.json` → `config.json.bak`).
+    fn backup_path(path: &std::path::Path) -> PathBuf {
+        Self::sibling_with_suffix(path, ".bak")
+    }
+
+    /// Returns `path` with `suffix` appended to its file name
+    /// (`config.json` + `.tmp` → `config.json.tmp`).
+    fn sibling_with_suffix(path: &std::path::Path, suffix: &str) -> PathBuf {
+        let mut name = path.file_name().map_or_else(
+            || std::ffi::OsString::from("config.json"),
+            std::ffi::OsStr::to_os_string,
+        );
+        name.push(suffix);
+        path.with_file_name(name)
+    }
+
+    /// Atomically replaces `path` with `contents`: writes a `.tmp` sibling,
+    /// then renames it over the target. The rename is atomic on a single
+    /// volume, so a crash, power loss, or full disk mid-write can never leave
+    /// a truncated file at `path` — the old content survives instead.
+    fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+        let tmp = Self::sibling_with_suffix(path, ".tmp");
+        std::fs::write(&tmp, contents)?;
+        std::fs::rename(&tmp, path).inspect_err(|_| {
+            // Don't leave an orphaned temp file behind on a failed rename.
+            let _ = std::fs::remove_file(&tmp);
+        })
+    }
+
+    /// Best-effort refresh of the backup file with this config's contents.
+    /// A failure is logged and swallowed — backup maintenance must never
+    /// break startup.
+    fn refresh_backup(&self, path: &std::path::Path) {
+        let backup = Self::backup_path(path);
+        let contents =
+            serde_json::to_string_pretty(self).expect("Config serialization should never fail");
+        if let Err(e) = Self::write_atomically(&backup, &contents) {
+            log::warn!(error:% = e; "Failed to refresh config backup");
+        }
+    }
+
     /// Saves configuration to the default path.
     ///
     /// Creates the parent directory if it doesn't exist.
@@ -290,6 +404,9 @@ impl Config {
 
     /// Saves configuration to a specific path.
     ///
+    /// The write is atomic (temp file + rename), so an interrupted save
+    /// leaves the previous file intact rather than a truncated one.
+    ///
     /// # Errors
     ///
     /// Returns `ConfigWrite` if the file cannot be written.
@@ -309,7 +426,8 @@ impl Config {
         let contents =
             serde_json::to_string_pretty(self).expect("Config serialization should never fail");
 
-        std::fs::write(path, contents).map_err(|e| BrightnessError::config_write(&path_str, e))
+        Self::write_atomically(path, &contents)
+            .map_err(|e| BrightnessError::config_write(&path_str, e))
     }
 
     /// Validates configuration values and replaces invalid ones with defaults.
@@ -531,6 +649,157 @@ mod tests {
         assert_eq!(loaded_config.brightness.step_percent, 10);
 
         // Cleanup
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_save_to_replaces_existing_file_and_leaves_no_tmp_residue() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_atomic_save");
+        let _ = fs::remove_dir_all(&test_dir);
+        let config_path = test_dir.join("config.json");
+
+        let mut config = Config::default();
+        config.brightness.step_percent = 7;
+        config.save_to(&config_path).expect("first save");
+        config.brightness.step_percent = 13;
+        config.save_to(&config_path).expect("second save");
+
+        let loaded = Config::load_from(&config_path).expect("load after overwrite");
+        assert_eq!(loaded.brightness.step_percent, 13);
+        assert!(
+            !test_dir.join("config.json.tmp").exists(),
+            "temp file must be consumed by the rename"
+        );
+
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_save_to_failed_rename_cleans_up_tmp() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_atomic_save_fail");
+        let _ = fs::remove_dir_all(&test_dir);
+        // A non-empty directory at the target path makes the final rename
+        // fail, exercising the error path after the temp file was written.
+        let config_path = test_dir.join("config.json");
+        fs::create_dir_all(config_path.join("occupied")).expect("create blocking dir");
+
+        let result = Config::default().save_to(&config_path);
+
+        assert!(result.is_err());
+        assert!(
+            !test_dir.join("config.json.tmp").exists(),
+            "failed save must not leave an orphaned temp file"
+        );
+
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_load_or_recover_prefers_backup_when_primary_corrupt() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_recover_from_backup");
+        let _ = fs::remove_dir_all(&test_dir);
+        fs::create_dir_all(&test_dir).expect("create test dir");
+        let config_path = test_dir.join("config.json");
+
+        let mut backup = Config::default();
+        backup.brightness.step_percent = 17;
+        fs::write(
+            test_dir.join("config.json.bak"),
+            serde_json::to_string_pretty(&backup).expect("serialize"),
+        )
+        .expect("write backup");
+        fs::write(&config_path, "{ this is not json").expect("write corrupt primary");
+
+        let (loaded, outcome) = Config::load_or_recover(&config_path);
+
+        assert_eq!(loaded.brightness.step_percent, 17);
+        assert!(matches!(
+            outcome,
+            ConfigLoadOutcome::RecoveredFromBackup { .. }
+        ));
+
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_load_or_recover_defaults_when_primary_corrupt_and_no_backup() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_recover_no_backup");
+        let _ = fs::remove_dir_all(&test_dir);
+        fs::create_dir_all(&test_dir).expect("create test dir");
+        let config_path = test_dir.join("config.json");
+
+        fs::write(&config_path, "{ this is not json").expect("write corrupt primary");
+
+        let (loaded, outcome) = Config::load_or_recover(&config_path);
+
+        assert_eq!(
+            loaded.brightness.step_percent,
+            Config::default().brightness.step_percent
+        );
+        assert!(matches!(
+            outcome,
+            ConfigLoadOutcome::DefaultsSubstituted {
+                backup_error: None,
+                ..
+            }
+        ));
+
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_load_or_recover_defaults_when_both_corrupt() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_recover_both_corrupt");
+        let _ = fs::remove_dir_all(&test_dir);
+        fs::create_dir_all(&test_dir).expect("create test dir");
+        let config_path = test_dir.join("config.json");
+
+        fs::write(&config_path, "{ this is not json").expect("write corrupt primary");
+        fs::write(test_dir.join("config.json.bak"), "also garbage").expect("write corrupt backup");
+
+        let (loaded, outcome) = Config::load_or_recover(&config_path);
+
+        assert_eq!(
+            loaded.brightness.step_percent,
+            Config::default().brightness.step_percent
+        );
+        assert!(matches!(
+            outcome,
+            ConfigLoadOutcome::DefaultsSubstituted {
+                backup_error: Some(_),
+                ..
+            }
+        ));
+
+        let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn test_load_or_recover_refreshes_backup_after_successful_load() {
+        let test_dir = std::env::temp_dir().join("darkbright_test_backup_refresh");
+        let _ = fs::remove_dir_all(&test_dir);
+        fs::create_dir_all(&test_dir).expect("create test dir");
+        let config_path = test_dir.join("config.json");
+
+        let mut config = Config::default();
+        config.brightness.step_percent = 9;
+        fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&config).expect("serialize"),
+        )
+        .expect("write primary");
+
+        let (loaded, outcome) = Config::load_or_recover(&config_path);
+
+        assert_eq!(loaded.brightness.step_percent, 9);
+        assert!(matches!(outcome, ConfigLoadOutcome::Loaded));
+
+        // The backup must now hold the successfully parsed settings, so a
+        // later corruption of the primary file can be recovered from it.
+        let backup = Config::load_from(&test_dir.join("config.json.bak"))
+            .expect("backup should exist and parse after a successful load");
+        assert_eq!(backup.brightness.step_percent, 9);
+
         let _ = fs::remove_dir_all(test_dir);
     }
 }

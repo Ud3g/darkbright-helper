@@ -290,6 +290,17 @@ Example log output for invalid config:
 - Human-readable for debugging
 - Portable to Linux
 
+**Atomic Writes & Backup Recovery**
+
+Config writes are atomic: the file is written to `config.json.tmp` and then renamed over `config.json` (atomic on a single volume), so a crash, power loss, or full disk mid-write can never leave a truncated file — the previous content survives.
+
+After every *successful* parse at startup, the validated settings are mirrored to `config.json.bak` (also written atomically, best-effort — a backup failure never blocks startup). The backup therefore always holds the last-known-good configuration, including hand-edits that parsed successfully.
+
+When `config.json` is unreadable or corrupt (typically a broken hand-edit via the tray "Settings" entry):
+1. Settings are recovered from `config.json.bak` and a warning is logged — user settings are **not** silently replaced by defaults.
+2. Only when the backup is also missing or corrupt do defaults substitute (logged as error).
+3. The corrupt `config.json` is left untouched in both cases, so the user can inspect and fix their edit; it is not overwritten until the next successful save.
+
 ### 5. Brightness Step Size
 
 | Aspect | Decision | Rationale |

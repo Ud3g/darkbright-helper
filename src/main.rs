@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOWNORMAL, TranslateMessage,
 };
 
-use darkbright_helper::core::config::Config;
+use darkbright_helper::core::config::{Config, ConfigLoadOutcome};
 use darkbright_helper::core::controller::Controller;
 use darkbright_helper::core::state::BrightnessMessage;
 use darkbright_helper::platform::windows::CursorLocator;
@@ -152,16 +152,32 @@ fn pump_windows_messages() {
 fn load_config() -> Config {
     let config_path = Config::default_path();
     match &config_path {
-        Some(path) if path.exists() => match Config::load_from(path) {
-            Ok(cfg) => {
-                log::info!(path:% = path.display(); "Configuration loaded from file");
-                cfg
+        Some(path) if path.exists() => {
+            let (cfg, outcome) = Config::load_or_recover(path);
+            match outcome {
+                ConfigLoadOutcome::Loaded => {
+                    log::info!(path:% = path.display(); "Configuration loaded from file");
+                }
+                ConfigLoadOutcome::RecoveredFromBackup { primary_error } => {
+                    log::warn!(
+                        path:% = path.display(), error:% = primary_error;
+                        "Config file corrupt; settings recovered from backup — fix or delete config.json to stop this warning"
+                    );
+                }
+                ConfigLoadOutcome::DefaultsSubstituted {
+                    primary_error,
+                    backup_error,
+                } => {
+                    log::error!(
+                        path:% = path.display(),
+                        error:% = primary_error,
+                        backup_error:? = backup_error.map(|e| e.to_string());
+                        "Failed to parse config and no usable backup, using defaults"
+                    );
+                }
             }
-            Err(e) => {
-                log::error!(path:% = path.display(), error:% = e; "Failed to parse config, using defaults");
-                Config::default()
-            }
-        },
+            cfg
+        }
         Some(path) => {
             log::info!(path:% = path.display(); "Config file not found, creating default");
             let config = Config::default();
