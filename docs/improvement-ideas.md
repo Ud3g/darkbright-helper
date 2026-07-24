@@ -94,6 +94,17 @@ This document tracks potential future enhancements for the Brightness Control To
 - **Enterprise deployment packages**
   Create deployment packages specifically designed for enterprise environments, including MSI installers, group policy templates, and silent installation options. This would enable IT administrators to deploy the application across large organizations with centralized configuration management.
 
+## 🔧 MAINTENANCE (no user-visible value; revisit periodically)
+**Deliberate technical decisions that should not silently drift:**
+
+- **`windows` crate upgrade (currently pinned at 0.52)**
+  The pin is a deliberate stability choice (decided 2026-07): newer versions change many
+  APIs the FFI layer touches (`HWND` ergonomics, `Result` signatures, cast smoothing), so
+  an upgrade rewrites call sites across `src/platform/windows/`. Treat it as its own
+  undertaking with a full manual test pass (DDC, OSD, overlay, tray, hotkeys, power
+  events) — never as a side effect of another change. Value grows over time: newer
+  versions eliminate workarounds the code currently carries.
+
 ## 📝 LOWEST PRIORITY (High Effort / Low Value)
 **Marketing, documentation, and comprehensive rebranding:**
 

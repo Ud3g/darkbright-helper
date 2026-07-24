@@ -5,7 +5,9 @@ edition = "2024"
 rust-version = "1.87"
 
 [dependencies]
-# Windows API
+# Windows API. Deliberately pinned at 0.52 for stability — an upgrade
+# touches nearly every FFI call site and is treated as its own undertaking
+# (see docs/improvement-ideas.md, Maintenance section), not allowed to drift.
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

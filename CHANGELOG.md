@@ -40,6 +40,9 @@ Rollup of everything landed since 0.7.1.
 - OSD GDI drawing moved into a render layer with RAII resource wrappers.
 - Monitor serial numbers appear only in `debug`-level logs; absolute config
   paths are logged at debug only.
+- A monitor whose brightness read fails during a refresh stays set-capable
+  (its DDC handle is kept), instead of failing with "monitor not found"
+  until the next refresh.
 
 ### Removed
 

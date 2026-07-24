@@ -572,6 +572,13 @@ matters because "unreadable" is common and often transient — standby, an
 EDID-emulating KVM, a DDC hiccup surviving all 3 retries — while
 "unenumerated" is a much closer proxy for "not physically present."
 
+Unreadable-but-enumerated monitors stay *set-capable*: the worker keeps
+their freshly opened DDC handle even when the initial brightness read fails,
+so a later `SetBrightness` is attempted against hardware (confirming or
+reverting through the normal optimistic protocol) instead of failing with
+"monitor not found" until the next refresh. Only the reported brightness
+value is missing — the main thread retains its cached value meanwhile.
+
 **Ghost Pruning:**
 
 A monitor's absence from a current-generation, non-empty `enumerated` set is

@@ -190,7 +190,12 @@ impl DdcWorker {
                     self.monitors.insert(monitor_id.clone(), ddc_mon);
                 }
                 Err(e) => {
-                    log::warn!(monitor_id:% = monitor_id, error:% = e; "Could not read brightness");
+                    // Unreadable is often transient (standby, KVM, DDC
+                    // hiccup). Keep the handle so sets are still attempted
+                    // instead of failing with "monitor not found" until the
+                    // next refresh; only the reported value is missing.
+                    log::warn!(monitor_id:% = monitor_id, error:% = e; "Could not read brightness; keeping handle for sets");
+                    self.monitors.insert(monitor_id.clone(), ddc_mon);
                 }
             }
         }
