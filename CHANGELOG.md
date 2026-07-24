@@ -28,6 +28,9 @@ Rollup of everything landed since 0.7.1.
   2 × 1 MB, plus a tray "Open Log Folder" entry — release builds hide the
   console, so this is the retrievable diagnostic artifact. Structured
   key-value log fields are now rendered on console and file (`unstable-kv`).
+- Load-time warnings for a config `version` mismatch (no migration yet;
+  fields read as current schema) and for a non-empty `monitors` section
+  (reserved, not yet implemented — entries are preserved).
 - CI workflow (fmt, clippy, tests, cargo audit); MSRV pinned to 1.87.
 
 ### Changed

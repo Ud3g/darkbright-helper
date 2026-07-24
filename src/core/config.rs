@@ -49,7 +49,9 @@ const REFRESH_INACTIVITY_MAX: u32 = 600;
 /// Root configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    /// Configuration file version for migration support.
+    /// Configuration file version. There is no migration logic yet: a
+    /// mismatch is logged as a warning, the fields are interpreted as the
+    /// current schema, and the value is reset to [`CONFIG_VERSION`].
     #[serde(default = "default_version")]
     pub version: u32,
     /// Hotkey bindings.
@@ -487,6 +489,30 @@ impl Config {
     ///
     /// Logs errors for each invalid value found.
     fn validate_and_fix(&mut self) {
+        // Version check: no migration logic exists, so all that can be done
+        // honestly is warn and interpret the fields as the current schema
+        // (unknown fields were already dropped by serde). Resetting the value
+        // keeps later writes (backup mirror, save) truthful about what the
+        // in-memory config actually is after repair.
+        if self.version != CONFIG_VERSION {
+            log::warn!(
+                found = self.version,
+                expected = CONFIG_VERSION;
+                "Config version mismatch; no migration performed, fields interpreted as current schema"
+            );
+            self.version = CONFIG_VERSION;
+        }
+
+        // Per-monitor settings deserialize but are not wired up anywhere yet;
+        // warn so a user who sets them learns why nothing changes. The
+        // entries are preserved (they round-trip through saves).
+        if !self.monitors.is_empty() {
+            log::warn!(
+                entries = self.monitors.len();
+                "Per-monitor settings ('monitors') are not yet implemented and have no effect"
+            );
+        }
+
         // Validate OSD timeout
         if self.osd.timeout_ms < OSD_TIMEOUT_MIN || self.osd.timeout_ms > OSD_TIMEOUT_MAX {
             log::error!(
@@ -642,6 +668,37 @@ mod tests {
         config.validate_and_fix();
 
         assert_eq!(config.logging.file_level, "Debug");
+    }
+
+    #[test]
+    fn test_version_mismatch_repaired_to_current() {
+        let json = r#"{ "version": 999 }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn test_version_current_passes_validation() {
+        let json = format!(r#"{{ "version": {CONFIG_VERSION} }}"#);
+        let mut config: Config = serde_json::from_str(&json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn test_nonempty_monitors_map_survives_validation() {
+        // The field is reserved; entries must round-trip untouched so a
+        // user's hand-written settings survive until the feature exists.
+        let json = r#"{ "monitors": { "DELL U2722D": { "min_brightness": 10,
+            "max_brightness": null, "ddc_disabled": null } } }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.monitors.len(), 1);
+        assert_eq!(config.monitors["DELL U2722D"].min_brightness, Some(10));
     }
 
     #[test]
