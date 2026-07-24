@@ -72,6 +72,7 @@ pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
 
 /// Resolves the monitor under the cursor via Win32 (`GetCursorPos`,
 /// `MonitorFromPoint`) and identifies monitors from EDID.
+#[derive(Debug, Clone, Copy)]
 pub struct CursorLocator;
 
 impl crate::core::controller::MonitorLocator for CursorLocator {

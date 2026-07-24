@@ -417,7 +417,9 @@ where
             if !self.refresh.in_progress() {
                 self.handle_refresh(now);
             }
-            return Err(BrightnessError::MonitorNotFound(target_id.to_string()));
+            return Err(BrightnessError::MonitorNotFound(
+                target_id.base_display_name(),
+            ));
         };
 
         // 3. Calculate new brightness
@@ -457,12 +459,22 @@ where
             self.next_seq += 1;
             state.set_pending(new_hardware, seq, now);
         }
-        state.overlay_opacity = new_overlay;
 
-        // 5. Update overlay (software layer is immediately effective)
+        // 5. Update overlay (software layer is immediately effective). Commit
+        // the opacity only once the platform call succeeds, so a failed
+        // update cannot leave the state claiming an opacity the window never
+        // received.
         if new_overlay != old_overlay {
-            self.overlay.update(&target_id, handle, new_overlay)?;
+            if let Err(e) = self.overlay.update(&target_id, handle, new_overlay) {
+                log::error!(error:% = e; "Overlay update failed; reverting optimistic value");
+                if let Some(state) = self.states.get_mut(&target_id) {
+                    state.force_revert();
+                }
+                self.show_error_on_visible_osd();
+                return Err(e);
+            }
         }
+        state.overlay_opacity = new_overlay;
 
         // 6. Show or update OSD with optimistic values.
         self.osd_monitor = Some(target_id.clone());
@@ -511,7 +523,8 @@ where
         error: Option<&str>,
     ) -> Result<()> {
         let Some(state) = self.states.get_mut(monitor_id) else {
-            log::warn!(monitor_id:% = monitor_id; "Received DDC result for unknown monitor");
+            log::warn!(monitor:% = monitor_id.base_display_name(); "Received DDC result for unknown monitor");
+            log::debug!(monitor_id:% = monitor_id; "Unknown-monitor DDC result identity");
             return Ok(());
         };
 
@@ -525,7 +538,8 @@ where
             }
             SetOutcome::Reverted => {
                 let error_msg = error.unwrap_or("unknown error");
-                log::error!(monitor_id:% = monitor_id, target_brightness = value, error = error_msg; "DDC failed to set brightness");
+                log::error!(monitor:% = monitor_id.base_display_name(), target_brightness = value, error = error_msg; "DDC failed to set brightness");
+                log::debug!(monitor_id:% = monitor_id; "DDC set failure identity");
                 if self.osd.is_visible() {
                     self.osd.update_error(state)?;
                 }
@@ -603,7 +617,8 @@ where
                 if let Some(state) = self.states.get_mut(id) {
                     state.force_revert();
                 }
-                log::error!(monitor_id:% = id; "DDC set timed out with no result; reverted");
+                log::error!(monitor:% = id.base_display_name(); "DDC set timed out with no result; reverted");
+                log::debug!(monitor_id:% = id; "Timed-out set identity");
             }
             self.consecutive_set_timeouts += 1;
             self.show_error_on_visible_osd();
@@ -662,8 +677,12 @@ where
             // ── Tray Icon Messages ───────────────────────────────────────
             BrightnessMessage::TrayOpenUsage | BrightnessMessage::TrayOpenSettings => {
                 // Shell side effects; the binary's loop handles them before
-                // forwarding. Reaching this arm means a wiring regression.
-                log::debug!("Shell message reached core controller (no-op)");
+                // forwarding. Reaching this arm means the binary failed to
+                // intercept the message, silently no-op'ing the tray item.
+                log::warn!(
+                    "Shell message reached core controller unhandled; wiring regression \
+                     (tray item will silently no-op)"
+                );
             }
             BrightnessMessage::TrayRequestQuit => {
                 log::info!("Quit requested from tray menu");
@@ -719,6 +738,7 @@ where
     )]
     fn handle_set_absolute(&mut self, _monitor_id: Option<MonitorId>, _value: u8) -> Result<()> {
         // Placeholder for future extensions (e.g., fixed brightness via CLI command)
+        log::debug!("Absolute brightness set received; not yet implemented");
         Ok(())
     }
 
@@ -731,7 +751,7 @@ where
         let monitor_ids: Vec<MonitorId> = self.states.keys().cloned().collect();
         let display_names = generate_display_names(&monitor_ids);
 
-        let monitors: Vec<TrayMonitorInfo> = self
+        let mut monitors: Vec<TrayMonitorInfo> = self
             .states
             .iter()
             .map(|(monitor_id, state)| {
@@ -747,6 +767,10 @@ where
                 }
             })
             .collect();
+
+        // HashMap iteration order is nondeterministic; sort so the menu is
+        // stable across openings instead of shuffling monitors each time.
+        monitors.sort_by(|a, b| a.display_name.cmp(&b.display_name));
 
         TrayMenuData {
             monitors,
@@ -794,10 +818,14 @@ mod tests {
     struct FakeOverlay {
         updates: Vec<(MonitorId, u8)>,
         removed: Vec<MonitorId>,
+        fail_update: bool,
     }
 
     impl OverlaySink for FakeOverlay {
         fn update(&mut self, id: &MonitorId, _handle: MonitorHandle, opacity: u8) -> Result<()> {
+            if self.fail_update {
+                return Err(BrightnessError::ChannelSend);
+            }
             self.updates.push((id.clone(), opacity));
             Ok(())
         }
@@ -1226,6 +1254,30 @@ mod tests {
     }
 
     #[test]
+    fn adjust_overlay_failure_reverts_and_shows_error() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 0);
+        let prior_overlay = c.states[&id].overlay_opacity;
+        c.overlay.fail_update = true;
+
+        let err = c.handle_adjust(None, -10, base).unwrap_err();
+
+        assert!(matches!(err, BrightnessError::ChannelSend));
+        assert_eq!(
+            c.states[&id].overlay_opacity, prior_overlay,
+            "opacity must not be committed when the platform call fails"
+        );
+        assert!(
+            c.states[&id].pending.is_none(),
+            "no hardware pending should survive an overlay failure"
+        );
+        if c.osd.is_visible() {
+            assert!(!c.osd.error_updates.is_empty(), "OSD restyled to error");
+        }
+    }
+
+    #[test]
     fn adjust_unknown_monitor_errors_and_triggers_one_refresh() {
         let base = Instant::now();
         let mut c = test_controller(base);
@@ -1515,6 +1567,31 @@ mod tests {
         assert_eq!(data.monitors[0].hardware_brightness, 55);
         assert_eq!(data.monitors[0].overlay_opacity, 20);
         assert_eq!(data.hotkey_up, c.config.hotkeys.brightness_up);
+    }
+
+    #[test]
+    fn tray_menu_monitors_are_sorted_by_display_name() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        // test_id() -> "DEL U2722D", other_id() -> "PHL 346B1C": "DEL..." sorts first.
+        seed(&mut c, other_id(), 30);
+        seed(&mut c, test_id(), 55);
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+
+        let data = reply_rx.try_recv().expect("menu data sent");
+        let names: Vec<&str> = data
+            .monitors
+            .iter()
+            .map(|m| m.display_name.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec!["DEL U2722D", "PHL 346B1C"],
+            "monitor list must be in stable, sorted order regardless of HashMap iteration"
+        );
     }
 
     #[test]
