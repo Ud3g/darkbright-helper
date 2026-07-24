@@ -714,6 +714,28 @@ The window displays the user's configured hotkeys (not hardcoded defaults). This
 - The window is centered on the primary monitor
 - The window can be closed via the close button (X) or Alt+F4
 
+### 14. Single-Instance Guard
+
+At most one instance runs per logon session. Startup creates a named mutex **before** spawning any worker thread, window, or hotkey registration; a second launch detects the existing name, shows an informational message box, and exits without side effects (no duplicate tray icon, overlay, or failed hotkey registration).
+
+**Reserved mutex name (stable contract):**
+
+```
+Local\darkbright-helper-single-instance
+```
+
+This name is load-bearing for external integrations — e.g. a future autostart/installer feature that needs to ask "is it already running?". Do not rename it.
+
+**Mechanics:**
+- The `Local\` prefix scopes the object to the current logon session, so each user (and each RDP session) can run its own instance.
+- Detection is existence-based: the mutex is never acquired via a wait. `CreateMutexW` succeeding with last-error `ERROR_ALREADY_EXISTS` signals a second instance.
+- The guard holds only a handle; the kernel deletes the named object when the last handle closes, so the name is freed on any exit path — including a crash. There is no stale-lock state to recover from.
+- `ERROR_ACCESS_DENIED` (the name exists but is owned by a higher-integrity instance, e.g. one running elevated) is treated as already-running, not as an error.
+
+**Fail-open policy:** any *other* `CreateMutexW` failure logs an error and startup continues **without** the guard. An unexpected guard failure must never block the user's only instance; the worst case is a duplicate instance, not a lockout.
+
+Implementation: `src/platform/windows/single_instance.rs` (RAII `SingleInstance` guard held for the process lifetime), checked at the top of `main()`.
+
 ---
 
 ## Testing
