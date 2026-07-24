@@ -10,6 +10,7 @@
 pub mod brightness;
 pub mod config;
 pub mod controller;
+pub mod logfile;
 pub mod reconcile;
 pub mod state;
 

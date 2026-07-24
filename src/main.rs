@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::{LazyLock, Mutex, mpsc};
+use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
@@ -16,6 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use darkbright_helper::core::config::{Config, ConfigLoadOutcome};
 use darkbright_helper::core::controller::Controller;
+use darkbright_helper::core::logfile::{LOG_FILE_NAME, LOG_MAX_BYTES, RotatingFileWriter};
 use darkbright_helper::core::reconcile::{
     RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate,
 };
@@ -140,6 +141,20 @@ fn open_settings() {
     }
 }
 
+/// Opens the app data directory (config + logs) in Explorer (shell side effect).
+fn open_log_folder() {
+    log::debug!("TrayOpenLogFolder received");
+    if let Some(dir) = Config::default_dir() {
+        // The directory may not exist yet (fresh install, logging never on).
+        let _ = std::fs::create_dir_all(&dir);
+        if let Err(e) = open_with_default_app(&dir) {
+            log::error!(error:% = e; "Failed to open log folder");
+        }
+    } else {
+        log::error!("Could not determine log folder path");
+    }
+}
+
 /// Pumps all pending Windows messages for the current thread.
 ///
 /// This is necessary because the main thread owns OSD and overlay windows
@@ -210,21 +225,100 @@ fn load_config() -> Config {
     config
 }
 
-/// Initializes the logging subsystem.
+/// Console logger plus an optionally attached rolling-file logger.
 ///
-/// Uses `RUST_LOG` environment variable if set, otherwise defaults to
-/// "debug" for debug builds and "info" for release builds.
-fn init_logging() {
+/// The file half cannot exist at logger-installation time: whether it is
+/// wanted, and at which level, comes from the config file — whose loading
+/// itself produces log lines. The tee is therefore installed console-only and
+/// the file sink attached right after config load; only the config-loading
+/// lines themselves are console-only.
+struct TeeLogger {
+    console: env_logger::Logger,
+    file: OnceLock<env_logger::Logger>,
+}
+
+impl TeeLogger {
+    /// Attaches the file logger and raises the global max level to match.
+    fn attach_file(&self, logger: env_logger::Logger) {
+        let max = self.console.filter().max(logger.filter());
+        if self.file.set(logger).is_ok() {
+            log::set_max_level(max);
+        }
+    }
+}
+
+impl log::Log for TeeLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        self.console.enabled(metadata) || self.file.get().is_some_and(|f| f.enabled(metadata))
+    }
+
+    fn log(&self, record: &log::Record) {
+        // Each env_logger instance applies its own level filter internally.
+        self.console.log(record);
+        if let Some(file) = self.file.get() {
+            file.log(record);
+        }
+    }
+
+    fn flush(&self) {
+        self.console.flush();
+        if let Some(file) = self.file.get() {
+            file.flush();
+        }
+    }
+}
+
+/// Initializes the logging subsystem (console immediately, file attachable).
+///
+/// The console half uses the `RUST_LOG` environment variable if set,
+/// otherwise "debug" for debug builds and "info" for release builds.
+fn init_logging() -> &'static TeeLogger {
     let default_level = if cfg!(debug_assertions) {
         "debug"
     } else {
         "info"
     };
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
-        .init();
+    let console =
+        env_logger::Builder::from_env(env_logger::Env::default().default_filter_or(default_level))
+            .build();
+    let max = console.filter();
+
+    let tee: &'static TeeLogger = Box::leak(Box::new(TeeLogger {
+        console,
+        file: OnceLock::new(),
+    }));
+    if log::set_logger(tee).is_ok() {
+        log::set_max_level(max);
+    }
 
     log::info!(version = env!("CARGO_PKG_VERSION"); "Brightness Control Tool Starting");
+    tee
+}
+
+/// Builds the rolling-file logger according to the loaded config.
+///
+/// The file level comes from `logging.file_level` only — `RUST_LOG` controls
+/// just the console half.
+fn build_file_logger(config: &Config) -> std::io::Result<env_logger::Logger> {
+    let dir = Config::default_dir()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "APPDATA not set"))?;
+    std::fs::create_dir_all(&dir)?;
+    let writer = RotatingFileWriter::open(dir.join(LOG_FILE_NAME), LOG_MAX_BYTES)?;
+
+    // validate_and_fix guarantees the level parses; fall back defensively.
+    let level = config
+        .logging
+        .file_level
+        .parse()
+        .unwrap_or(log::LevelFilter::Info);
+
+    Ok(env_logger::Builder::new()
+        .filter_level(level)
+        .format_timestamp_millis()
+        .write_style(env_logger::WriteStyle::Never)
+        .target(env_logger::Target::Pipe(Box::new(writer)))
+        .build())
 }
 
 /// Spawns the power event listener thread.
@@ -392,7 +486,7 @@ fn main() {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     }
 
-    init_logging();
+    let tee = init_logging();
 
     // Enforce a single instance per logon session before spawning any worker,
     // window, or hotkey. A second launch informs the user and exits, so it
@@ -417,6 +511,20 @@ fn main() {
 
     // Load configuration
     let config = load_config();
+
+    // Attach the opt-in rolling file log now that the config is known.
+    if config.logging.file_enabled {
+        match build_file_logger(&config) {
+            Ok(file_logger) => {
+                tee.attach_file(file_logger);
+                // First line in the file: identify the build being diagnosed.
+                log::info!(version = env!("CARGO_PKG_VERSION"); "File logging enabled");
+            }
+            Err(e) => {
+                log::warn!(error:% = e; "Failed to enable file logging, continuing without it");
+            }
+        }
+    }
 
     // Create channels
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
@@ -559,6 +667,7 @@ fn main() {
                     // Shell side effects stay out of the core controller.
                     BrightnessMessage::TrayOpenUsage => open_usage(&mut usage_window, &config),
                     BrightnessMessage::TrayOpenSettings => open_settings(),
+                    BrightnessMessage::TrayOpenLogFolder => open_log_folder(),
                     other => match controller.handle_message(other, Instant::now()) {
                         Ok(should_continue) => {
                             if !should_continue {

@@ -252,6 +252,10 @@ Enforced structurally where possible:
   embed only the file name, not the absolute path, because they surface in
   warn/error logs. Log full paths at `debug!` only.
 
+The debug-only rule is what makes the opt-in rolling log file safe at its
+default `info` level: serials and paths stay out of the file unless the user
+deliberately sets `logging.file_level` to `debug` for a diagnostic session.
+
 ### Antipatterns
 
 - **Don't log the same event at multiple levels** — pick one appropriate level

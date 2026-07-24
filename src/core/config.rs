@@ -29,6 +29,8 @@ pub const DEFAULT_STEP_PERCENT: u8 = 5;
 pub const DEFAULT_REFRESH_PERIODIC_SECONDS: u32 = 60;
 /// Default inactivity threshold in seconds before refresh (0 = disabled).
 pub const DEFAULT_REFRESH_INACTIVITY_SECONDS: u32 = 30;
+/// Default level filter for the rolling log file.
+pub const DEFAULT_FILE_LOG_LEVEL: &str = "info";
 
 // Validation ranges
 const OSD_TIMEOUT_MIN: u32 = 100;
@@ -65,6 +67,9 @@ pub struct Config {
     /// Refresh/resync settings.
     #[serde(default)]
     pub refresh: RefreshConfig,
+    /// File-logging settings.
+    #[serde(default)]
+    pub logging: LoggingConfig,
 }
 
 /// Hotkey configuration.
@@ -118,6 +123,24 @@ pub struct BrightnessConfig {
     pub step_percent: u8,
 }
 
+/// File-logging configuration.
+///
+/// Release builds hide the console, so `env_logger`'s stderr output is
+/// unreachable there; an opt-in rolling log file in the config directory is
+/// the diagnostic artifact users can actually retrieve and attach to reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoggingConfig {
+    /// Write log output to a rolling file in the config directory.
+    #[serde(default)]
+    pub file_enabled: bool,
+    /// Level filter for the file: "error", "warn", "info", "debug" or "trace"
+    /// (case-insensitive). Note: at "debug" and below, monitor serial numbers
+    /// and absolute paths are included — acceptable for a deliberately created
+    /// diagnostic artifact, not a default.
+    #[serde(default = "default_file_log_level")]
+    pub file_level: String,
+}
+
 /// Refresh/resync configuration.
 ///
 /// Controls how the application stays in sync with external brightness changes
@@ -163,6 +186,9 @@ fn default_refresh_periodic() -> u32 {
 fn default_refresh_inactivity() -> u32 {
     DEFAULT_REFRESH_INACTIVITY_SECONDS
 }
+fn default_file_log_level() -> String {
+    DEFAULT_FILE_LOG_LEVEL.to_string()
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait Implementations
@@ -177,6 +203,7 @@ impl Default for Config {
             osd: OsdConfig::default(),
             brightness: BrightnessConfig::default(),
             refresh: RefreshConfig::default(),
+            logging: LoggingConfig::default(),
         }
     }
 }
@@ -213,6 +240,15 @@ impl Default for RefreshConfig {
         Self {
             periodic_seconds: default_refresh_periodic(),
             inactivity_seconds: default_refresh_inactivity(),
+        }
+    }
+}
+
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            file_enabled: false,
+            file_level: default_file_log_level(),
         }
     }
 }
@@ -259,19 +295,23 @@ pub enum ConfigLoadOutcome {
 }
 
 impl Config {
-    /// Returns the default configuration file path.
+    /// Returns the application data directory.
     ///
-    /// Location: `%APPDATA%\BrightnessControl\config.json`, resolved via the
-    /// `APPDATA` environment variable (always set in a normal Windows logon
-    /// session). Returns `None` when the variable is absent — e.g. on
-    /// non-Windows hosts running the platform-agnostic tests.
+    /// Location: `%APPDATA%\BrightnessControl`, resolved via the `APPDATA`
+    /// environment variable (always set in a normal Windows logon session).
+    /// Returns `None` when the variable is absent — e.g. on non-Windows hosts
+    /// running the platform-agnostic tests. Holds the config file and, when
+    /// file logging is enabled, the rolling log files.
+    #[must_use]
+    pub fn default_dir() -> Option<PathBuf> {
+        std::env::var_os("APPDATA").map(|appdata| PathBuf::from(appdata).join("BrightnessControl"))
+    }
+
+    /// Returns the default configuration file path
+    /// (`config.json` inside [`Config::default_dir`]).
     #[must_use]
     pub fn default_path() -> Option<PathBuf> {
-        std::env::var_os("APPDATA").map(|appdata| {
-            PathBuf::from(appdata)
-                .join("BrightnessControl")
-                .join("config.json")
-        })
+        Self::default_dir().map(|dir| dir.join("config.json"))
     }
 
     /// Loads configuration from the default path, or returns defaults if not found.
@@ -511,6 +551,17 @@ impl Config {
             );
             self.refresh.inactivity_seconds = DEFAULT_REFRESH_INACTIVITY_SECONDS;
         }
+
+        // Validate file log level (must parse as a `log` level, case-insensitive)
+        if self.logging.file_level.parse::<log::LevelFilter>().is_err() {
+            log::error!(
+                field = "logging.file_level",
+                value:% = self.logging.file_level,
+                default = DEFAULT_FILE_LOG_LEVEL;
+                "Invalid config value, using default"
+            );
+            self.logging.file_level = DEFAULT_FILE_LOG_LEVEL.to_string();
+        }
     }
 
     /// Replaces hotkey strings that `is_valid` rejects with the defaults,
@@ -557,6 +608,40 @@ mod tests {
             config.inactivity_seconds,
             DEFAULT_REFRESH_INACTIVITY_SECONDS
         );
+    }
+
+    #[test]
+    fn test_logging_config_defaults() {
+        let config = LoggingConfig::default();
+        assert!(!config.file_enabled, "file logging is opt-in");
+        assert_eq!(config.file_level, DEFAULT_FILE_LOG_LEVEL);
+    }
+
+    #[test]
+    fn test_logging_section_absent_uses_defaults() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert!(!config.logging.file_enabled);
+        assert_eq!(config.logging.file_level, DEFAULT_FILE_LOG_LEVEL);
+    }
+
+    #[test]
+    fn test_invalid_file_level_repaired_to_default() {
+        let json = r#"{ "logging": { "file_enabled": true, "file_level": "verbose" } }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.logging.file_level, DEFAULT_FILE_LOG_LEVEL);
+        assert!(config.logging.file_enabled, "the enable flag is untouched");
+    }
+
+    #[test]
+    fn test_valid_file_level_passes_validation() {
+        // Case-insensitive, as parsed by the `log` crate.
+        let json = r#"{ "logging": { "file_level": "Debug" } }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        config.validate_and_fix();
+
+        assert_eq!(config.logging.file_level, "Debug");
     }
 
     #[test]

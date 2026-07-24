@@ -436,6 +436,12 @@ pub enum BrightnessMessage {
     /// The main thread should open the config file with the system default editor.
     TrayOpenSettings,
 
+    /// User clicked the "Open Log Folder" menu item in the tray menu.
+    ///
+    /// The main thread should open the application data directory (config +
+    /// rolling log files) in the file explorer.
+    TrayOpenLogFolder,
+
     /// User clicked the "Quit" menu item in the tray menu.
     ///
     /// Triggers graceful application shutdown.

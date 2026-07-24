@@ -237,6 +237,10 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   "refresh": {
     "periodic_seconds": 60,
     "inactivity_seconds": 30
+  },
+  "logging": {
+    "file_enabled": false,
+    "file_level": "info"
   }
 }
 ```
@@ -281,6 +285,8 @@ When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
 | `brightness.step_percent` | 1 - 50 | 5 |
 | `refresh.periodic_seconds` | 0 - 3600 | 60 |
 | `refresh.inactivity_seconds` | 0 - 600 | 30 |
+| `logging.file_enabled` | `true` / `false` | `false` |
+| `logging.file_level` | `error` / `warn` / `info` / `debug` / `trace` (case-insensitive) | `info` |
 
 Example log output for invalid config:
 ```
@@ -464,9 +470,9 @@ The application uses conditional compilation to control console visibility:
 | Debug (`cargo build`) | Visible | Developers can see log output directly |
 | Release (`cargo build --release`) | Hidden | Clean GUI experience for end users |
 
-This means panics and log output in release builds won't be visible in a console. For release debugging, consider integrating a file-based logging backend (future enhancement).
+This means panics and log output in release builds won't be visible in a console. For release diagnostics there is an opt-in rolling log file (below).
 
-**Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior)
+**Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior; console only)
 
 > **Note:** For guidelines on *how* to write log statements (level selection heuristics, structured fields, avoiding PII), see `code-conventions.md` section 7.
 
@@ -479,6 +485,34 @@ This means panics and log output in release builds won't be visible in a console
 | **Trace** | DDC raw I²C bytes, window messages, config file contents |
 
 **Default Level:** `Info` for release builds, `Debug` for debug builds.
+
+**Rolling File Log (opt-in):**
+
+Because the release console is hidden, `logging.file_enabled = true` additionally
+tees every log record into `%APPDATA%\BrightnessControl\darkbright.log` — the
+retrievable artifact for field reports. Mechanics:
+
+- **Rotation:** size-capped two-file scheme. When the active file would exceed
+  1 MB it is renamed over `darkbright.log.old` (replacing it) and a fresh file
+  starts — worst-case ~2 MB disk, always ≥1 MB of recent history. A failed
+  rotation (e.g. transient file lock) degrades to a temporarily oversized file
+  and is retried on the next over-cap write; logging never stops.
+- **Level:** `logging.file_level` filters the file independently of the
+  console (`RUST_LOG` does not affect the file). At `debug` and below the file
+  will contain monitor serial numbers and absolute paths (debug-only under the
+  PII rule) — acceptable for a deliberately created diagnostic artifact.
+- **Startup ordering:** the logger is installed console-only, and the file
+  sink attaches immediately after the config is loaded (the setting lives in
+  the config). The config-loading log lines themselves therefore reach only
+  the console; the file starts with a version-stamped "File logging enabled"
+  line.
+- **Access:** the tray menu's "Open Log Folder" entry opens the directory in
+  Explorer.
+
+Formatting (timestamps, level, target, `key=value` pairs) comes from a second
+`env_logger` instance writing into the rotating file via `Target::Pipe`, so
+file and console lines look alike. The `unstable-kv` feature is enabled so
+structured fields are actually rendered on both sinks.
 
 **Examples:**
 ```
@@ -716,6 +750,7 @@ The application runs as a background process with a system tray icon for user in
 │─────────────────────────────────────────────────│
 │ Usage                                           │  → Opens usage instructions window
 │ Settings                                        │  → Opens config.json in default editor
+│ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
 │ Quit Brightness Control                         │  → Graceful shutdown
 │─────────────────────────────────────────────────│
 │ Brightness Control v0.8.0                       │  ← Version (disabled/info only)
@@ -850,6 +885,15 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 3. **Expected**: The monitor's tray row persists — it is still enumerable, just momentarily unreadable — and no ghost pruning occurs
 4. Wake the monitor
 5. **Expected**: DDC reads resume on the next refresh with no special recovery needed
+
+#### File Logging Test
+1. Set `logging.file_enabled` to `true` in config
+2. Start the application (release build — no console needed)
+3. **Expected**: `%APPDATA%\BrightnessControl\darkbright.log` starts with a version-stamped "File logging enabled" line; adjustments append info-level lines including `key=value` fields; `RUST_LOG` has no effect on the file
+4. Tray → "Open Log Folder"
+5. **Expected**: Explorer opens the folder containing `config.json` and `darkbright.log`
+6. Set `logging.file_level` to `"verbose"` (invalid) and restart
+7. **Expected**: An error line reports the invalid value; the file logs at the default `info` level
 
 #### Degraded-State Tray Indicator Test
 1. Start the application with `RUST_LOG=debug`

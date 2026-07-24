@@ -26,12 +26,12 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
-    DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos, GetMessageW, HICON, HWND_MESSAGE,
-    ICONINFO, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MF_GRAYED,
-    MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage, RegisterClassExW,
-    SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON,
-    TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL, WNDCLASSEXW,
-    WS_OVERLAPPED,
+    DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos, GetMessageW, HICON, HMENU,
+    HWND_MESSAGE, ICONINFO, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW,
+    MENU_ITEM_FLAGS, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL,
+    WNDCLASSEXW, WS_OVERLAPPED,
 };
 use windows::core::{PCWSTR, w};
 
@@ -70,6 +70,9 @@ const MENU_ID_QUIT: u32 = 1002;
 
 /// Menu item ID for the grayed version line.
 const MENU_ID_VERSION: u32 = 1003;
+
+/// Menu item ID for the "Open Log Folder" option.
+const MENU_ID_OPEN_LOGS: u32 = 1004;
 
 /// Base ID for monitor info rows (non-clickable).
 /// Each monitor uses `MENU_ID_MONITOR_BASE` + index.
@@ -531,6 +534,22 @@ fn remove_tray_icon(hwnd: HWND) {
 // Context Menu
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Appends one text menu item; a failure degrades the menu by one row rather
+/// than breaking it, so the result is ignored.
+fn append_menu_item(hmenu: HMENU, flags: MENU_ITEM_FLAGS, id: u32, text: &str) {
+    let wide: Vec<u16> = format!("{text}\0").encode_utf16().collect();
+    unsafe {
+        let _ = AppendMenuW(hmenu, flags, id as usize, PCWSTR(wide.as_ptr()));
+    }
+}
+
+/// Appends a separator line.
+fn append_separator(hmenu: HMENU) {
+    unsafe {
+        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+    }
+}
+
 /// Shows the tray icon context menu at the current cursor position.
 ///
 /// # Arguments
@@ -547,92 +566,44 @@ fn show_context_menu(hwnd: HWND) {
         // Request current monitor data from main thread
         let menu_data = request_menu_data();
 
-        // Add monitor info rows at the top (disabled/non-clickable)
         if let Some(ref data) = menu_data {
             // Degraded-subsystem warnings come first so they cannot be missed.
             let warn_lines = warning_menu_lines(data.warnings);
             for (index, line) in warn_lines.iter().enumerate() {
-                let line_text = format!("{line}\0");
-                let line_wide: Vec<u16> = line_text.encode_utf16().collect();
-
                 // Menu IDs are u32; the warning count is at most 2
                 #[allow(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_WARNING_BASE + (index as u32);
-
-                let _ = AppendMenuW(
-                    hmenu,
-                    MF_STRING | MF_GRAYED,
-                    menu_id as usize,
-                    PCWSTR(line_wide.as_ptr()),
-                );
+                append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, line);
             }
             if !warn_lines.is_empty() {
-                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+                append_separator(hmenu);
             }
 
+            // Monitor info rows (disabled/non-clickable)
             for (index, monitor) in data.monitors.iter().enumerate() {
                 let monitor_text = format!(
-                    "{}: 🕶{}% 🔆{}%\0",
+                    "{}: 🕶{}% 🔆{}%",
                     monitor.display_name, monitor.overlay_opacity, monitor.hardware_brightness
                 );
-                let monitor_wide: Vec<u16> = monitor_text.encode_utf16().collect();
-
                 // Menu IDs are u32; index won't exceed monitor count (typically < 10)
                 #[allow(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_MONITOR_BASE + (index as u32);
-
-                let _ = AppendMenuW(
-                    hmenu,
-                    MF_STRING | MF_GRAYED,
-                    menu_id as usize,
-                    PCWSTR(monitor_wide.as_ptr()),
-                );
+                append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, &monitor_text);
             }
-
-            // Add separator after monitors (only if we have monitors)
             if !data.monitors.is_empty() {
-                let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
+                append_separator(hmenu);
             }
         }
 
-        // Usage item (shows hotkey instructions window)
-        let usage_wide: Vec<u16> = "Usage\0".encode_utf16().collect();
-        let _ = AppendMenuW(
-            hmenu,
-            MF_STRING,
-            MENU_ID_USAGE as usize,
-            PCWSTR(usage_wide.as_ptr()),
-        );
-
-        // Settings item
-        let settings_wide: Vec<u16> = "Settings\0".encode_utf16().collect();
-        let _ = AppendMenuW(
-            hmenu,
-            MF_STRING,
-            MENU_ID_SETTINGS as usize,
-            PCWSTR(settings_wide.as_ptr()),
-        );
-
-        // Quit item
-        let quit_text = format!("Quit {APP_NAME}\0");
-        let quit_wide: Vec<u16> = quit_text.encode_utf16().collect();
-        let _ = AppendMenuW(
-            hmenu,
-            MF_STRING,
-            MENU_ID_QUIT as usize,
-            PCWSTR(quit_wide.as_ptr()),
-        );
+        append_menu_item(hmenu, MF_STRING, MENU_ID_USAGE, "Usage");
+        append_menu_item(hmenu, MF_STRING, MENU_ID_SETTINGS, "Settings");
+        append_menu_item(hmenu, MF_STRING, MENU_ID_OPEN_LOGS, "Open Log Folder");
+        append_menu_item(hmenu, MF_STRING, MENU_ID_QUIT, &format!("Quit {APP_NAME}"));
 
         // Version line (grayed, informational)
-        let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
-        let version_text = format!("{APP_NAME} v{}\0", env!("CARGO_PKG_VERSION"));
-        let version_wide: Vec<u16> = version_text.encode_utf16().collect();
-        let _ = AppendMenuW(
-            hmenu,
-            MF_STRING | MF_GRAYED,
-            MENU_ID_VERSION as usize,
-            PCWSTR(version_wide.as_ptr()),
-        );
+        append_separator(hmenu);
+        let version_text = format!("{APP_NAME} v{}", env!("CARGO_PKG_VERSION"));
+        append_menu_item(hmenu, MF_STRING | MF_GRAYED, MENU_ID_VERSION, &version_text);
 
         // Get cursor position for menu placement
         let mut cursor_pos = POINT::default();
@@ -694,6 +665,14 @@ fn handle_menu_selection(cmd: u32) {
             with_tray_sender(|sender| {
                 if let Err(e) = sender.send(BrightnessMessage::TrayOpenSettings) {
                     log::error!(error:% = e; "Failed to send TrayOpenSettings");
+                }
+            });
+        }
+        MENU_ID_OPEN_LOGS => {
+            log::debug!("Open Log Folder menu item clicked");
+            with_tray_sender(|sender| {
+                if let Err(e) = sender.send(BrightnessMessage::TrayOpenLogFolder) {
+                    log::error!(error:% = e; "Failed to send TrayOpenLogFolder");
                 }
             });
         }

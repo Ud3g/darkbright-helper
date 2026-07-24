@@ -23,6 +23,11 @@ Rollup of everything landed since 0.7.1.
 - Tray visibility: degraded-state warnings (menu lines, tooltip, amber-badged
   icon) for lost DDC or hotkeys, plus a version line in the menu; the version
   is also logged at startup.
+- Opt-in rolling file log (`logging.file_enabled`, level via
+  `logging.file_level`) under `%APPDATA%\BrightnessControl\`, size-capped at
+  2 × 1 MB, plus a tray "Open Log Folder" entry — release builds hide the
+  console, so this is the retrievable diagnostic artifact. Structured
+  key-value log fields are now rendered on console and file (`unstable-kv`).
 - CI workflow (fmt, clippy, tests, cargo audit); MSRV pinned to 1.87.
 
 ### Changed

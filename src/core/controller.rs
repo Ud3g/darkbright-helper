@@ -693,7 +693,9 @@ where
                 self.handle_refresh(now);
             }
             // ── Tray Icon Messages ───────────────────────────────────────
-            BrightnessMessage::TrayOpenUsage | BrightnessMessage::TrayOpenSettings => {
+            BrightnessMessage::TrayOpenUsage
+            | BrightnessMessage::TrayOpenSettings
+            | BrightnessMessage::TrayOpenLogFolder => {
                 // Shell side effects; the binary's loop handles them before
                 // forwarding. Reaching this arm means the binary failed to
                 // intercept the message, silently no-op'ing the tray item.
