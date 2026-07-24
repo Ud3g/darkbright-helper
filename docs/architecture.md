@@ -579,6 +579,20 @@ reverting through the normal optimistic protocol) instead of failing with
 "monitor not found" until the next refresh. Only the reported brightness
 value is missing — the main thread retains its cached value meanwhile.
 
+**Overlay Reconcile on External Change:**
+
+A refresh read above the hardware floor (`> 0`) for a monitor whose sub-zero
+overlay is active clears that overlay: the brightness was raised externally
+(physical monitor buttons, another tool, or a monitor resetting itself after
+sleep), and a software veil silently fighting that change would leave the
+monitor murky — bright backlight behind a half-opaque black window. The
+trade-off is deliberate: a monitor that self-resets after sleep loses its
+sub-zero dim and comes back bright. An in-flight optimistic set suppresses
+the reconcile — the set is newer intent than the refresh read (same
+precedence rule as `update_from_ddc` leaving pending sets intact). A read
+of exactly 0 never clears the overlay: hardware at the floor is consistent
+with sub-zero dimming.
+
 **Ghost Pruning:**
 
 A monitor's absence from a current-generation, non-empty `enumerated` set is

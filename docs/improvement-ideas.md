@@ -32,7 +32,10 @@ This document tracks potential future enhancements for the Brightness Control To
   Add a hotkey capture interface in the settings GUI that allows users to press keys directly to set custom hotkey combinations. This would eliminate the need for manual text input and provide immediate validation of key combinations, integrating with the existing hotkey parsing system.
 
 - **Sleep/wake brightness restoration**
-  *Partially implemented:* the power event listener in `src/platform/windows/power.rs` already triggers a cache refresh on system resume, resyncing state with whatever the monitors report. Remaining idea: save the pre-sleep brightness values and actively *restore* them on wake for monitors that reset themselves during sleep, instead of adopting the reset values.
+  *Partially implemented:* the power event listener in `src/platform/windows/power.rs` already triggers a cache refresh on system resume, resyncing state with whatever the monitors report. Remaining idea: save the pre-sleep brightness values and actively *restore* them on wake for monitors that reset themselves during sleep, instead of adopting the reset values. Related: an externally raised brightness currently clears an active sub-zero overlay on refresh (hard reconcile) — with active restoration, a self-reset monitor would get its pre-sleep hardware value *and* overlay back instead.
+
+- **Configurable overlay reconcile policy**
+  Since 0.8.x, a refresh that reads an externally raised hardware brightness clears an active sub-zero dimming overlay (the external change wins). Make this behavior configurable (e.g. `overlay.on_external_change: clear | keep`) for users whose monitors reset brightness after sleep and who would rather keep the software dim than come back to a bright screen.
 
 - **Basic internationalization foundation**
   Implement the technical infrastructure needed to support multiple languages, including string externalization and locale-aware formatting. This would involve creating a translation system that can be extended later with actual language translations.

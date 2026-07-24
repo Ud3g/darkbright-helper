@@ -255,8 +255,11 @@ where
     ///
     /// Read brightness values are authoritative ground truth for every monitor
     /// regardless of generation: a hardware value is true no matter which
-    /// refresh produced it. Absence bookkeeping (pruning) is gated on the
-    /// result being current and the enumerated set being non-empty.
+    /// refresh produced it. A value above the hardware floor also clears an
+    /// active sub-zero overlay (unless a set is in flight) — an externally
+    /// raised brightness wins over the software veil. Absence bookkeeping
+    /// (pruning) is gated on the result being current and the enumerated set
+    /// being non-empty.
     // The caller destructures an owned `enumerated: Vec<MonitorId>` straight out
     // of the refresh-result message; taking it by value here avoids an extra
     // borrow indirection even though this function only ever reads it.
@@ -279,10 +282,27 @@ where
         for (monitor_id, brightness) in monitors {
             log::debug!(monitor_id:% = monitor_id, brightness = brightness; "Monitor found during refresh");
 
-            self.states
-                .entry(monitor_id)
-                .and_modify(|s| s.update_from_ddc(brightness))
-                .or_insert_with(|| MonitorState::new(brightness));
+            if let Some(state) = self.states.get_mut(&monitor_id) {
+                state.update_from_ddc(brightness);
+                // A read above the hardware floor while the sub-zero overlay
+                // is active means the brightness changed externally (physical
+                // buttons, another tool, a monitor self-reset): the software
+                // veil would silently fight that change, so it yields. An
+                // in-flight optimistic set is newer intent than the read and
+                // suppresses the reconcile.
+                if brightness > 0 && state.overlay_opacity > 0 && state.pending.is_none() {
+                    state.overlay_opacity = 0;
+                    self.overlay.remove(&monitor_id);
+                    log::info!(
+                        monitor:% = monitor_id.base_display_name(),
+                        brightness = brightness;
+                        "Cleared dimming overlay after external brightness change"
+                    );
+                }
+            } else {
+                self.states
+                    .insert(monitor_id, MonitorState::new(brightness));
+            }
         }
 
         let current =
@@ -1028,6 +1048,62 @@ mod tests {
             before,
             "abort freezes cadence same as an empty enumerated set"
         );
+    }
+
+    // ── Overlay reconcile on external change ─────────────────────────────
+
+    #[test]
+    fn refresh_clears_overlay_when_hardware_changed_externally() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 0);
+        c.states.get_mut(&id).unwrap().overlay_opacity = 40;
+
+        // Physical buttons (or a monitor self-reset) raised the hardware
+        // brightness while the sub-zero overlay was active.
+        deliver_refresh(&mut c, vec![(id.clone(), 80)], vec![id.clone()], base);
+
+        let state = &c.states[&id];
+        assert_eq!(state.cached_brightness, 80);
+        assert_eq!(
+            state.overlay_opacity, 0,
+            "external brightness change must clear the software veil"
+        );
+        assert_eq!(c.overlay.removed, vec![id]);
+    }
+
+    #[test]
+    fn refresh_keeps_overlay_at_hardware_floor() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 0);
+        c.states.get_mut(&id).unwrap().overlay_opacity = 40;
+
+        // Hardware still reads 0: nothing changed externally, sub-zero
+        // dimming stays.
+        deliver_refresh(&mut c, vec![(id.clone(), 0)], vec![id.clone()], base);
+
+        assert_eq!(c.states[&id].overlay_opacity, 40);
+        assert!(c.overlay.removed.is_empty());
+    }
+
+    #[test]
+    fn refresh_keeps_overlay_while_set_is_pending() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 5);
+        {
+            let state = c.states.get_mut(&id).unwrap();
+            state.overlay_opacity = 40;
+            // The user is dimming into sub-zero right now; the refresh read
+            // predates the in-flight set and must not undo the fresh overlay.
+            state.set_pending(0, 7, base);
+        }
+
+        deliver_refresh(&mut c, vec![(id.clone(), 5)], vec![id.clone()], base);
+
+        assert_eq!(c.states[&id].overlay_opacity, 40);
+        assert!(c.overlay.removed.is_empty());
     }
 
     // ── Ghost pruning ────────────────────────────────────────────────────

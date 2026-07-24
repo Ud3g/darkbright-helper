@@ -43,6 +43,9 @@ Rollup of everything landed since 0.7.1.
 - A monitor whose brightness read fails during a refresh stays set-capable
   (its DDC handle is kept), instead of failing with "monitor not found"
   until the next refresh.
+- An externally raised hardware brightness (physical buttons, monitor
+  self-reset) now clears an active sub-zero dimming overlay on the next
+  refresh, instead of leaving a black veil over a bright backlight.
 
 ### Removed
 
