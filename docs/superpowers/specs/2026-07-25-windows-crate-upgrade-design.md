@@ -1,7 +1,7 @@
 # Design: `windows` crate upgrade 0.52 → 0.62
 
 **Date:** 2026-07-25
-**Status:** design approved in dialogue; cold adversarial review incorporated; awaiting user review
+**Status:** design approved in dialogue; two cold adversarial review rounds incorporated; awaiting user review
 **Branch:** `windows-crate-upgrade` (off `main`)
 
 ## Goal
@@ -33,16 +33,17 @@ A trial compile of this repo against `windows` 0.62.2 and a signature diff of al
 - **The churn is concentrated in 0.58–0.60.** 0.58 contributes the structural
   break (handles become `*mut c_void`, losing `Send`/`Sync`; `CreateWindowExW`
   returns `Result<HWND>`); 0.59 + 0.60 contribute the bulk of the signature
-  changes (`Option<…>` params, flag newtypes, `bool` params). One late break:
-  **`BOOL` leaves `Win32::Foundation` for `windows::core` at 0.62** (verified
-  still in `Foundation` through 0.61). 0.61 changes nothing on this repo's
-  API surface.
+  changes (`Option<…>` params, flag newtypes, `bool` params); 0.60 also moves
+  `BOOL` from `Win32::Foundation` to `windows::core` (confirmed by grepping the
+  published crates.io archives — present in 0.59.0, gone in 0.60.0; note that
+  GitHub release tags diverge from crate versions after 0.58 and are unreliable
+  for such checks). 0.61 and 0.62 change nothing on this repo's API surface.
 - **MSRV:** windows 0.62.x requires Rust 1.82 (transitive max across
   windows-core/-result/-strings/-link likewise 1.82). Repo pins
   `rust-version = "1.88"` — **no MSRV bump needed**; the CI 1.88 job stays valid.
 - **Feature gates:** all 16 features in `Cargo.toml` survive verbatim — zero
   edits to the feature block. One namespace move: `BOOL` left
-  `Win32::Foundation` for `windows::core` (at 0.62); `TRUE`/`FALSE` stay in
+  `Win32::Foundation` for `windows::core` (at 0.60); `TRUE`/`FALSE` stay in
   `Foundation`, now typed `windows_core::BOOL`.
 - **Dependency graph:** `windows-targets` and the eight arch crates disappear
   (linking now via `windows-link` raw-dylib); new small crates
@@ -60,11 +61,11 @@ become `Option<…>`, `CreateWindowExW` → `Result<HWND>`, GDI calls want expli
 
 ### Strategy: single jump to 0.62, pinned as `windows = "0.62"`
 
-Stepping stones buy nothing: the work is concentrated in three adjacent versions
-(0.58–0.60), and stopping short would leave us doing nearly all of the work while
-still being behind — even 0.61 would only dodge the `BOOL` namespace move.
-Patch releases within 0.62 had zero API delta, so the pin allows patch drift;
-minor/breaking bumps remain deliberate undertakings.
+Stepping stones buy nothing: all of the work sits at or before 0.60, so any
+stop short of 0.60 does nearly all of the work while staying behind, and 0.61
+and 0.62 add no work at all. Patch releases within 0.62 had zero API delta, so
+the pin allows patch drift; minor/breaking bumps remain deliberate
+undertakings.
 
 ### Structural decision 1: `unsafe impl Send for PhysicalMonitor`
 
@@ -78,9 +79,11 @@ to the **strong** invariant — DDC physical-monitor handles are process-scoped,
 not thread-affine (the same claim 0.52 made implicitly via `HANDLE(isize)`
 being `Send`) — not the weaker "only ever touched on the worker thread", so a
 future cross-thread move stays covered by the stated argument. `Sync` is
-deliberately not implemented. This is the escape hatch the windows-rs
-maintainer points to. The alternative (store `isize`, rebuild `HANDLE` per
-call site) makes the same safety claim implicitly while scattering casts.
+deliberately not implemented. This matches upstream's stance that handle
+types implement neither `Send` nor `Sync` on purpose and callers who know
+their threading model wrap them (windows-rs #3093, #3169). The alternative
+(store `isize`, rebuild `HANDLE` per call site) makes the same safety claim
+implicitly while scattering casts.
 
 ### Structural decision 2: the `core`↔`platform` seam stays `isize`
 
@@ -111,17 +114,26 @@ compile. Hence:
    `unsafe impl Send` + `BOOL` import move; (b) mechanical sweep (`Option<…>`
    wrapping, `CreateWindowExW` → `?`, explicit `HGDIOBJ`, `RegQueryValueExW` →
    `.ok()`); (c) log-kv fix. Result: compiles, `cargo test` green, fmt clean.
-   Note: the 7 manual `CreateWindowExW` null-checks necessarily collapse to `?`
-   here — the new signature forces it; that is port, not cleanup.
+   Note: the manual `CreateWindowExW` null-checks collapse under the new
+   `Result<HWND>` signature — but not uniformly. Eight call sites, three
+   kinds: six hard checks that map to `?` (osd, overlay, hotkey, power, tray,
+   usage main window); one soft check (`usage.rs` OK button — creation
+   failure is deliberately non-fatal today, becomes `if let Ok`); one ignored
+   result (`usage.rs` static text — becomes `let _ =`). The two child-control
+   sites must NOT become `?`, or a child-control failure turns the whole
+   usage window fatal — a behavior change this design rules out.
 2. **Cleanup commits, each individually green:**
    - `get_last_error_code()` (`mod.rs`) **stays**: it is the engine behind
-     `last_error_as_brightness_error` (~25 surviving call sites), and its
-     `std::io::Error::last_os_error()` body is safe and version-independent —
-     "removing the shim" would trade a safe std call for an unsafe FFI call
-     with no benefit. What actually changes: fix the comment in
-     `single_instance.rs` claiming the crate's `GetLastError` HRESULT-wraps
-     the code (true in 0.52, wrong since 0.54), and delete the caller-less
-     `last_error_is_success()` (`mod.rs`) as pre-existing dead code.
+     `last_error_as_brightness_error` (20 call sites today, ~14 surviving the
+     `CreateWindowExW` collapse) and has 5 direct callers of its own
+     (`tray.rs` ×4, `single_instance.rs` — the load-bearing timing site), and
+     its `std::io::Error::last_os_error()` body is safe and
+     version-independent — "removing the shim" would trade a safe std call
+     for an unsafe FFI call with no benefit. What actually changes: fix the
+     comment in `single_instance.rs` claiming the crate's `GetLastError`
+     HRESULT-wraps the code (true in 0.52, wrong since 0.54), and delete the
+     caller-less `last_error_is_success()` (`mod.rs`) as pre-existing dead
+     code.
    - Replace manual `.0 != 0` / `.0 != -1` checks in `SafeHwnd`/`SafeHandle`
      with `is_invalid()`.
    - Replace `SafeHandle` with `windows::core::Owned<HANDLE>` **if** it fits
@@ -186,9 +198,12 @@ Manual (user, on real hardware; a written checklist ships in the branch):
   - the supervised-restart paths (DDC-worker respawn, hotkey-thread restart).
 - **Targeted checks** (behavior changes no compiler catches): single-instance
   detection (`ERROR_ALREADY_EXISTS` — the load-bearing `GetLastError` timing
-  site), and plausibility of error codes in the OSD error state (where
+  site); plausibility of error codes in the OSD error state (where
   crate-captured errors replace manual null-check + deferred `GetLastError`,
-  codes can differ in detail — strictly more correct, but different).
+  codes can differ in detail — strictly more correct, but different); and the
+  tray "open config file" / "open data directory" actions, incl. one forced
+  failure — their `ShellExecuteW` result casts silently become pointer→int
+  casts in 0.62.
 
 ## Accepted residual risks
 
@@ -212,7 +227,7 @@ Manual (user, on real hardware; a written checklist ships in the branch):
 | `overlay.rs` | 5 | `CreateWindowExW`; `SetWindowPos` insert-after → `Option<HWND>`; seam |
 | `ddc.rs` | 5 (+1 test) | `BOOL` import move; `EnumDisplayMonitors`/`SetupDiGetClassDevsW` `Option` params; `SetupDiOpenDevRegKey` scope `u32`; `RegQueryValueExW` → `WIN32_ERROR`; `assert_send::<DdcMonitor>` fails (→ Send decision) |
 | `ddc_worker.rs` | 2 | `handle_cache` keyed on `hmonitor.0` (now pointer); `DdcWorker` `!Send` (→ Send decision) |
-| `main.rs` | 2 (lower bound) | `BOOL` import move; `SetConsoleCtrlHandler(…, bool)` |
+| `main.rs` | 2 (lower bound; ≥3 expected) | `BOOL` import move; `SetConsoleCtrlHandler(…, bool)` ×2 |
 
 Verified unbroken: `SetVCPFeature`, `GetVCPFeatureAndVCPFeatureReply`,
 `GetPhysicalMonitorsFromHMONITOR`, `DestroyPhysicalMonitors`,
