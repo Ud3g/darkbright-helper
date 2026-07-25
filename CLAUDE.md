@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Platform gotcha (important)
 
-This is a **Windows-only binary**. `src/main.rs` and everything under `src/platform/windows/` import the `windows` crate unconditionally or behind `#[cfg(windows)]`. **`cargo build`/`cargo test` will not compile the full app on Linux** (this dev environment is WSL/Linux). To compile/check the whole crate, target Windows:
+This is a **Windows-only binary**. `src/main.rs` and everything under `src/platform/windows/` import the `windows` crate unconditionally or behind `#[cfg(windows)]`. On a Windows host, plain `cargo build`/`cargo test` covers the whole crate. **On a Linux/WSL host they will not compile the full app** — target Windows instead:
 
 ```bash
 cargo build --target x86_64-pc-windows-msvc      # or build on a real Windows host
@@ -44,13 +44,13 @@ Single-owner state with message passing — no async runtime. The **main thread*
 
 Message enums (`BrightnessMessage` to main, `DdcCommand` to worker) are defined in `src/core/state.rs`. Brightness is updated **optimistically**: the OSD/overlay update instantly, then the DDC result either confirms (`confirm_brightness`) or reverts (`revert_pending`) the pending value. Hardware failure does NOT fall back to overlay dimming for values > 0% (strict error handling) — the OSD shows a red error state instead.
 
-`MonitorState` holds `cached_brightness` (last confirmed), `pending_brightness` (optimistic, awaiting DDC), and `overlay_opacity`. Cache is refreshed on startup, periodically, after inactivity, and on system resume; a `refresh_in_progress` flag prevents concurrent refreshes.
+`MonitorState` holds `cached_brightness` (last confirmed), `pending_brightness` (optimistic, awaiting DDC), and `overlay_opacity`. Cache is refreshed on startup, periodically, after inactivity, and on system resume; a generation-countered `RefreshTracker` (`core/reconcile.rs`) gates concurrent refreshes and discards stale results.
 
 ### Module map
 
-- `src/core/` — platform-agnostic: `brightness.rs` (adjustment math), `config.rs` (JSON config + validation), `edid.rs` (EDID → `MonitorId` parsing), `state.rs` (state, messages, `MonitorId`, display-name generation).
+- `src/core/` — platform-agnostic: `brightness.rs` (adjustment math), `config.rs` (JSON config + validation), `controller.rs` (message-driven orchestration behind the platform seams), `edid.rs` (EDID → `MonitorId` parsing), `logfile.rs` (rolling file sink), `panic_hook.rs` (panic logging), `reconcile.rs` (refresh/respawn tracking), `state.rs` (state, messages, `MonitorId`, display-name generation).
 - `src/platform/mod.rs` — gates the platform submodule; the portability seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`) live in `core/controller.rs`.
-- `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `overlay.rs`, `power.rs`, `tray.rs`.
+- `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `osd_render.rs`, `overlay.rs`, `power.rs`, `single_instance.rs`, `tray.rs`.
 - `src/error.rs` — `BrightnessError` enum + `pub type Result<T>`.
 
 Read `docs/architecture.md` for full design rationale (it is the source of truth for behavior), `docs/code-conventions.md` for FFI/style rules, and `docs/improvement-ideas.md` for the roadmap.

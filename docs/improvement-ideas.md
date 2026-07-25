@@ -65,7 +65,7 @@ This document tracks potential future enhancements for the Brightness Control To
 **Developer and advanced user features:**
 
 - **Debug mode with detailed logging**
-  *Largely implemented:* structured key-value debug logging of DDC/CI communication and state changes already exists via `env_logger` (`RUST_LOG=debug`). Remaining ideas: performance metrics, and making logs retrievable from release builds (no console) — the latter is tracked separately as an architecture-review finding (opt-in file logging under `%APPDATA%`).
+  *Largely implemented:* structured key-value debug logging of DDC/CI communication and state changes exists via `env_logger` (`RUST_LOG=debug` for the console), and release builds can opt into a size-capped rolling file log (`logging.file_enabled`, under `%APPDATA%\BrightnessControl`, tray "Open Log Folder" entry). Remaining idea: performance metrics.
 
 - **Command-line interface for automation**
   Add a command-line interface that allows users to control brightness settings from scripts or the command line. This would enable automation scenarios and integration with existing workflow tools, supporting operations like setting specific brightness levels or applying presets.

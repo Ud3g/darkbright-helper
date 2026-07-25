@@ -751,7 +751,11 @@ under a `RespawnGate` with the same `RESPAWN_MAX`/`RESPAWN_WINDOW` backoff:
 deaths spaced apart restart indefinitely, a rapid crash loop (or a failed
 restart attempt) latches into a logged give-up state until the app is
 restarted. The tray and power threads remain unsupervised by design — both are
-non-fatal conveniences.
+non-fatal conveniences. One release-build consequence is worth knowing: with
+the console hidden there is no Ctrl+C, so the tray menu's Quit is the only
+*graceful* shutdown path — if the tray thread dies, ending the process takes
+Task Manager. Accepted: a hard kill loses nothing (settings live in the config
+file, brightness in the hardware, overlay windows die with the process).
 
 Both degraded states — DDC disabled and hotkeys given up — are surfaced to the
 user through the tray icon, tooltip, and menu (see §13, "Degraded-State
