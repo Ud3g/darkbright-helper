@@ -3,6 +3,17 @@
 Notable changes to darkbright-helper. Maintained from 0.8.0 onward; earlier
 history lives in the git log.
 
+## [Unreleased]
+
+### Fixed
+
+- System-resume detection never fired: `WM_POWERBROADCAST` is a sent message
+  (invisible to the `GetMessageW` queue check) and message-only windows are
+  excluded from broadcasts, so post-sleep resync silently fell back to the
+  periodic refresh. The power window now subscribes via
+  `RegisterSuspendResumeNotification` and handles the message in its window
+  procedure.
+
 ## [0.8.0] — 2026-07-24
 
 Rollup of everything landed since 0.7.1.

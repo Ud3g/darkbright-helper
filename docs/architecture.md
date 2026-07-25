@@ -547,7 +547,7 @@ The application maintains cached brightness values for instant OSD response. The
 
 2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
 
-3. **System Resume**: Power event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` Windows messages. Triggers immediate refresh since monitors often reset to default brightness after sleep.
+3. **System Resume**: Power event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` (`WM_POWERBROADCAST`, handled in the window procedure — it is a sent message, never queued). The listener's message-only window must be explicitly subscribed via `RegisterSuspendResumeNotification`, since message-only windows are excluded from message broadcasts. Triggers immediate refresh since monitors often reset to default brightness after sleep.
 
 **Overlap Protection:**
 

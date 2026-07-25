@@ -4,13 +4,18 @@
 //! and notify the main thread when the system wakes up, allowing brightness
 //! values to be resynced with monitors.
 
+use std::cell::RefCell;
 use std::sync::mpsc::Sender;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Power::{
+    HPOWERNOTIFY, RegisterSuspendResumeNotification, UnregisterSuspendResumeNotification,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-    HMENU, HWND_MESSAGE, MSG, RegisterClassW, TranslateMessage, WM_POWERBROADCAST, WNDCLASSW,
+    CW_USEDEFAULT, CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GetMessageW, HMENU, HWND_MESSAGE, MSG, PBT_APMRESUMEAUTOMATIC,
+    PBT_APMRESUMESUSPEND, RegisterClassW, TranslateMessage, WM_POWERBROADCAST, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
@@ -19,15 +24,23 @@ use crate::core::state::BrightnessMessage;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
+thread_local! {
+    /// Sender consulted by `power_wnd_proc` to notify the main thread of
+    /// resume events. `WM_POWERBROADCAST` arrives as a *sent* message,
+    /// dispatched directly to the window procedure — it never appears in the
+    /// `GetMessageW` queue — so the procedure needs its own path to the
+    /// channel. Installed on the power thread before the window is created.
+    static WNDPROC_SENDER: RefCell<Option<Sender<BrightnessMessage>>> =
+        const { RefCell::new(None) };
+}
 
-/// Power broadcast event: System has resumed from suspend (automatic).
-const PBT_APMRESUMEAUTOMATIC: u32 = 0x12;
-
-/// Power broadcast event: System has resumed from suspend (user action).
-const PBT_APMRESUMESUSPEND: u32 = 0x07;
+/// Installs the sender consulted by `power_wnd_proc` on the current thread.
+///
+/// Must be called on the thread that owns the power event window, before
+/// any `WM_POWERBROADCAST` can be delivered.
+fn install_wndproc_sender(sender: Sender<BrightnessMessage>) {
+    WNDPROC_SENDER.with(|cell| *cell.borrow_mut() = Some(sender));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -45,20 +58,69 @@ unsafe extern "system" fn power_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    if msg == WM_POWERBROADCAST {
+        handle_power_broadcast(wparam);
+        // TRUE: message processed, per the WM_POWERBROADCAST contract
+        return LRESULT(1);
+    }
     // In Rust 2024, unsafe fn body still requires explicit unsafe block
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+/// Handles a `WM_POWERBROADCAST` message received by the window procedure.
+///
+/// Detects resume events and notifies the main thread.
+fn handle_power_broadcast(wparam: WPARAM) {
+    // wparam contains the power event type
+    // PBT_APMRESUMEAUTOMATIC: Resume from suspend (automatic)
+    // PBT_APMRESUMESUSPEND: Resume from suspend (user action)
+    // Power event types fit in u32; truncation is acceptable on 64-bit
+    #[allow(clippy::cast_possible_truncation)]
+    let event_type = wparam.0 as u32;
+
+    match event_type {
+        PBT_APMRESUMEAUTOMATIC => {
+            log::info!(resume_type = "automatic"; "System resumed from sleep");
+            send_resume_notification();
+        }
+        PBT_APMRESUMESUSPEND => {
+            log::info!(resume_type = "user_action"; "System resumed from sleep");
+            send_resume_notification();
+        }
+        _ => {
+            // Other power events we don't care about
+            log::trace!(event_type = event_type; "Power broadcast event ignored");
+        }
+    }
+}
+
+/// Sends a `SystemResumed` notification to the main thread.
+fn send_resume_notification() {
+    WNDPROC_SENDER.with(|cell| match cell.borrow().as_ref() {
+        Some(sender) => {
+            if let Err(e) = sender.send(BrightnessMessage::SystemResumed) {
+                log::error!(error:% = e; "Failed to send SystemResumed message");
+            }
+        }
+        None => {
+            log::warn!("Power broadcast received before sender was installed");
+        }
+    });
+}
+
 /// Listens for system power events (sleep/resume) and notifies the main thread.
 ///
-/// This listener creates a hidden message-only window that receives
-/// `WM_POWERBROADCAST` messages from Windows. When a resume event is detected,
-/// it sends a `BrightnessMessage::SystemResumed` to the main thread.
+/// This listener creates a hidden message-only window and subscribes it to
+/// suspend/resume events via `RegisterSuspendResumeNotification`. The explicit
+/// subscription is required: message-only windows are excluded from message
+/// broadcasts, so `WM_POWERBROADCAST` would otherwise never reach the window.
+/// When a resume event is detected, the window procedure sends a
+/// `BrightnessMessage::SystemResumed` to the main thread.
 pub struct PowerEventListener {
     /// Handle to the invisible message window that receives power events.
     hwnd: HWND,
-    /// Channel sender to transmit power events to the main thread.
-    sender: Sender<BrightnessMessage>,
+    /// Registration handle for the suspend/resume notification subscription.
+    notification: HPOWERNOTIFY,
 }
 
 impl PowerEventListener {
@@ -70,12 +132,15 @@ impl PowerEventListener {
     ///
     /// # Errors
     ///
-    /// Returns a `BrightnessError::WindowsApi` if the message window cannot be created.
+    /// Returns a `BrightnessError::WindowsApi` if the message window cannot be
+    /// created or the suspend/resume notification cannot be registered.
     ///
     /// # Panics
     ///
     /// Panics if the current process module handle cannot be retrieved.
     pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
+        install_wndproc_sender(sender);
+
         let hinstance = unsafe {
             GetModuleHandleW(None).map_err(|e| {
                 BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
@@ -117,16 +182,30 @@ impl PowerEventListener {
             return Err(last_error_as_brightness_error("CreateWindowExW"));
         }
 
-        log::debug!(hwnd = hwnd.0; "Power event listener window created");
+        let notification = unsafe {
+            RegisterSuspendResumeNotification(HANDLE(hwnd.0), DEVICE_NOTIFY_WINDOW_HANDLE)
+        }
+        .map_err(|e| {
+            unsafe {
+                let _ = DestroyWindow(hwnd);
+            }
+            BrightnessError::windows_api(
+                "RegisterSuspendResumeNotification",
+                e.code().0.cast_unsigned(),
+            )
+        })?;
 
-        Ok(Self { hwnd, sender })
+        log::debug!(hwnd = hwnd.0; "Power event listener window created and registered");
+
+        Ok(Self { hwnd, notification })
     }
 
     /// Runs the message loop to process power events.
     ///
     /// This method blocks until the message loop is terminated (e.g., by `WM_QUIT`).
-    /// It listens for `WM_POWERBROADCAST` messages and sends `SystemResumed`
-    /// when the system wakes from sleep/hibernate.
+    /// `WM_POWERBROADCAST` is a *sent* message handled inside `power_wnd_proc`;
+    /// this loop's job is only to keep the thread pumping so sent messages get
+    /// delivered.
     pub fn run_message_loop(&self) {
         let mut msg = MSG::default();
         unsafe {
@@ -135,54 +214,19 @@ impl PowerEventListener {
             // 0: WM_QUIT received
             // -1: Error
             while GetMessageW(&raw mut msg, HWND::default(), 0, 0).0 > 0 {
-                if msg.message == WM_POWERBROADCAST {
-                    self.handle_power_broadcast(msg.wParam);
-                }
-
                 let _ = TranslateMessage(&raw const msg);
                 let _ = DispatchMessageW(&raw const msg);
             }
         }
         log::debug!("Power event listener message loop exited");
     }
-
-    /// Handles a `WM_POWERBROADCAST` message.
-    ///
-    /// Detects resume events and notifies the main thread.
-    fn handle_power_broadcast(&self, wparam: WPARAM) {
-        // wparam contains the power event type
-        // PBT_APMRESUMEAUTOMATIC: Resume from suspend (automatic)
-        // PBT_APMRESUMESUSPEND: Resume from suspend (user action)
-        // Power event types fit in u32; truncation is acceptable on 64-bit
-        #[allow(clippy::cast_possible_truncation)]
-        let event_type = wparam.0 as u32;
-
-        match event_type {
-            PBT_APMRESUMEAUTOMATIC => {
-                log::info!(resume_type = "automatic"; "System resumed from sleep");
-                self.send_resume_notification();
-            }
-            PBT_APMRESUMESUSPEND => {
-                log::info!(resume_type = "user_action"; "System resumed from sleep");
-                self.send_resume_notification();
-            }
-            _ => {
-                // Other power events we don't care about
-                log::trace!(event_type = event_type; "Power broadcast event ignored");
-            }
-        }
-    }
-
-    /// Sends a `SystemResumed` notification to the main thread.
-    fn send_resume_notification(&self) {
-        if let Err(e) = self.sender.send(BrightnessMessage::SystemResumed) {
-            log::error!(error:% = e; "Failed to send SystemResumed message");
-        }
-    }
 }
 
 impl Drop for PowerEventListener {
     fn drop(&mut self) {
+        unsafe {
+            let _ = UnregisterSuspendResumeNotification(self.notification);
+        }
         if self.hwnd.0 != 0 {
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
@@ -200,6 +244,53 @@ impl Drop for PowerEventListener {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+
+    #[test]
+    fn wnd_proc_forwards_resume_events_to_main_thread() {
+        let (tx, rx) = mpsc::channel();
+        install_wndproc_sender(tx);
+
+        for event in [PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND] {
+            let result = unsafe {
+                power_wnd_proc(
+                    HWND::default(),
+                    WM_POWERBROADCAST,
+                    WPARAM(usize::try_from(event).unwrap()),
+                    LPARAM(0),
+                )
+            };
+            assert!(
+                matches!(rx.try_recv(), Ok(BrightnessMessage::SystemResumed)),
+                "resume event {event:#x} should notify the main thread"
+            );
+            assert_eq!(
+                result,
+                LRESULT(1),
+                "WM_POWERBROADCAST should be reported as handled (TRUE)"
+            );
+        }
+    }
+
+    #[test]
+    fn wnd_proc_ignores_non_resume_power_events() {
+        use windows::Win32::UI::WindowsAndMessaging::PBT_APMSUSPEND;
+
+        let (tx, rx) = mpsc::channel();
+        install_wndproc_sender(tx);
+
+        unsafe {
+            power_wnd_proc(
+                HWND::default(),
+                WM_POWERBROADCAST,
+                WPARAM(usize::try_from(PBT_APMSUSPEND).unwrap()),
+                LPARAM(0),
+            );
+        }
+        assert!(
+            rx.try_recv().is_err(),
+            "suspend event must not notify the main thread"
+        );
+    }
 
     #[test]
     fn test_power_listener_creation() {
