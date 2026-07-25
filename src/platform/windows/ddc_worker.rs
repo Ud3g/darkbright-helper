@@ -104,7 +104,10 @@ impl DdcWorker {
                 (true, None)
             }
             Err(e) => {
-                log::error!(monitor_id:% = monitor_id, error:% = e; "Failed to set brightness");
+                // The controller is the handling point and logs this failure
+                // at error level (the text travels in the result message);
+                // this line only keeps the worker-side timeline visible.
+                log::debug!(monitor_id:% = monitor_id, error:% = e; "Failed to set brightness");
                 (false, Some(e.to_string()))
             }
         };

@@ -18,7 +18,9 @@ history lives in the git log.
 - Quieter, more useful logs: the periodic-refresh heartbeat (two lines per
   minute) moved from info to debug so the size-capped file log covers a longer
   window; newly detected monitors and the registered hotkey combos are now
-  logged at info instead.
+  logged at info instead. DDC set failures are logged once (at the handling
+  site) rather than twice, and DDC retry warnings now name the affected
+  monitor.
 
 ### Fixed
 

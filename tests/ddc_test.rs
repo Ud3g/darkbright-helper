@@ -37,7 +37,7 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
 
                 for (j, pm) in physical_monitors.iter().enumerate() {
                     // 4. Read Brightness (VCP 0x10)
-                    match get_vcp_feature(pm, 0x10) {
+                    match get_vcp_feature(pm, &format!("physical #{j}"), 0x10) {
                         Ok((current, max)) => {
                             println!("    [Physical #{j}] Brightness: {current} (Max: {max})");
                         }

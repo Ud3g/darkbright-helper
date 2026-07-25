@@ -157,8 +157,9 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
 }
 
 /// Runs a DDC operation up to `DDC_MAX_ATTEMPTS` times (the initial try plus retries),
-/// sleeping `DDC_RETRY_DELAY_MS` between attempts.
-fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
+/// sleeping `DDC_RETRY_DELAY_MS` between attempts. `monitor` names the target
+/// in the retry warning (multi-monitor logs are ambiguous without it).
+fn retry_ddc_op<T>(monitor: &str, mut op: impl FnMut() -> Result<T>) -> Result<T> {
     let mut attempts = 0;
     loop {
         match op() {
@@ -169,6 +170,7 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
                     return Err(e);
                 }
                 log::warn!(
+                    monitor:% = monitor,
                     attempt = attempts,
                     max_attempts = DDC_MAX_ATTEMPTS,
                     retry_delay_ms = DDC_RETRY_DELAY_MS,
@@ -186,6 +188,7 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
 /// # Arguments
 ///
 /// * `monitor` - The physical monitor handle.
+/// * `monitor_label` - Display name used in retry log lines.
 /// * `vcp_code` - The VCP code to query (e.g., 0x10 for brightness).
 ///
 /// # Returns
@@ -195,8 +198,12 @@ fn retry_ddc_op<T>(mut op: impl FnMut() -> Result<T>) -> Result<T> {
 /// # Errors
 ///
 /// Returns a `WindowsApi` error if the VCP feature cannot be read.
-pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, u32)> {
-    retry_ddc_op(|| {
+pub fn get_vcp_feature(
+    monitor: &PhysicalMonitor,
+    monitor_label: &str,
+    vcp_code: u8,
+) -> Result<(u32, u32)> {
+    retry_ddc_op(monitor_label, || {
         let mut current_value = 0;
         let mut max_value = 0;
 
@@ -224,14 +231,20 @@ pub fn get_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8) -> Result<(u32, 
 /// # Arguments
 ///
 /// * `monitor` - The physical monitor handle.
+/// * `monitor_label` - Display name used in retry log lines.
 /// * `vcp_code` - The VCP code to set (e.g., 0x10 for brightness).
 /// * `value` - The new value to set.
 ///
 /// # Errors
 ///
 /// Returns a `WindowsApi` error if the VCP feature cannot be set.
-pub fn set_vcp_feature(monitor: &PhysicalMonitor, vcp_code: u8, value: u32) -> Result<()> {
-    retry_ddc_op(|| unsafe {
+pub fn set_vcp_feature(
+    monitor: &PhysicalMonitor,
+    monitor_label: &str,
+    vcp_code: u8,
+    value: u32,
+) -> Result<()> {
+    retry_ddc_op(monitor_label, || unsafe {
         if SetVCPFeature(monitor.handle(), vcp_code, value) != 0 {
             Ok(())
         } else {
@@ -285,7 +298,7 @@ impl DdcMonitor {
     ///
     /// Returns a `WindowsApi` error if the brightness cannot be read.
     pub fn get_brightness(&mut self) -> Result<u32> {
-        let (current, _) = get_vcp_feature(&self.handle, 0x10)?;
+        let (current, _) = get_vcp_feature(&self.handle, &self.id.base_display_name(), 0x10)?;
         self.cached_brightness = Some(current);
         Ok(current)
     }
@@ -298,7 +311,7 @@ impl DdcMonitor {
     ///
     /// Returns a `WindowsApi` error if the brightness cannot be set.
     pub fn set_brightness(&mut self, value: u32) -> Result<()> {
-        set_vcp_feature(&self.handle, 0x10, value)?;
+        set_vcp_feature(&self.handle, &self.id.base_display_name(), 0x10, value)?;
         self.cached_brightness = Some(value);
         Ok(())
     }
