@@ -26,12 +26,6 @@ impl BrightnessAdjustment {
             overlay_opacity,
         }
     }
-
-    /// Returns true if the overlay should be visible.
-    #[must_use]
-    pub const fn overlay_active(&self) -> bool {
-        self.overlay_opacity > 0
-    }
 }
 
 /// Calculates the new brightness state after applying a delta.
@@ -128,26 +122,6 @@ fn calculate_increase(
         // No overlay, increase hardware brightness
         let new_hardware = (hardware + increase_amount).min(100);
         BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(100), 0)
-    }
-}
-
-/// Clamps a brightness value to the valid range (0-100).
-///
-/// # Returns
-///
-/// The clamped value as `u8`.
-#[inline]
-#[must_use]
-pub const fn clamp_brightness(value: i16) -> u8 {
-    if value < 0 {
-        0
-    } else if value > 100 {
-        100
-    } else {
-        // Safe as value is now guaranteed to be between 0 and 100
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let v = value as u8;
-        v
     }
 }
 

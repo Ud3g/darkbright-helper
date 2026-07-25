@@ -230,8 +230,6 @@ pub struct MonitorState {
     pub pending: Option<PendingSet>,
     /// Current overlay opacity (0-100, where 0 = invisible).
     pub overlay_opacity: u8,
-    /// Timestamp of last successful DDC read/write.
-    pub last_refresh: Instant,
     /// First observation of this monitor's current run of enumeration absence.
     ///
     /// `None` while the monitor is present (or absence was never observed).
@@ -248,7 +246,6 @@ impl MonitorState {
             cached_brightness: initial_brightness.min(100),
             pending: None,
             overlay_opacity: 0,
-            last_refresh: Instant::now(),
             missing_since: None,
         }
     }
@@ -282,7 +279,6 @@ impl MonitorState {
             Some(pending) if pending.seq == seq => {
                 if success {
                     self.cached_brightness = pending.value;
-                    self.last_refresh = Instant::now();
                     self.pending = None;
                     SetOutcome::Confirmed
                 } else {
@@ -299,7 +295,6 @@ impl MonitorState {
                 // out-of-order delivery would need a seq gate on this branch.
                 if success {
                     self.cached_brightness = value.min(100);
-                    self.last_refresh = Instant::now();
                     SetOutcome::GroundTruth
                 } else {
                     SetOutcome::Ignored
@@ -326,7 +321,6 @@ impl MonitorState {
     /// an optimistic set that is still awaiting its own result.
     pub fn update_from_ddc(&mut self, value: u8) {
         self.cached_brightness = value.min(100);
-        self.last_refresh = Instant::now();
     }
 }
 
@@ -409,7 +403,10 @@ pub enum BrightnessMessage {
     },
     /// Adjust brightness by a relative delta.
     Adjust {
-        /// Target monitor (None = monitor under cursor).
+        /// Target monitor (None = monitor under cursor). Every current
+        /// producer sends None; the targeted form is kept for future
+        /// per-monitor adjustment (tray/CLI) and is exercised by the
+        /// controller tests.
         monitor_id: Option<MonitorId>,
         /// Brightness change (-100 to +100).
         delta: i8,
