@@ -13,6 +13,13 @@ history lives in the git log.
 - Releases now ship a prebuilt `darkbright-helper.exe` on GitHub Releases,
   built by a tag-triggered workflow; `RELEASING.md` documents the procedure.
 
+### Changed
+
+- Quieter, more useful logs: the periodic-refresh heartbeat (two lines per
+  minute) moved from info to debug so the size-capped file log covers a longer
+  window; newly detected monitors and the registered hotkey combos are now
+  logged at info instead.
+
 ### Fixed
 
 - System-resume detection never fired: `WM_POWERBROADCAST` is a sent message

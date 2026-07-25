@@ -474,6 +474,13 @@ fn start_hotkey_thread(
     result_rx
         .recv()
         .map_err(|_| BrightnessError::ChannelRecv)??;
+    // One info line naming the bound combos: the first thing to check on a
+    // "hotkey does nothing" field report.
+    log::info!(
+        brightness_up:% = config.hotkeys.brightness_up,
+        brightness_down:% = config.hotkeys.brightness_down;
+        "Hotkeys registered"
+    );
     Ok(handle)
 }
 

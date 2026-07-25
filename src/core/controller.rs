@@ -209,7 +209,7 @@ where
     /// Sends a `RefreshAll` command to the DDC worker. The actual state
     /// update happens when `DdcRefreshResult` is received.
     pub fn handle_refresh(&mut self, now: Instant) {
-        log::info!("Requesting monitor refresh from DDC worker");
+        log::debug!("Requesting monitor refresh from DDC worker");
 
         // Clear ID cache since handles may change after refresh.
         self.id_cache.clear();
@@ -274,7 +274,10 @@ where
         let found_monitors = !monitors.is_empty();
 
         if found_monitors {
-            log::info!(count = monitors.len(); "DDC refresh complete");
+            // Routine heartbeat (fires every periodic refresh): debug, so it
+            // does not drown the rolling file log. Topology *changes* — new
+            // monitor below, prune in apply_absence_evidence — stay at info.
+            log::debug!(count = monitors.len(); "DDC refresh complete");
         } else {
             log::warn!("DDC refresh completed with no monitors found");
         }
@@ -300,6 +303,8 @@ where
                     );
                 }
             } else {
+                log::info!(monitor:% = monitor_id.base_display_name(); "New monitor detected");
+                log::debug!(monitor_id:% = monitor_id.full_identity(); "New monitor identity");
                 self.states
                     .insert(monitor_id, MonitorState::new(brightness));
             }
