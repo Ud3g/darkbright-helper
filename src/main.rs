@@ -39,6 +39,11 @@ use darkbright_helper::{BrightnessError, Result};
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// How long to wait for the hotkey thread to report its registration result.
+/// A healthy spawn (message window + `RegisterHotKey`) takes milliseconds;
+/// the bound only exists so a hung spawn cannot freeze the main loop.
+const HOTKEY_START_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Opens a file with the system's default application.
 ///
 /// Uses `ShellExecuteW` with the "open" verb to launch the default handler
@@ -477,10 +482,20 @@ fn start_hotkey_thread(
         hotkey_manager.run_message_loop();
     });
 
-    // Wait for registration result from hotkey thread
-    result_rx
-        .recv()
-        .map_err(|_| BrightnessError::ChannelRecv)??;
+    // Wait for the registration result, but bounded: a spawn hung inside
+    // window creation or registration must not block the main loop —
+    // especially not on a supervised restart. On timeout the thread is
+    // abandoned (deliberate leak): if it ever wakes it either exits or its
+    // held registrations make the next restart fail loudly.
+    match result_rx.recv_timeout(HOTKEY_START_TIMEOUT) {
+        Ok(result) => result?,
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            return Err(BrightnessError::HotkeyThreadUnresponsive);
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            return Err(BrightnessError::ChannelRecv);
+        }
+    }
     // One info line naming the bound combos: the first thing to check on a
     // "hotkey does nothing" field report.
     log::info!(

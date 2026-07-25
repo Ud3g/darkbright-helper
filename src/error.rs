@@ -94,6 +94,10 @@ pub enum BrightnessError {
     /// Failed to receive a message from a channel.
     #[error("Failed to receive message: channel closed")]
     ChannelRecv,
+
+    /// The hotkey thread did not report its registration result in time.
+    #[error("Hotkey thread did not report registration in time")]
+    HotkeyThreadUnresponsive,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
