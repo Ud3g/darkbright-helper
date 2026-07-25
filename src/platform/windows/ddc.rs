@@ -9,9 +9,9 @@ use windows::Win32::Devices::DeviceAndDriverInstallation::{
     SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey,
 };
 use windows::Win32::Devices::Display::{
-    CapabilitiesRequestAndCapabilitiesReply, DestroyPhysicalMonitors, GetCapabilitiesStringLength,
-    GetNumberOfPhysicalMonitorsFromHMONITOR, GetPhysicalMonitorsFromHMONITOR,
-    GetVCPFeatureAndVCPFeatureReply, PHYSICAL_MONITOR, SetVCPFeature,
+    DestroyPhysicalMonitors, GetNumberOfPhysicalMonitorsFromHMONITOR,
+    GetPhysicalMonitorsFromHMONITOR, GetVCPFeatureAndVCPFeatureReply, PHYSICAL_MONITOR,
+    SetVCPFeature,
 };
 use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
@@ -153,48 +153,6 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
         .into_iter()
         .map(|inner| PhysicalMonitor { inner })
         .collect())
-}
-
-/// Retrieves the DDC/CI capabilities string from a physical monitor.
-///
-/// The capabilities string is an ASCII string containing information about the
-/// monitor's supported VCP codes, model name, and other features.
-///
-/// # Errors
-///
-/// Returns a `WindowsApi` error if the capabilities cannot be read.
-pub fn get_capabilities_string(monitor: &PhysicalMonitor) -> Result<String> {
-    let mut length = 0;
-
-    unsafe {
-        if GetCapabilitiesStringLength(monitor.handle(), &raw mut length) == 0 {
-            return Err(last_error_as_brightness_error(
-                "GetCapabilitiesStringLength",
-            ));
-        }
-    }
-
-    if length == 0 {
-        return Ok(String::new());
-    }
-
-    // The length includes the null terminator.
-    let mut buffer = vec![0u8; length as usize];
-
-    unsafe {
-        if CapabilitiesRequestAndCapabilitiesReply(monitor.handle(), &mut buffer) == 0 {
-            return Err(last_error_as_brightness_error(
-                "CapabilitiesRequestAndCapabilitiesReply",
-            ));
-        }
-    }
-
-    // Convert to String, stripping the null terminator and any garbage
-    let s = String::from_utf8_lossy(&buffer)
-        .trim_matches(char::from(0))
-        .to_string();
-
-    Ok(s)
 }
 
 /// Runs a DDC operation up to `DDC_MAX_ATTEMPTS` times (the initial try plus retries),
