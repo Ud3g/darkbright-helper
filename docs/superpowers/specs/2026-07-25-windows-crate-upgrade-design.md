@@ -1,7 +1,7 @@
 # Design: `windows` crate upgrade 0.52 → 0.62
 
 **Date:** 2026-07-25
-**Status:** design approved in dialogue; written spec awaiting user review
+**Status:** design approved in dialogue; cold adversarial review incorporated; awaiting user review
 **Branch:** `windows-crate-upgrade` (off `main`)
 
 ## Goal
@@ -27,18 +27,23 @@ A trial compile of this repo against `windows` 0.62.2 and a signature diff of al
 
 - **89 compile errors in the lib, +2 under `cfg(test)`, +2 in `main.rs`** (the
   `main.rs` count is a lower bound — the lib fails first, so cargo never fully
-  checked the bin).
-- **82 of 86 signature changes land in 0.59 + 0.60**; 0.58 contributes the
-  structural break (handles become `*mut c_void`, losing `Send`/`Sync`;
-  `CreateWindowExW` returns `Result<HWND>`). 0.61 and 0.62 change **nothing** on
-  this repo's API surface.
+  checked the bin; the same caveat applies to `tests/`, where `hotkey_test.rs`
+  imports the `windows` crate directly — its imports were verified unchanged in
+  0.62, expected breakage zero).
+- **The churn is concentrated in 0.58–0.60.** 0.58 contributes the structural
+  break (handles become `*mut c_void`, losing `Send`/`Sync`; `CreateWindowExW`
+  returns `Result<HWND>`); 0.59 + 0.60 contribute the bulk of the signature
+  changes (`Option<…>` params, flag newtypes, `bool` params). One late break:
+  **`BOOL` leaves `Win32::Foundation` for `windows::core` at 0.62** (verified
+  still in `Foundation` through 0.61). 0.61 changes nothing on this repo's
+  API surface.
 - **MSRV:** windows 0.62.x requires Rust 1.82 (transitive max across
   windows-core/-result/-strings/-link likewise 1.82). Repo pins
   `rust-version = "1.88"` — **no MSRV bump needed**; the CI 1.88 job stays valid.
 - **Feature gates:** all 16 features in `Cargo.toml` survive verbatim — zero
   edits to the feature block. One namespace move: `BOOL` left
-  `Win32::Foundation` for `windows::core` (0.60); `TRUE`/`FALSE` stay in
-  `Foundation`.
+  `Win32::Foundation` for `windows::core` (at 0.62); `TRUE`/`FALSE` stay in
+  `Foundation`, now typed `windows_core::BOOL`.
 - **Dependency graph:** `windows-targets` and the eight arch crates disappear
   (linking now via `windows-link` raw-dylib); new small crates
   (`windows-collections`, `-future`, `-numerics`, `-threading`, `-implement`,
@@ -56,30 +61,38 @@ become `Option<…>`, `CreateWindowExW` → `Result<HWND>`, GDI calls want expli
 ### Strategy: single jump to 0.62, pinned as `windows = "0.62"`
 
 Stepping stones buy nothing: the work is concentrated in three adjacent versions
-(0.58–0.60), and stopping short would leave us doing all of the work while still
-being behind. Patch releases within 0.62 had zero API delta, so the pin allows
-patch drift; minor/breaking bumps remain deliberate undertakings.
+(0.58–0.60), and stopping short would leave us doing nearly all of the work while
+still being behind — even 0.61 would only dodge the `BOOL` namespace move.
+Patch releases within 0.62 had zero API delta, so the pin allows patch drift;
+minor/breaking bumps remain deliberate undertakings.
 
 ### Structural decision 1: `unsafe impl Send for PhysicalMonitor`
 
 Since 0.58, `PHYSICAL_MONITOR.hPhysicalMonitor` is `HANDLE(*mut c_void)`, which
 is `!Send`, so `DdcWorker` no longer satisfies `thread::spawn`. The design is
-unaffected — handles are created, used, and destroyed on the worker thread; only
-the type check fails. Fix: `unsafe impl Send for PhysicalMonitor` with a safety
-comment stating the invariant (DDC physical-monitor handles are process-scoped,
-not thread-affine). This is the escape hatch the windows-rs maintainer points to.
-The alternative (store `isize`, rebuild `HANDLE` per call site) makes the same
-safety claim implicitly while scattering casts.
+unaffected — `DdcWorker` is constructed empty on the main thread and moved into
+the thread; every `PhysicalMonitor` is created, used, and dropped on the worker
+thread; no message enum or `core/` type carries a handle. Only the type check
+fails. Fix: `unsafe impl Send for PhysicalMonitor`. The safety comment commits
+to the **strong** invariant — DDC physical-monitor handles are process-scoped,
+not thread-affine (the same claim 0.52 made implicitly via `HANDLE(isize)`
+being `Send`) — not the weaker "only ever touched on the worker thread", so a
+future cross-thread move stays covered by the stated argument. `Sync` is
+deliberately not implemented. This is the escape hatch the windows-rs
+maintainer points to. The alternative (store `isize`, rebuild `HANDLE` per
+call site) makes the same safety claim implicitly while scattering casts.
 
 ### Structural decision 2: the `core`↔`platform` seam stays `isize`
 
 `MonitorHandle(pub isize)` (`core/controller.rs`) and `TrayStatusHandle(isize)`
 (`tray.rs`) stay as-is: `core/` stays platform-free, and `TrayStatusHandle` must
 remain `Send` (crosses the tray/main thread boundary). The isize↔pointer
-conversion happens at the existing handoff points (~6 sites in `mod.rs`,
-`osd.rs`, `overlay.rs`, `ddc_worker.rs`, `tray.rs`) via a central helper pair in
-`platform/windows/mod.rs` rather than six hand-written casts — this also
-concentrates the new clippy pointer lints in one place.
+conversion happens at the existing handoff points (7 sites: `mod.rs` ×2,
+`osd.rs`, `overlay.rs`, `ddc_worker.rs`, `tray.rs` ×2) via a central helper pair
+in `platform/windows/mod.rs` rather than seven hand-written casts. This
+concentrates most — not all — of the new clippy pointer lints: the `HMENU`
+control-ID cast in `usage.rs` and the `ShellExecuteW` result casts in `main.rs`
+(which silently become pointer→int casts in 0.62) sit outside the helpers.
 
 ### Structural decision 3: handle logging switches to Debug format
 
@@ -101,9 +114,14 @@ compile. Hence:
    Note: the 7 manual `CreateWindowExW` null-checks necessarily collapse to `?`
    here — the new signature forces it; that is port, not cleanup.
 2. **Cleanup commits, each individually green:**
-   - Remove the `get_last_error_code()` shim (`mod.rs`) — obsolete since 0.54
-     (`GetLastError` returns raw `WIN32_ERROR` again); fix the now-wrong comment
-     in `single_instance.rs` that claims the crate HRESULT-wraps the code.
+   - `get_last_error_code()` (`mod.rs`) **stays**: it is the engine behind
+     `last_error_as_brightness_error` (~25 surviving call sites), and its
+     `std::io::Error::last_os_error()` body is safe and version-independent —
+     "removing the shim" would trade a safe std call for an unsafe FFI call
+     with no benefit. What actually changes: fix the comment in
+     `single_instance.rs` claiming the crate's `GetLastError` HRESULT-wraps
+     the code (true in 0.52, wrong since 0.54), and delete the caller-less
+     `last_error_is_success()` (`mod.rs`) as pre-existing dead code.
    - Replace manual `.0 != 0` / `.0 != -1` checks in `SafeHwnd`/`SafeHandle`
      with `is_invalid()`.
    - Replace `SafeHandle` with `windows::core::Owned<HANDLE>` **if** it fits
@@ -112,7 +130,7 @@ compile. Hence:
 3. **Docs commit(s)** (next section).
 
 **Deliberately kept:** the manual `Debug` impl for `PhysicalMonitor`
-(`PHYSICAL_MONITOR` never gained a `Debug` derive, still packed) and the 16
+(`PHYSICAL_MONITOR` never gained a `Debug` derive, still packed) and the 21
 `e.code().0.cast_unsigned()` sites (`HRESULT(pub i32)` unchanged).
 
 **Clippy gate:** `cargo +stable clippy --all-targets -- -D warnings` with
@@ -137,6 +155,15 @@ seam — they land bundled in the helper pair.
   changed.
 - **`docs/architecture.md`**: check for version-bound claims while porting;
   touch only where facts no longer hold.
+- **`CLAUDE.md`**: the "`windows` crate v0.52" conventions bullet hardcodes
+  0.52-era guidance and is read at the start of every future session — refresh
+  alongside code-conventions.md (pointer handles, `is_invalid()`, `Option<…>`
+  params, `BOOL` in `windows::core`, `bool` instead of `Into<BOOL>`).
+- **`CHANGELOG.md`**: one `[Unreleased]` line for the dependency major, incl.
+  the cosmetic handle-format change in debug logs.
+- Sweep the two "0.52+"-phrased comments in `ddc.rs` (near the
+  `DestroyPhysicalMonitors` and `SetupDiEnumDeviceInfo` calls) — still
+  factually true in 0.62 but stale-reading.
 
 ## Verification
 
@@ -150,7 +177,13 @@ Manual (user, on real hardware; a written checklist ships in the branch):
 - **Full hardware pass at branch end** per `docs/architecture.md` "Integration
   Testing": DDC set/get on all monitors, OSD, overlay at 0%, tray menu incl.
   live status, hotkeys incl. opt-in low-level hook, resume from sleep, monitor
-  hot-plug, single-instance behavior.
+  hot-plug, single-instance behavior. Additionally — paths the port
+  demonstrably touches that the architecture.md list does not reach:
+  - the usage/instructions window (open it, focus behavior, OK button);
+  - Ctrl+C shutdown in a debug console (`SetConsoleCtrlHandler`);
+  - the tray degraded-status *push* path (induce a DDC-degraded state and
+    watch the tray icon update — distinct from the menu's *pull* path);
+  - the supervised-restart paths (DDC-worker respawn, hotkey-thread restart).
 - **Targeted checks** (behavior changes no compiler catches): single-instance
   detection (`ERROR_ALREADY_EXISTS` — the load-bearing `GetLastError` timing
   site), and plausibility of error codes in the OSD error state (where
