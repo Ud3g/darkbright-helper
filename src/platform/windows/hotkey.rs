@@ -193,12 +193,11 @@ unsafe extern "system" fn low_level_keyboard_proc(
                         -ctx.step_percent
                     };
 
-                    log::debug!(
-                        vk_code = vk_code.0,
-                        delta = adjustment;
-                        "Brightness key intercepted by hook"
-                    );
-
+                    // No routine logging here: with file logging at debug, a
+                    // log call does mutex-guarded disk I/O, and a slow write
+                    // inside an LL hook risks Windows silently removing the
+                    // hook on timeout. The keypress is still logged at debug
+                    // when the main loop receives the message.
                     if let Err(e) = ctx.sender.send(BrightnessMessage::Adjust {
                         monitor_id: None,
                         delta: adjustment,

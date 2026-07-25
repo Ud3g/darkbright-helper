@@ -437,26 +437,6 @@ impl Config {
         }
     }
 
-    /// Saves configuration to the default path.
-    ///
-    /// Creates the parent directory if it doesn't exist.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ConfigWrite` if the file cannot be written.
-    pub fn save(&self) -> Result<()> {
-        match Self::default_path() {
-            Some(path) => self.save_to(&path),
-            None => Err(BrightnessError::ConfigWrite {
-                path: "unknown".to_string(),
-                source: std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    "Could not determine config directory",
-                ),
-            }),
-        }
-    }
-
     /// Saves configuration to a specific path.
     ///
     /// The write is atomic (temp file + rename), so an interrupted save
