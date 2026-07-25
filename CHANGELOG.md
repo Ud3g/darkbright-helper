@@ -13,6 +13,11 @@ history lives in the git log.
   periodic refresh. The power window now subscribes via
   `RegisterSuspendResumeNotification` and handles the message in its window
   procedure.
+- A blocked log rotation (e.g. `darkbright.log.old` transiently locked by a
+  scanner) silently dropped every file-log record until rotation succeeded
+  again. The file log now degrades to a temporarily oversized file as
+  documented — records keep flowing, and the next over-cap write retries the
+  rotation.
 
 ## [0.8.0] — 2026-07-24
 
