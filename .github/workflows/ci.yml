@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly advisory sweep: a quiet repo would otherwise learn about new
+  # RustSec advisories only on its next push.
+  schedule:
+    - cron: '0 6 * * 1'
 
 # Cancel superseded runs on the same ref to save runner minutes.
 concurrency:
@@ -21,6 +25,8 @@ jobs:
   check:
     name: fmt + clippy + test
     runs-on: windows-latest
+    # The scheduled run is only the advisory sweep; build/test stay push/PR.
+    if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@v5
 
@@ -43,6 +49,32 @@ jobs:
       # Plain `cargo test` covers unit, integration, and doc tests.
       - name: Test
         run: cargo test --locked
+
+      # The release profile is what ships, and it is the only configuration
+      # in which the hidden-console `windows_subsystem` cfg compiles at all.
+      - name: Check release profile
+        run: cargo check --release --locked
+
+  # The manifest's rust-version is only a claim; compile all targets against
+  # exactly that toolchain so MSRV rot is caught here instead of by users.
+  msrv:
+    name: MSRV check
+    runs-on: windows-latest
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install MSRV Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          # Keep in sync with rust-version in Cargo.toml.
+          toolchain: "1.87"
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check all targets on MSRV
+        run: cargo check --all-targets --locked
 
   # cargo audit only reads Cargo.lock against the RustSec advisory DB, so it
   # runs on a fast Linux runner independent of the Windows build.
