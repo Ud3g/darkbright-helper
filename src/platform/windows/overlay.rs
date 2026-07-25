@@ -19,7 +19,6 @@ use windows::core::{PCWSTR, w};
 use super::{SafeHwnd, last_error_as_brightness_error};
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
-use crate::platform::DimmingOverlay;
 
 /// The class name for the overlay window.
 const OVERLAY_CLASS_NAME: PCWSTR = w!("DarkBrightOverlayClass");
@@ -179,10 +178,12 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
     Ok(())
 }
 
-/// A Windows implementation of the dimming overlay.
+/// A single dimming overlay window covering one monitor.
+///
+/// The current opacity is not tracked here: `MonitorState.overlay_opacity`
+/// in core is the single source of truth; this type only drives the window.
 pub struct WindowsOverlay {
     hwnd: SafeHwnd,
-    opacity: f32,
     visible: bool,
 }
 
@@ -201,37 +202,44 @@ impl WindowsOverlay {
 
         Ok(Self {
             hwnd,
-            opacity: 0.0,
             visible: false,
         })
     }
-}
 
-impl DimmingOverlay for WindowsOverlay {
+    /// Sets the overlay opacity (0.0 = invisible, 1.0 = fully black).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the window attribute cannot be set.
     fn set_opacity(&mut self, opacity: f32) -> Result<()> {
-        set_window_opacity(self.hwnd.as_raw(), opacity)?;
-        self.opacity = opacity;
-        Ok(())
+        set_window_opacity(self.hwnd.as_raw(), opacity)
     }
 
+    /// Shows the overlay window.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Result` for call-site consistency.
     fn show(&mut self) -> Result<()> {
         show_window(self.hwnd.as_raw())?;
         self.visible = true;
         Ok(())
     }
 
+    /// Hides the overlay window.
+    ///
+    /// # Errors
+    ///
+    /// Currently infallible; returns `Result` for call-site consistency.
     fn hide(&mut self) -> Result<()> {
         hide_window(self.hwnd.as_raw())?;
         self.visible = false;
         Ok(())
     }
 
+    /// Returns true if the overlay window is currently shown.
     fn is_visible(&self) -> bool {
         self.visible
-    }
-
-    fn opacity(&self) -> f32 {
-        self.opacity
     }
 }
 

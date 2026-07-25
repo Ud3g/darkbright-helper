@@ -47,7 +47,7 @@ Message enums (`BrightnessMessage` to main, `DdcCommand` to worker) are defined 
 ### Module map
 
 - `src/core/` — platform-agnostic: `brightness.rs` (adjustment math), `config.rs` (JSON config + validation), `edid.rs` (EDID → `MonitorId` parsing), `state.rs` (state, messages, `MonitorId`, display-name generation).
-- `src/platform/mod.rs` — platform traits (e.g. `DimmingOverlay`).
+- `src/platform/mod.rs` — gates the platform submodule; the portability seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`) live in `core/controller.rs`.
 - `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `overlay.rs`, `power.rs`, `tray.rs`.
 - `src/error.rs` — `BrightnessError` enum + `pub type Result<T>`.
 

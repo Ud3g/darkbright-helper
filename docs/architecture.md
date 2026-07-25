@@ -32,21 +32,30 @@ src/
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
 │   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc>: message-driven orchestration behind OSD/overlay/DDC/locator seams, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
+│   ├── edid.rs           # EDID → MonitorId parsing
+│   ├── logfile.rs        # Size-capped rolling file log sink
+│   ├── reconcile.rs      # Refresh generations, respawn backoff, watchdog policies
 │   └── state.rs          # Application state, messages, DDC commands
 └── platform/
-    ├── mod.rs            # Platform trait definitions
-    ├── windows/          # #[cfg(windows)]
-    │   ├── mod.rs
-    │   ├── ddc.rs        # DDC/CI communication (monitor handles)
-    │   ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
-    │   ├── hotkey.rs     # RegisterHotKey API
-    │   ├── overlay.rs    # Dimming overlay window
-    │   ├── osd.rs        # On-screen display
-    │   ├── power.rs      # Power event listener (sleep/resume)
-    │   └── tray.rs       # System tray icon and menu
-    └── linux/            # #[cfg(target_os = "linux")] - Future
-        └── mod.rs
+    ├── mod.rs            # Gates the platform submodule (Windows-only today)
+    └── windows/          # #[cfg(windows)]
+        ├── mod.rs        # RAII handle wrappers, cursor locator, usage window, error helpers
+        ├── ddc.rs        # DDC/CI communication (monitor handles)
+        ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
+        ├── hotkey.rs     # RegisterHotKey API + optional low-level keyboard hook
+        ├── osd.rs        # On-screen display window
+        ├── osd_render.rs # OSD GDI rendering (RAII resource wrappers)
+        ├── overlay.rs    # Dimming overlay windows (implements the OverlaySink seam)
+        ├── power.rs      # Power event listener (sleep/resume)
+        ├── single_instance.rs # Per-session named-mutex single-instance guard
+        └── tray.rs       # System tray icon and menu
 ```
+
+The portability boundary is the set of controller seams in `core/controller.rs`
+(`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`): core logic is generic
+over them and unit-tested against fakes; `platform/windows/` provides the real
+implementations. A port to another OS implements those seams plus its own
+hotkey/power/tray equivalents and binary wiring.
 
 ### Threading Model
 
@@ -103,11 +112,12 @@ Message-passing with single ownership:
 enum BrightnessMessage {
     Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
     DdcSetResult { monitor_id, value, seq, success, error }, // DDC worker → main
-    DdcRefreshResult { generation, monitors },               // DDC worker → main
+    DdcRefreshResult { generation, monitors, enumerated },   // DDC worker → main
     Refresh,
     SystemResumed,                                            // Power thread → main
     TrayOpenUsage,                                            // Tray thread → main
     TrayOpenSettings,                                         // Tray thread → main
+    TrayOpenLogFolder,                                        // Tray thread → main
     TrayRequestQuit,                                          // Tray thread → main
     TrayMenuOpening { reply_tx: Sender<TrayMenuData> },       // Tray thread ↔ main (request/response)
     Shutdown,
@@ -408,19 +418,15 @@ When DDC communication fails after all retries:
 | **Multi-monitor** | One overlay window per monitor | Independent opacity control per display |
 | **Opacity range** | 0-100% (gradual) | Full range adjustable via continued hotkey presses below hardware 0% |
 
-**Platform Abstraction Trait:**
+**Portability seam:**
 
-```rust
-pub trait DimmingOverlay {
-    fn set_opacity(&mut self, opacity: f32) -> Result<()>;  // 0.0 = invisible, 1.0 = fully black
-    fn show(&mut self) -> Result<()>;
-    fn hide(&mut self) -> Result<()>;
-    fn is_visible(&self) -> bool;
-    fn opacity(&self) -> f32;
-}
-```
-
-This trait enables future Linux implementations (X11/Wayland) without changing core logic.
+The overlay is driven by the core `Controller` exclusively through the
+`OverlaySink` seam defined in `core/controller.rs` (opacity 0–100 per monitor);
+`OverlayManager` in `platform/windows/overlay.rs` is the Windows implementation.
+The overlay opacity's single source of truth is `MonitorState.overlay_opacity`
+in core — the platform side only drives windows. A port to another OS implements
+the same seam against its compositor (e.g. Wayland layer-shell) without changing
+core logic.
 
 **Brightness ↔ Overlay Mapping:**
 
