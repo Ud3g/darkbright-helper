@@ -100,19 +100,13 @@ This document tracks potential future enhancements for the Brightness Control To
 ## 🔧 MAINTENANCE (no user-visible value; revisit periodically)
 **Deliberate technical decisions that should not silently drift:**
 
-- **`windows` crate upgrade (currently pinned at 0.52)**
-  The pin is a deliberate stability choice (decided 2026-07): newer versions change many
-  APIs the FFI layer touches (`HWND` ergonomics, `Result` signatures, cast smoothing), so
-  an upgrade rewrites call sites across `src/platform/windows/`. Treat it as its own
-  undertaking with a full manual test pass (DDC, OSD, overlay, tray, hotkeys, power
-  events) — never as a side effect of another change. Value grows over time: newer
-  versions eliminate workarounds the code currently carries.
-  **Revisit trigger** (set 2026-07-25): re-evaluate the pin at the next MSRV bump, at
-  latest 2027-07 — whichever comes first. Re-evaluating means consciously deciding again
-  (upgrade now, or re-commit to the pin with a fresh trigger). Upgrading *earlier* is
-  always allowed; the trigger bounds how long the decision may rest, it is not a gate.
-  (The 2026-07-25 1.87 → 1.88 change does not count: it corrected an already-wrong MSRV
-  claim — let chains were in use — rather than modernizing the toolchain.)
+- **`windows` crate version tracking (upgraded 0.52 → 0.62 on 2026-07-25)**
+  The crate tracks the current minor; patch releases drift freely. Future
+  minor/major bumps are routine maintenance, but breaking releases still get
+  their own branch and a full manual hardware test pass (DDC, OSD, overlay,
+  tray, hotkeys, power events) — never a side effect of another change. No
+  standing revisit trigger: re-evaluate whenever upstream ships a breaking
+  release that touches our API surface.
 
 ## 📝 LOWEST PRIORITY (High Effort / Low Value)
 **Marketing, documentation, and comprehensive rebranding:**

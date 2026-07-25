@@ -119,7 +119,7 @@ Attempted configurations that failed:
 
 **Recommended approach:** For menu tooltips, use a simple custom popup window (e.g., `STATIC` class with `WS_POPUP | WS_BORDER | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`) instead of `tooltips_class32`. Control visibility with `ShowWindow()` and position with `SetWindowPos()`. This is more reliable and provides full control over appearance.
 
-### Windows Crate (v0.52+) Specifics
+### Windows Crate (v0.62) Specifics
 
 We use the `windows` crate which generates idiomatic Rust bindings. Follow these rules:
 
@@ -137,6 +137,18 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
     // Avoid (triggers clippy::borrow_as_ptr)
     Function(&mut my_struct as *mut _);
     ```
+5.  **Handles are pointers** (since 0.58): validity checks use `handle.is_invalid()`,
+    never field comparisons like `.0 == 0`. Handle types implement neither `Send`
+    nor `Sync`; a type that must cross threads either carries the handle as
+    `isize` (see the seam helpers in `platform/windows/mod.rs`) or documents an
+    explicit `unsafe impl Send` invariant.
+6.  **Optional handle parameters**: parameters that accept "no window/DC/hook"
+    take `Option<T>` — pass `None`, not `T::default()`.
+7.  **`BOOL` lives in `windows::core`** (since 0.60); `TRUE`/`FALSE` remain in
+    `Win32::Foundation`. Parameters that were `Into<BOOL>` are plain `bool` now.
+8.  **RAII**: prefer `windows::core::Owned<T>` for handles whose cleanup is the
+    crate-provided `Free` impl (e.g. `CloseHandle`); keep hand-rolled wrappers
+    only where cleanup differs (e.g. `SafeHwnd` → `DestroyWindow`).
 
 ---
 

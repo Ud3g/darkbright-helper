@@ -118,7 +118,7 @@ impl PhysicalMonitor {
 impl Drop for PhysicalMonitor {
     fn drop(&mut self) {
         unsafe {
-            // DestroyPhysicalMonitors takes a slice in windows-rs 0.52+
+            // DestroyPhysicalMonitors takes a slice of PHYSICAL_MONITOR entries.
             let _ = DestroyPhysicalMonitors(std::slice::from_ref(&self.inner));
         }
     }
@@ -444,7 +444,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
         ..Default::default()
     };
 
-    // SetupDiEnumDeviceInfo returns Result<()> in windows 0.52+
+    // SetupDiEnumDeviceInfo returns Result<()>; Err(…) doubles as the end-of-list signal.
     while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &raw mut devinfo_data).is_ok() } {
         index += 1;
 

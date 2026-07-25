@@ -17,6 +17,9 @@ history lives in the git log.
 
 ### Changed
 
+- Upgraded the `windows` crate from 0.52 to 0.62. No intended behavior change;
+  debug-log output now shows window/monitor handles as pointers instead of
+  integers.
 - MSRV corrected to 1.88: the code already used let chains (stable since
   1.88), so 1.87 never actually built — caught by the new MSRV CI job on its
   first run.
