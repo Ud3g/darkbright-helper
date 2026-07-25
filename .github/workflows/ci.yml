@@ -68,7 +68,7 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           # Keep in sync with rust-version in Cargo.toml.
-          toolchain: "1.87"
+          toolchain: "1.88"
 
       - name: Cache cargo registry and build artifacts
         uses: Swatinem/rust-cache@v2

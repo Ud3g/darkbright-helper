@@ -17,6 +17,9 @@ history lives in the git log.
 
 ### Changed
 
+- MSRV corrected to 1.88: the code already used let chains (stable since
+  1.88), so 1.87 never actually built — caught by the new MSRV CI job on its
+  first run.
 - Quieter, more useful logs: the periodic-refresh heartbeat (two lines per
   minute) moved from info to debug so the size-capped file log covers a longer
   window; newly detected monitors and the registered hotkey combos are now

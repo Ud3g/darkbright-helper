@@ -111,6 +111,8 @@ This document tracks potential future enhancements for the Brightness Control To
   latest 2027-07 — whichever comes first. Re-evaluating means consciously deciding again
   (upgrade now, or re-commit to the pin with a fresh trigger). Upgrading *earlier* is
   always allowed; the trigger bounds how long the decision may rest, it is not a gate.
+  (The 2026-07-25 1.87 → 1.88 change does not count: it corrected an already-wrong MSRV
+  claim — let chains were in use — rather than modernizing the toolchain.)
 
 ## 📝 LOWEST PRIORITY (High Effort / Low Value)
 **Marketing, documentation, and comprehensive rebranding:**

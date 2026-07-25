@@ -4,7 +4,7 @@
 
 ### Language & Toolchain
 - Rust 2024 edition
-- MSRV: 1.87+
+- MSRV: 1.88+ (let chains)
 
 ### Dependencies
 
