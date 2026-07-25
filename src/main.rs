@@ -376,6 +376,24 @@ fn spawn_tray_thread(
     });
 }
 
+/// Registers the dedicated brightness keys (`VK_BRIGHTNESS_UP/DOWN`) as
+/// plain hotkeys. Non-fatal: another app or the shell may already own them.
+fn register_secondary_brightness_hotkeys(hotkey_manager: &mut HotkeyManager) {
+    if let Err(e) =
+        hotkey_manager.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
+    {
+        log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
+    }
+
+    if let Err(e) = hotkey_manager.register_hotkey(
+        BRIGHTNESS_DOWN_ALT_ID,
+        HOT_KEY_MODIFIERS(0),
+        VK_BRIGHTNESS_DOWN,
+    ) {
+        log::debug!(error:% = e; "Secondary brightness down hotkey not registered");
+    }
+}
+
 /// Spawns the hotkey thread and returns its `JoinHandle` for liveness
 /// supervision. Blocks until the thread reports its registration result.
 fn start_hotkey_thread(
@@ -434,36 +452,25 @@ fn start_hotkey_thread(
         // Signal success to main thread
         let _ = result_tx.send(Ok(()));
 
-        // Brightness key interception: either via low-level hook or RegisterHotKey
+        // Brightness key interception: preferably via low-level hook (catches
+        // the keys before the Shell); on hook failure fall back to plain
+        // RegisterHotKey so the keys degrade instead of silently doing nothing.
         if config_clone.hotkeys.intercept_brightness_keys {
-            // Use low-level keyboard hook to intercept brightness keys before Shell
             match hotkey_manager.install_brightness_hook() {
                 Ok(()) => {
                     log::info!("Low-level keyboard hook installed for brightness keys");
                 }
                 Err(e) => {
-                    log::warn!(error:% = e; "Failed to install brightness key hook");
+                    log::warn!(
+                        error:% = e;
+                        "Failed to install brightness key hook; falling back to plain registration"
+                    );
+                    register_secondary_brightness_hotkeys(&mut hotkey_manager);
                 }
             }
         } else {
             log::debug!("Brightness key interception disabled by config");
-
-            // Register secondary (opportunistic) hotkeys - non-fatal
-            if let Err(e) = hotkey_manager.register_hotkey(
-                BRIGHTNESS_UP_ALT_ID,
-                HOT_KEY_MODIFIERS(0),
-                VK_BRIGHTNESS_UP,
-            ) {
-                log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
-            }
-
-            if let Err(e) = hotkey_manager.register_hotkey(
-                BRIGHTNESS_DOWN_ALT_ID,
-                HOT_KEY_MODIFIERS(0),
-                VK_BRIGHTNESS_DOWN,
-            ) {
-                log::debug!(error:% = e; "Secondary brightness down hotkey not registered");
-            }
+            register_secondary_brightness_hotkeys(&mut hotkey_manager);
         }
 
         // Run message loop (blocks until thread ends)

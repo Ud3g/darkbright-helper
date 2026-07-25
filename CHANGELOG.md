@@ -22,6 +22,9 @@ history lives in the git log.
 
 ### Fixed
 
+- With `intercept_brightness_keys` enabled, a failed low-level hook
+  installation left the dedicated brightness keys silently dead; they now fall
+  back to plain hotkey registration.
 - System-resume detection never fired: `WM_POWERBROADCAST` is a sent message
   (invisible to the `GetMessageW` queue check) and message-only windows are
   excluded from broadcasts, so post-sleep resync silently fell back to the
