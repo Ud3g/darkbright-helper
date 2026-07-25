@@ -328,6 +328,47 @@ impl Config {
         }
     }
 
+    /// Collects dotted paths of keys present in `file` but absent from
+    /// `schema`, recursing into nested objects. `schema` is the parsed
+    /// config's own serialization, so it contains exactly the known keys —
+    /// no hand-maintained key list to drift. (Precondition: no field uses
+    /// `skip_serializing_if`, which would false-positive here.)
+    fn unknown_keys(file: &serde_json::Value, schema: &serde_json::Value) -> Vec<String> {
+        let mut found = Vec::new();
+        Self::collect_unknown_keys(file, schema, "", &mut found);
+        found
+    }
+
+    fn collect_unknown_keys(
+        file: &serde_json::Value,
+        schema: &serde_json::Value,
+        prefix: &str,
+        found: &mut Vec<String>,
+    ) {
+        let (serde_json::Value::Object(file_map), serde_json::Value::Object(schema_map)) =
+            (file, schema)
+        else {
+            return;
+        };
+        for (key, file_value) in file_map {
+            let path = if prefix.is_empty() {
+                key.clone()
+            } else {
+                format!("{prefix}.{key}")
+            };
+            match schema_map.get(key) {
+                None => found.push(path),
+                // The monitors map holds user-chosen monitor ids (format not
+                // yet a contract); its contents are exempt from the diff — a
+                // non-empty map already gets its own load warning.
+                Some(_) if prefix.is_empty() && key == "monitors" => {}
+                Some(schema_value) => {
+                    Self::collect_unknown_keys(file_value, schema_value, &path, found);
+                }
+            }
+        }
+    }
+
     /// Loads configuration from a specific path.
     ///
     /// # Errors
@@ -342,6 +383,19 @@ impl Config {
 
         let mut config: Self = serde_json::from_str(&contents)
             .map_err(|e| BrightnessError::config_parse(&path_str, e))?;
+
+        // Serde drops unrecognized keys silently while every field has a
+        // default, so a typo becomes a setting that silently does nothing.
+        // Diff the raw file against the parsed config's serialization and
+        // warn — never fatal.
+        if let (Ok(raw), Ok(schema)) = (
+            serde_json::from_str::<serde_json::Value>(&contents),
+            serde_json::to_value(&config),
+        ) {
+            for key in Self::unknown_keys(&raw, &schema) {
+                log::warn!(key:% = key; "Unknown config key ignored — check for typos");
+            }
+        }
 
         config.validate_and_fix();
         Ok(config)
@@ -679,6 +733,46 @@ mod tests {
 
         assert_eq!(config.monitors.len(), 1);
         assert_eq!(config.monitors["DELL U2722D"].min_brightness, Some(10));
+    }
+
+    // ── Unknown-key detection ────────────────────────────────────────────
+
+    fn schema_value() -> serde_json::Value {
+        serde_json::to_value(Config::default()).unwrap()
+    }
+
+    #[test]
+    fn unknown_top_level_key_is_reported() {
+        let file: serde_json::Value =
+            serde_json::from_str(r#"{ "version": 1, "brightnes": { "step_percent": 10 } }"#)
+                .unwrap();
+        assert_eq!(Config::unknown_keys(&file, &schema_value()), ["brightnes"]);
+    }
+
+    #[test]
+    fn unknown_nested_key_is_reported_with_full_path() {
+        let file: serde_json::Value =
+            serde_json::from_str(r#"{ "hotkeys": { "brightnes_up": "Alt+F1" } }"#).unwrap();
+        assert_eq!(
+            Config::unknown_keys(&file, &schema_value()),
+            ["hotkeys.brightnes_up"]
+        );
+    }
+
+    #[test]
+    fn known_keys_produce_no_reports() {
+        let file = serde_json::to_value(Config::default()).unwrap();
+        assert!(Config::unknown_keys(&file, &schema_value()).is_empty());
+    }
+
+    #[test]
+    fn monitors_subtree_is_exempt_from_unknown_key_reports() {
+        // Monitor ids are user-chosen and the map's format is not yet a
+        // contract; a non-empty map already gets its own load warning.
+        let file: serde_json::Value =
+            serde_json::from_str(r#"{ "monitors": { "DEL U2722D": { "future_setting": 1 } } }"#)
+                .unwrap();
+        assert!(Config::unknown_keys(&file, &schema_value()).is_empty());
     }
 
     #[test]

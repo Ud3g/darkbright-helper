@@ -12,6 +12,8 @@ history lives in the git log.
   console is hidden — leaves a trace in the opt-in file log.
 - Releases now ship a prebuilt `darkbright-helper.exe` on GitHub Releases,
   built by a tag-triggered workflow; `RELEASING.md` documents the procedure.
+- Unknown config keys (typos, misplaced settings) are now warned about at
+  load with their full path instead of being silently ignored.
 
 ### Changed
 

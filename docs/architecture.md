@@ -288,6 +288,12 @@ When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
 - Use the default value for that field
 - Continue startup normally
 
+**Unknown keys** (typos, misplaced settings) are logged as warnings at load
+with their full path (e.g. `hotkeys.brightnes_up`) — never fatal, the parser
+simply drops them. The check diffs the raw file against the parsed config's
+own serialization, so there is no hand-maintained key list; the `monitors`
+map's contents are exempt (its key format is not yet a contract).
+
 | Field | Valid Range | Default |
 |-------|-------------|---------|
 | `hotkeys.brightness_up` | Valid hotkey string (see format above) | `Ctrl+Shift+Up` |
