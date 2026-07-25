@@ -757,6 +757,21 @@ Both degraded states — DDC disabled and hotkeys given up — are surfaced to t
 user through the tray icon, tooltip, and menu (see §13, "Degraded-State
 Indicator"), not just the log.
 
+**Panic policy (deliberate).** Supervision covers *environmental* failures —
+hung hardware, dead threads. Panics are bugs and are handled fail-fast: a panic
+in plain Rust code unwinds its thread (worker threads then hit the respawn
+machinery above), while a panic inside one of the `extern "system"` callbacks
+(the wnd_procs, the low-level keyboard hook, the monitor-enum callback) cannot
+unwind across the ABI and aborts the whole process. That abort is accepted
+deliberately rather than guarded with `catch_unwind`: running on past a broken
+invariant risks worse outcomes than a restart — most concretely a sub-zero
+overlay stuck black over a monitor while the app keeps "working" — whereas
+process death destroys all overlay windows (hardware brightness simply stays at
+its last value), and the panic hook (§8) has already logged payload + location
+and flushed the file log by the time the abort happens. The callback bodies are
+kept deliberately thin (mostly channel forwarding) to keep this panic surface
+minimal.
+
 ### 13. System Tray
 
 The application runs as a background process with a system tray icon for user interaction.
