@@ -88,7 +88,9 @@ impl crate::core::controller::MonitorLocator for CursorLocator {
 // `core/` carries monitor/window handles as plain `isize` (`MonitorHandle`,
 // `TrayStatusHandle`) to stay platform-free and `Send`. Win32 handles are
 // pointers, so every crossing of that seam converts here — keeping the
-// int↔pointer casts (and their lints) in one place.
+// seam's int↔pointer casts in one place. (Other int↔pointer casts exist
+// elsewhere for unrelated reasons — LPARAM callback plumbing in ddc.rs, the
+// control-ID construction in usage.rs — and aren't part of this seam.)
 
 /// Rebuilds an `HMONITOR` from the `isize` form that crosses the `core` seam.
 #[must_use]
@@ -146,7 +148,7 @@ pub fn last_error_as_brightness_error(function: impl Into<String>) -> Brightness
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RAII Handle Wrappers
+// RAII Handle Wrapper
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// RAII wrapper for a Windows `HWND` (window handle).
@@ -289,5 +291,14 @@ mod tests {
         let raw = safe.into_raw();
         assert_eq!(raw, hwnd);
         // No drop called, no crash
+    }
+
+    // Round-trips the handle seam conversions. Guards against a future
+    // cast_signed/cast_unsigned swap silently corrupting handles whose bit
+    // pattern sits above isize::MAX/2.
+    #[test]
+    fn test_handle_seam_round_trip() {
+        assert_eq!(hmonitor_to_isize(hmonitor_from_isize(0x1234)), 0x1234);
+        assert_eq!(hwnd_to_isize(hwnd_from_isize(0x1234)), 0x1234);
     }
 }

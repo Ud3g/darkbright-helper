@@ -76,16 +76,18 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
         )
     };
 
+    let result_value = result.0.expose_provenance();
+
     // ShellExecuteW returns a value > 32 on success.
     // Values <= 32 indicate various error conditions.
-    if result.0 as isize > 32 {
+    if result_value > 32 {
         log::debug!(path:% = path.display(); "Opened file with default application");
         Ok(())
     } else {
-        // The return value can be interpreted as an error code for low values
-        // ShellExecuteW error codes fit in i32; truncation is safe here
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let error_code = result.0 as i32;
+        // The return value doubles as an error code for low values.
+        // Failure values are always <= 32, so this never truncates; the
+        // fallback just keeps the conversion infallible without an `as` cast.
+        let error_code = i32::try_from(result_value).unwrap_or(i32::MAX);
         log::debug!(path:% = path.display(); "ShellExecuteW failed for file");
         // The error ends up in error-level logs; embed only the file name,
         // since the absolute path contains the user name.

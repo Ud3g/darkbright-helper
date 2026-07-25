@@ -254,7 +254,7 @@ impl UsageWindow {
                 BTN_WIDTH,
                 BTN_HEIGHT,
                 Some(hwnd),
-                Some(HMENU(std::ptr::with_exposed_provenance_mut(
+                Some(HMENU(std::ptr::without_provenance_mut(
                     ID_OK_BTN.cast_unsigned(),
                 ))),
                 Some(hinstance.into()),

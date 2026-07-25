@@ -146,9 +146,13 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
     take `Option<T>` — pass `None`, not `T::default()`.
 7.  **`BOOL` lives in `windows::core`** (since 0.60); `TRUE`/`FALSE` remain in
     `Win32::Foundation`. Parameters that were `Into<BOOL>` are plain `bool` now.
-8.  **RAII**: prefer `windows::core::Owned<T>` for handles whose cleanup is the
-    crate-provided `Free` impl (e.g. `CloseHandle`); keep hand-rolled wrappers
-    only where cleanup differs (e.g. `SafeHwnd` → `DestroyWindow`).
+8.  **RAII**: for new code, prefer `windows::core::Owned<T>` for handles whose
+    cleanup is the crate-provided `Free` impl (e.g. `CloseHandle`) over writing
+    a hand-rolled wrapper. `SafeHwnd` stays hand-rolled because its cleanup
+    (`DestroyWindow`) doesn't fit the `Free` pattern — not every wrapper in the
+    codebase is `Owned`-eligible yet, so absence of `Owned` isn't itself a
+    signal something's wrong; see `docs/improvement-ideas.md` for known
+    pre-`Owned` wrappers slated for opportunistic migration.
 
 ---
 

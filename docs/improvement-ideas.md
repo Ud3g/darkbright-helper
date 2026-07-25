@@ -108,6 +108,13 @@ This document tracks potential future enhancements for the Brightness Control To
   standing revisit trigger: re-evaluate whenever upstream ships a breaking
   release that touches our API surface.
 
+- **`SafeHKey`/`SafeDevInfo` → `Owned<HKEY>`/`Owned<HDEVINFO>` migration**
+  Both wrappers (`src/platform/windows/ddc.rs`) predate the 0.62 upgrade and
+  hand-roll cleanup (`RegCloseKey`, `SetupDiDestroyDeviceInfoList`) that 0.62's
+  `windows::core::Owned<T>` now covers via its `Free` impls. Low priority:
+  functionally identical today, worth folding in next time this file is
+  touched for other reasons.
+
 ## 📝 LOWEST PRIORITY (High Effort / Low Value)
 **Marketing, documentation, and comprehensive rebranding:**
 
