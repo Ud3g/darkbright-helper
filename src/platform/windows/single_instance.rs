@@ -7,13 +7,13 @@
 //! flag, so it is released automatically when the owning process exits for any
 //! reason, including a crash.
 
-use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS};
+use windows::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, HANDLE};
 use windows::Win32::System::Threading::CreateMutexW;
-use windows::core::{PCWSTR, w};
+use windows::core::{Owned, PCWSTR, w};
 
 use crate::error::{BrightnessError, Result};
 
-use super::{SafeHandle, get_last_error_code};
+use super::get_last_error_code;
 
 /// Session-local name of the single-instance mutex.
 ///
@@ -31,9 +31,9 @@ const MUTEX_NAME: PCWSTR = w!("Local\\darkbright-helper-single-instance");
 /// the next launch.
 pub struct SingleInstance {
     // Held solely to keep the mutex handle open for the process lifetime; the
-    // wrapped `SafeHandle` closes it on drop.
+    // wrapped `Owned<HANDLE>` closes it on drop.
     #[allow(dead_code)]
-    handle: SafeHandle,
+    handle: Owned<HANDLE>,
 }
 
 /// Outcome of [`acquire`].
@@ -78,7 +78,7 @@ pub fn acquire() -> Result<InstanceLock> {
             // SAFETY: `CreateMutexW` returned success, so `handle` is a valid
             // handle we own and must close.
             let guard = SingleInstance {
-                handle: unsafe { SafeHandle::new(handle) },
+                handle: unsafe { Owned::new(handle) },
             };
             if last_error == ERROR_ALREADY_EXISTS.0 {
                 // The named object already existed → this is a second instance.

@@ -6,7 +6,7 @@
 //! - Dimming overlay windows
 //! - On-screen display (OSD)
 
-use windows::Win32::Foundation::{HANDLE, HWND, POINT};
+use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyWindow, GetCursorPos, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
@@ -215,63 +215,6 @@ impl Drop for SafeHwnd {
     }
 }
 
-/// RAII wrapper for a generic Windows `HANDLE`.
-///
-/// Automatically calls `CloseHandle` when dropped.
-#[derive(Debug)]
-pub struct SafeHandle {
-    handle: HANDLE,
-}
-
-impl SafeHandle {
-    /// Creates a new `SafeHandle`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that `handle` is a valid handle
-    /// that should be closed with `CloseHandle` when dropped.
-    #[must_use]
-    pub const unsafe fn new(handle: HANDLE) -> Self {
-        Self { handle }
-    }
-
-    /// Returns the raw `HANDLE`.
-    #[inline]
-    #[must_use]
-    pub const fn as_raw(&self) -> HANDLE {
-        self.handle
-    }
-
-    /// Returns true if this handle is valid (non-zero and not `INVALID_HANDLE_VALUE`).
-    #[inline]
-    #[must_use]
-    pub fn is_valid(&self) -> bool {
-        !self.handle.is_invalid()
-    }
-
-    /// Consumes the wrapper and returns the raw handle without closing it.
-    ///
-    /// The caller becomes responsible for closing the handle.
-    #[must_use]
-    pub fn into_raw(self) -> HANDLE {
-        let handle = self.handle;
-        std::mem::forget(self);
-        handle
-    }
-}
-
-impl Drop for SafeHandle {
-    fn drop(&mut self) {
-        if self.is_valid() {
-            // SAFETY: We own this handle and it's valid.
-            unsafe {
-                use windows::Win32::Foundation::CloseHandle;
-                let _ = CloseHandle(self.handle);
-            }
-        }
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Message Box Helper
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,13 +280,6 @@ mod tests {
     fn test_safe_hwnd_null_is_invalid() {
         let hwnd = SafeHwnd::new_borrowed(HWND::default());
         assert!(!hwnd.is_valid());
-    }
-
-    #[test]
-    fn test_safe_handle_null_is_invalid() {
-        // SAFETY: We're creating from a null handle for testing
-        let handle = unsafe { SafeHandle::new(HANDLE::default()) };
-        assert!(!handle.is_valid());
     }
 
     #[test]
