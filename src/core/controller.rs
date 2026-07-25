@@ -512,15 +512,15 @@ where
         // the opacity only once the platform call succeeds, so a failed
         // update cannot leave the state claiming an opacity the window never
         // received.
-        if new_overlay != old_overlay {
-            if let Err(e) = self.overlay.update(&target_id, handle, new_overlay) {
-                log::error!(error:% = e; "Overlay update failed; reverting optimistic value");
-                if let Some(state) = self.states.get_mut(&target_id) {
-                    state.force_revert();
-                }
-                self.show_error_on_visible_osd();
-                return Err(e);
+        if new_overlay != old_overlay
+            && let Err(e) = self.overlay.update(&target_id, handle, new_overlay)
+        {
+            log::error!(error:% = e; "Overlay update failed; reverting optimistic value");
+            if let Some(state) = self.states.get_mut(&target_id) {
+                state.force_revert();
             }
+            self.show_error_on_visible_osd();
+            return Err(e);
         }
         state.overlay_opacity = new_overlay;
 
@@ -618,10 +618,10 @@ where
         let Some(id) = self.osd_monitor.clone() else {
             return;
         };
-        if let Some(state) = self.states.get(&id) {
-            if let Err(e) = self.osd.update_error(state) {
-                log::warn!(error:% = e; "Failed to update OSD error state");
-            }
+        if let Some(state) = self.states.get(&id)
+            && let Err(e) = self.osd.update_error(state)
+        {
+            log::warn!(error:% = e; "Failed to update OSD error state");
         }
     }
 

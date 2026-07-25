@@ -114,12 +114,12 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 
 /// Opens or focuses the usage instructions window (shell side effect).
 fn open_usage(window: &mut Option<UsageWindow>, config: &Config) {
-    if let Some(w) = window {
-        if w.is_valid() {
-            log::debug!("Usage window already open, bringing to front");
-            w.bring_to_front();
-            return;
-        }
+    if let Some(w) = window
+        && w.is_valid()
+    {
+        log::debug!("Usage window already open, bringing to front");
+        w.bring_to_front();
+        return;
     }
     match UsageWindow::new(
         &config.hotkeys.brightness_up,
