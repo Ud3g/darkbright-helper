@@ -17,6 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use darkbright_helper::core::config::{Config, ConfigLoadOutcome};
 use darkbright_helper::core::controller::Controller;
 use darkbright_helper::core::logfile::{LOG_FILE_NAME, LOG_MAX_BYTES, RotatingFileWriter};
+use darkbright_helper::core::panic_hook;
 use darkbright_helper::core::reconcile::{
     RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate,
 };
@@ -487,6 +488,10 @@ fn main() {
     }
 
     let tee = init_logging();
+
+    // With the release console hidden, an unlogged panic leaves no trace;
+    // record panics through the logger before the default handler runs.
+    panic_hook::install();
 
     // Enforce a single instance per logon session before spawning any worker,
     // window, or hotkey. A second launch informs the user and exits, so it

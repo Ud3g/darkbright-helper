@@ -478,7 +478,7 @@ The application uses conditional compilation to control console visibility:
 | Debug (`cargo build`) | Visible | Developers can see log output directly |
 | Release (`cargo build --release`) | Hidden | Clean GUI experience for end users |
 
-This means panics and log output in release builds won't be visible in a console. For release diagnostics there is an opt-in rolling log file (below).
+This means log output in release builds won't be visible in a console; for release diagnostics there is an opt-in rolling log file (below). Panics are recorded through the same logger: a process-wide hook installed at startup (`core/panic_hook.rs`) logs payload, source location, and thread at error level and flushes the sinks before the default handler continues — so even a crash that aborts the process (e.g. a panic unwinding into an `extern "system"` callback) leaves a trace in the file log.
 
 **Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior; console only)
 

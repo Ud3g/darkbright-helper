@@ -5,6 +5,12 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- Panics are now logged (payload, source location, thread) and the log sinks
+  flushed before the process dies, so a crash in a release build — where the
+  console is hidden — leaves a trace in the opt-in file log.
+
 ### Fixed
 
 - System-resume detection never fired: `WM_POWERBROADCAST` is a sent message

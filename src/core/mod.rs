@@ -7,6 +7,7 @@
 //! - [`controller`] - Message-driven orchestration behind platform seams
 //! - [`edid`] - EDID parsing for monitor identification
 //! - [`logfile`] - Size-capped rolling file sink for diagnostic logging
+//! - [`panic_hook`] - Process-wide panic logging hook
 //! - [`reconcile`] - Refresh/respawn tracking and reconciliation policies
 //! - [`state`] - Application state and inter-thread messages
 
@@ -15,6 +16,7 @@ pub mod config;
 pub mod controller;
 pub mod edid;
 pub mod logfile;
+pub mod panic_hook;
 pub mod reconcile;
 pub mod state;
 
