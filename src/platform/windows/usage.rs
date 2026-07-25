@@ -176,7 +176,7 @@ impl UsageWindow {
                 BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
             })?;
 
-            let hwnd = CreateWindowExW(
+            CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 windows::core::PCWSTR(class_name.as_ptr()),
                 windows::core::PCWSTR(title.as_ptr()),
@@ -187,15 +187,12 @@ impl UsageWindow {
                 window_height,
                 None,
                 None,
-                hinstance,
+                Some(hinstance.into()),
                 None,
-            );
-
-            if hwnd.0 == 0 {
-                return Err(last_error_as_brightness_error("CreateWindowExW"));
-            }
-
-            hwnd
+            )
+            .map_err(|e| {
+                BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned())
+            })?
         };
 
         // Create static text control with usage instructions
@@ -220,7 +217,8 @@ impl UsageWindow {
             // Text area takes remaining space above the button (using client area dimensions)
             let text_height = USAGE_CLIENT_HEIGHT - (USAGE_TEXT_MARGIN * 2) - BTN_HEIGHT - 10;
 
-            let _static_hwnd = CreateWindowExW(
+            // A missing text control degrades the window; it must not abort creation.
+            let _ = CreateWindowExW(
                 windows::Win32::UI::WindowsAndMessaging::WINDOW_EX_STYLE(0),
                 windows::core::PCWSTR(static_class.as_ptr()),
                 windows::core::PCWSTR(text_wide.as_ptr()),
@@ -229,9 +227,9 @@ impl UsageWindow {
                 USAGE_TEXT_MARGIN,
                 USAGE_CLIENT_WIDTH - (USAGE_TEXT_MARGIN * 2),
                 text_height,
-                hwnd,
+                Some(hwnd),
                 None,
-                hinstance,
+                Some(hinstance.into()),
                 None,
             );
 
@@ -255,19 +253,22 @@ impl UsageWindow {
                 btn_y,
                 BTN_WIDTH,
                 BTN_HEIGHT,
-                hwnd,
-                HMENU(ID_OK_BTN),
-                hinstance,
+                Some(hwnd),
+                Some(HMENU(std::ptr::with_exposed_provenance_mut(
+                    ID_OK_BTN.cast_unsigned(),
+                ))),
+                Some(hinstance.into()),
                 None,
             );
 
             // Show the window and set focus
-            ShowWindow(hwnd, SW_SHOW);
+            let _ = ShowWindow(hwnd, SW_SHOW);
             let _ = SetForegroundWindow(hwnd);
 
-            // Set focus to the OK button so Enter key dismisses the window
-            if btn_hwnd.0 != 0 {
-                SetFocus(btn_hwnd);
+            // Set focus to the OK button so Enter key dismisses the window; a
+            // missing button just leaves the window without a default focus.
+            if let Ok(btn) = btn_hwnd {
+                let _ = SetFocus(Some(btn));
             }
         }
 
@@ -284,7 +285,7 @@ impl UsageWindow {
         if !self.hwnd.is_valid() {
             return false;
         }
-        unsafe { IsWindow(self.hwnd.as_raw()).as_bool() }
+        unsafe { IsWindow(Some(self.hwnd.as_raw())).as_bool() }
     }
 
     /// Brings the window to the foreground if it exists.

@@ -3,7 +3,6 @@
 use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
-use windows::Win32::Foundation::{BOOL, FALSE, TRUE};
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
@@ -13,6 +12,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOWNORMAL, TranslateMessage,
 };
+use windows::core::BOOL;
 
 use darkbright_helper::core::config::{Config, ConfigLoadOutcome};
 use darkbright_helper::core::controller::Controller;
@@ -106,10 +106,10 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
             && let Some(tx) = &*guard
         {
             let _ = tx.send(BrightnessMessage::Shutdown);
-            return TRUE;
+            return BOOL::from(true);
         }
     }
-    FALSE
+    BOOL::from(false)
 }
 
 /// Opens or focuses the usage instructions window (shell side effect).
@@ -606,7 +606,7 @@ fn main() {
     }
 
     unsafe {
-        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), TRUE);
+        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
     }
 
     let mut hotkey_handle = match start_hotkey_thread(&config, tx.clone()) {
@@ -726,7 +726,7 @@ fn main() {
 
     // Cleanup
     unsafe {
-        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), FALSE);
+        let _ = SetConsoleCtrlHandler(Some(ctrl_handler), false);
     }
 
     // Ask the DDC worker to shut down, then destroy windows.

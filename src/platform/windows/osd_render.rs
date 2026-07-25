@@ -8,9 +8,9 @@
 use windows::Win32::Foundation::{COLORREF, RECT};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
-    CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DeleteDC, DeleteObject, FF_DONTCARE,
-    FW_NORMAL, FillRect, HBITMAP, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, SRCCOPY, SelectObject,
-    SetBkMode, SetTextAlign, SetTextColor, TA_LEFT, TA_RIGHT, TRANSPARENT, TextOutW,
+    CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, DeleteDC, DeleteObject,
+    FF_DONTCARE, FW_NORMAL, FillRect, HBITMAP, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, SRCCOPY,
+    SelectObject, SetBkMode, SetTextAlign, SetTextColor, TA_LEFT, TA_RIGHT, TRANSPARENT, TextOutW,
 };
 use windows::core::w;
 
@@ -43,7 +43,7 @@ fn fill_rect(hdc: HDC, rect: &RECT, color: u32) {
     unsafe {
         let brush = CreateSolidBrush(COLORREF(color));
         FillRect(hdc, &raw const *rect, brush);
-        let _ = DeleteObject(brush);
+        let _ = DeleteObject(brush.into());
     }
 }
 
@@ -72,10 +72,10 @@ fn create_font(font_size: i32, face: FontFace) -> HFONT {
             0,
             0,
             0,
-            u32::from(DEFAULT_CHARSET.0),
-            u32::from(OUT_DEFAULT_PRECIS.0),
-            u32::from(CLIP_DEFAULT_PRECIS.0),
-            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            DEFAULT_QUALITY,
             u32::from(DEFAULT_PITCH.0 | FF_DONTCARE.0),
             face_name,
         )
@@ -94,7 +94,7 @@ impl SelectedFont {
     /// Creates a font of the given size/face and selects it into `hdc`.
     fn new(hdc: HDC, font_size: i32, face: FontFace) -> Self {
         let font = create_font(font_size, face);
-        let old = unsafe { SelectObject(hdc, font) };
+        let old = unsafe { SelectObject(hdc, font.into()) };
         Self { hdc, font, old }
     }
 }
@@ -103,7 +103,7 @@ impl Drop for SelectedFont {
     fn drop(&mut self) {
         unsafe {
             SelectObject(self.hdc, self.old);
-            let _ = DeleteObject(self.font);
+            let _ = DeleteObject(self.font.into());
         }
     }
 }
@@ -123,16 +123,16 @@ impl BackBuffer {
     /// compatible with `target`. Returns `None` if any GDI allocation fails.
     fn new(target: HDC, width: i32, height: i32) -> Option<Self> {
         unsafe {
-            let mem_dc = CreateCompatibleDC(target);
-            if mem_dc.0 == 0 {
+            let mem_dc = CreateCompatibleDC(Some(target));
+            if mem_dc.is_invalid() {
                 return None;
             }
             let bitmap = CreateCompatibleBitmap(target, width, height);
-            if bitmap.0 == 0 {
+            if bitmap.is_invalid() {
                 let _ = DeleteDC(mem_dc);
                 return None;
             }
-            let old_bitmap = SelectObject(mem_dc, bitmap);
+            let old_bitmap = SelectObject(mem_dc, bitmap.into());
             Some(Self {
                 mem_dc,
                 bitmap,
@@ -157,7 +157,7 @@ impl BackBuffer {
                 0,
                 self.width,
                 self.height,
-                self.mem_dc,
+                Some(self.mem_dc),
                 0,
                 0,
                 SRCCOPY,
@@ -170,7 +170,7 @@ impl Drop for BackBuffer {
     fn drop(&mut self) {
         unsafe {
             SelectObject(self.mem_dc, self.old_bitmap);
-            let _ = DeleteObject(self.bitmap);
+            let _ = DeleteObject(self.bitmap.into());
             let _ = DeleteDC(self.mem_dc);
         }
     }
@@ -388,7 +388,7 @@ fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str, metrics: &OsdMetrics) {
     let wide_text: Vec<u16> = icon.encode_utf16().collect();
     let text_y = y + (bar_height - font_size) / 2;
     unsafe {
-        TextOutW(hdc, x, text_y, &wide_text);
+        let _ = TextOutW(hdc, x, text_y, &wide_text);
     }
 }
 
@@ -461,7 +461,7 @@ fn draw_percentage_text(
     // Center text vertically with the bar
     let text_y = y + (bar_height - font_size).saturating_div(2);
     unsafe {
-        TextOutW(hdc, x, text_y, &wide_text);
+        let _ = TextOutW(hdc, x, text_y, &wide_text);
 
         // Restore default alignment (draw state, not a resource).
         SetTextAlign(hdc, TA_LEFT);
@@ -498,6 +498,6 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
         // Set text properties - use red color for error visibility
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(ERROR_TEXT_COLOR));
-        TextOutW(hdc, x, y, &wide_text);
+        let _ = TextOutW(hdc, x, y, &wide_text);
     }
 }

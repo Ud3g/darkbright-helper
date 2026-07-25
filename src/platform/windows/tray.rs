@@ -38,7 +38,7 @@ use windows::core::{PCWSTR, w};
 use crate::core::state::{BrightnessMessage, HealthWarnings, TrayMenuData};
 use crate::error::{BrightnessError, Result};
 
-use super::{SafeHwnd, last_error_as_brightness_error};
+use super::{SafeHwnd, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -237,7 +237,7 @@ fn load_icon_from_resource() -> Result<HICON> {
 
         // Load icon from resource by ID
         let handle = LoadImageW(
-            hinstance,
+            Some(hinstance.into()),
             PCWSTR(IDI_APP_ICON as *const u16),
             IMAGE_ICON,
             0, // Use default width
@@ -316,7 +316,7 @@ impl BadgeCanvas {
     fn new(size: i32) -> Option<Self> {
         unsafe {
             let screen = GetDC(None);
-            let dc = CreateCompatibleDC(screen);
+            let dc = CreateCompatibleDC(Some(screen));
             ReleaseDC(None, screen);
             if dc.is_invalid() {
                 return None;
@@ -338,13 +338,18 @@ impl BadgeCanvas {
             };
 
             let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-            let Ok(dib) =
-                CreateDIBSection(dc, &raw const bmi, DIB_RGB_COLORS, &raw mut bits, None, 0)
-            else {
+            let Ok(dib) = CreateDIBSection(
+                Some(dc),
+                &raw const bmi,
+                DIB_RGB_COLORS,
+                &raw mut bits,
+                None,
+                0,
+            ) else {
                 let _ = DeleteDC(dc);
                 return None;
             };
-            let old = SelectObject(dc, dib);
+            let old = SelectObject(dc, dib.into());
             Some(Self {
                 dc,
                 dib,
@@ -359,7 +364,7 @@ impl Drop for BadgeCanvas {
     fn drop(&mut self) {
         unsafe {
             SelectObject(self.dc, self.old);
-            let _ = DeleteObject(self.dib);
+            let _ = DeleteObject(self.dib.into());
             let _ = DeleteDC(self.dc);
         }
     }
@@ -404,7 +409,7 @@ fn create_warning_icon(base: HICON) -> Result<HICON> {
         };
         // CreateIconIndirect copies both bitmaps; canvas + mask can be freed.
         let icon = CreateIconIndirect(&raw const info);
-        let _ = DeleteObject(mask);
+        let _ = DeleteObject(mask.into());
         icon.map_err(|e| {
             BrightnessError::tray_icon_creation(format!("CreateIconIndirect failed: {e}"))
         })
@@ -622,7 +627,7 @@ fn show_context_menu(hwnd: HWND) {
             TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD,
             cursor_pos.x,
             cursor_pos.y,
-            0,
+            None,
             hwnd,
             None,
         );
@@ -632,7 +637,7 @@ fn show_context_menu(hwnd: HWND) {
 
         // Send a null message to ensure the window processes the menu dismissal
         // This is a Windows quirk required for proper tray menu behavior
-        let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
+        let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
 
         // Handle selection (menu item IDs are non-negative)
         #[allow(clippy::cast_sign_loss)]
@@ -848,7 +853,7 @@ impl TrayIcon {
                 ))
             })?;
 
-            let hwnd = CreateWindowExW(
+            CreateWindowExW(
                 WINDOW_EX_STYLE::default(), // No extended styles needed
                 class_name,
                 w!("BrightnessControlTray"),
@@ -857,17 +862,14 @@ impl TrayIcon {
                 0,
                 0,
                 0,
-                HWND_MESSAGE, // Message-only window
+                Some(HWND_MESSAGE), // Message-only window
                 None,
-                hinstance,
+                Some(hinstance.into()),
                 None,
-            );
-
-            if hwnd.0 == 0 {
-                return Err(last_error_as_brightness_error("CreateWindowExW"));
-            }
-
-            hwnd
+            )
+            .map_err(|e| {
+                BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned())
+            })?
         };
 
         log::debug!("Tray message window created");
@@ -918,7 +920,7 @@ impl TrayIcon {
         let mut msg = MSG::default();
 
         loop {
-            let result = unsafe { GetMessageW(&raw mut msg, HWND::default(), 0, 0) };
+            let result = unsafe { GetMessageW(&raw mut msg, None, 0, 0) };
 
             match result.0 {
                 -1 => {
@@ -958,7 +960,7 @@ impl TrayIcon {
     /// Returns a cross-thread handle for posting status updates.
     #[must_use]
     pub fn status_handle(&self) -> TrayStatusHandle {
-        TrayStatusHandle(self.hwnd.as_raw().0)
+        TrayStatusHandle(hwnd_to_isize(self.hwnd.as_raw()))
     }
 }
 
@@ -974,7 +976,12 @@ impl TrayStatusHandle {
     pub fn notify(self, warnings: HealthWarnings) {
         let bits = usize::from(warnings.ddc_degraded) | (usize::from(warnings.hotkeys_lost) << 1);
         unsafe {
-            if let Err(e) = PostMessageW(HWND(self.0), WM_TRAY_STATUS, WPARAM(bits), LPARAM(0)) {
+            if let Err(e) = PostMessageW(
+                Some(hwnd_from_isize(self.0)),
+                WM_TRAY_STATUS,
+                WPARAM(bits),
+                LPARAM(0),
+            ) {
                 log::debug!(error:% = e; "Tray status post failed (tray window gone?)");
             }
         }

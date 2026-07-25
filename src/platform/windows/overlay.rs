@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::{SafeHwnd, last_error_as_brightness_error};
+use super::{SafeHwnd, hmonitor_from_isize, last_error_as_brightness_error};
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 
@@ -127,13 +127,10 @@ pub fn create_overlay_window() -> Result<SafeHwnd> {
             0,             // height
             None,          // Parent
             None,          // Menu
-            GetModuleHandleW(None).unwrap_or_default(),
+            Some(GetModuleHandleW(None).unwrap_or_default().into()),
             None, // lpParam
-        );
-
-        if hwnd.0 == 0 {
-            return Err(last_error_as_brightness_error("CreateWindowExW"));
-        }
+        )
+        .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
         // Wrap in SafeHwnd for automatic cleanup
         Ok(SafeHwnd::new_owned(hwnd))
@@ -165,7 +162,7 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
 
         SetWindowPos(
             hwnd,
-            HWND_TOPMOST,
+            Some(HWND_TOPMOST),
             rect.left,
             rect.top,
             width,
@@ -382,7 +379,7 @@ impl crate::core::controller::OverlaySink for OverlayManager {
         handle: crate::core::controller::MonitorHandle,
         opacity: u8,
     ) -> Result<()> {
-        OverlayManager::update(self, id, HMONITOR(handle.0), opacity)
+        OverlayManager::update(self, id, hmonitor_from_isize(handle.0), opacity)
     }
     fn remove(&mut self, id: &MonitorId) {
         OverlayManager::remove(self, id);

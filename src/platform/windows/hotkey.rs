@@ -26,9 +26,9 @@ pub const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 const HC_ACTION: i32 = 0;
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GetMessageW, HHOOK, HMENU, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG,
-    RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
-    WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    DispatchMessageW, GetMessageW, HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, RegisterClassW,
+    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_HOTKEY,
+    WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
 
@@ -159,7 +159,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
 ) -> LRESULT {
     // If code < 0, we must pass to next hook without processing
     if code < 0 {
-        return unsafe { CallNextHookEx(HHOOK::default(), code, wparam, lparam) };
+        return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
 
     // Only process if code indicates we should (HC_ACTION = 0)
@@ -215,7 +215,7 @@ unsafe extern "system" fn low_level_keyboard_proc(
     }
 
     // Pass unhandled keys to the next hook in the chain
-    unsafe { CallNextHookEx(HHOOK::default(), code, wparam, lparam) }
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,16 +286,13 @@ impl HotkeyManager {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                HWND_MESSAGE,
-                HMENU::default(),
-                hinstance,
+                Some(HWND_MESSAGE),
+                None,
+                Some(hinstance.into()),
                 None,
             )
-        };
-
-        if hwnd.0 == 0 {
-            return Err(last_error_as_brightness_error("CreateWindowExW"));
         }
+        .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
         Ok(Self {
             hwnd,
@@ -324,7 +321,7 @@ impl HotkeyManager {
         vk: VIRTUAL_KEY,
     ) -> Result<()> {
         unsafe {
-            RegisterHotKey(self.hwnd, id, modifiers, u32::from(vk.0)).map_err(|e| {
+            RegisterHotKey(Some(self.hwnd), id, modifiers, u32::from(vk.0)).map_err(|e| {
                 BrightnessError::windows_api("RegisterHotKey", e.code().0.cast_unsigned())
             })?;
         }
@@ -340,7 +337,7 @@ impl HotkeyManager {
     /// Returns `BrightnessError::WindowsApi` if unregistration fails.
     pub fn unregister_hotkey(&mut self, id: i32) -> Result<()> {
         unsafe {
-            UnregisterHotKey(self.hwnd, id).map_err(|e| {
+            UnregisterHotKey(Some(self.hwnd), id).map_err(|e| {
                 BrightnessError::windows_api("UnregisterHotKey", e.code().0.cast_unsigned())
             })?;
         }
@@ -395,7 +392,7 @@ impl HotkeyManager {
             // must never be silent. The main loop's liveness check detects
             // the dead thread and attempts a restart.
             loop {
-                let ret = GetMessageW(&raw mut msg, HWND::default(), 0, 0).0;
+                let ret = GetMessageW(&raw mut msg, None, 0, 0).0;
                 if ret == 0 {
                     log::info!("Hotkey message loop received WM_QUIT, exiting");
                     break;
@@ -440,10 +437,10 @@ impl Drop for HotkeyManager {
     fn drop(&mut self) {
         for &id in &self.registered_ids {
             unsafe {
-                let _ = UnregisterHotKey(self.hwnd, id);
+                let _ = UnregisterHotKey(Some(self.hwnd), id);
             }
         }
-        if self.hwnd.0 != 0 {
+        if !self.hwnd.is_invalid() {
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
             }

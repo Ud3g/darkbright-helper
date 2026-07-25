@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use super::{SafeHwnd, last_error_as_brightness_error, osd_render};
+use super::{SafeHwnd, hmonitor_from_isize, last_error_as_brightness_error, osd_render};
 use crate::core::state::MonitorState;
 use crate::error::{BrightnessError, Result};
 
@@ -181,11 +181,11 @@ unsafe extern "system" fn wnd_proc(
                 let mut ps = PAINTSTRUCT::default();
                 let hdc = BeginPaint(hwnd, &raw mut ps);
 
-                if hdc.0 != 0 {
-                    paint_osd(hwnd, hdc);
-                    EndPaint(hwnd, &raw const ps);
-                } else {
+                if hdc.is_invalid() {
                     log::warn!("BeginPaint returned null HDC");
+                } else {
+                    paint_osd(hwnd, hdc);
+                    let _ = EndPaint(hwnd, &raw const ps);
                 }
 
                 LRESULT(0)
@@ -194,7 +194,7 @@ unsafe extern "system" fn wnd_proc(
                 log::trace!(timer_id = wparam.0; "WM_TIMER received");
                 if wparam.0 == HIDE_TIMER_ID {
                     log::debug!("Auto-hiding after timeout");
-                    let _ = KillTimer(hwnd, HIDE_TIMER_ID);
+                    let _ = KillTimer(Some(hwnd), HIDE_TIMER_ID);
                     let _ = ShowWindow(hwnd, SW_HIDE);
                 }
                 LRESULT(0)
@@ -324,13 +324,10 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
             0,
             None,
             None,
-            GetModuleHandleW(None).unwrap_or_default(),
+            Some(GetModuleHandleW(None).unwrap_or_default().into()),
             None,
-        );
-
-        if hwnd.0 == 0 {
-            return Err(last_error_as_brightness_error("CreateWindowExW"));
-        }
+        )
+        .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
         apply_rounded_corners(hwnd);
 
@@ -383,9 +380,16 @@ pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> 
         let x = rect.left + (monitor_width - width) / 2;
         let y = rect.bottom - height - bottom_margin;
 
-        SetWindowPos(hwnd, HWND_TOPMOST, x, y, width, height, SWP_NOACTIVATE).map_err(|e| {
-            BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned())
-        })?;
+        SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            x,
+            y,
+            width,
+            height,
+            SWP_NOACTIVATE,
+        )
+        .map_err(|e| BrightnessError::windows_api("SetWindowPos", e.code().0.cast_unsigned()))?;
     }
 
     Ok(())
@@ -520,7 +524,7 @@ impl OsdWindow {
         update_osd_state(state, false);
 
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
             self.reset_timer();
         }
@@ -551,7 +555,7 @@ impl OsdWindow {
         update_osd_state(state, true);
 
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);
             let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
             self.reset_timer();
         }
@@ -595,7 +599,7 @@ impl OsdWindow {
         resize_osd_window(self.hwnd.as_raw(), false)?;
         unsafe {
             // Invalidate the entire window to trigger WM_PAINT
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);
             self.reset_timer();
         }
         Ok(())
@@ -617,7 +621,7 @@ impl OsdWindow {
         // Resize to expanded height to show error message
         resize_osd_window(self.hwnd.as_raw(), true)?;
         unsafe {
-            let _ = InvalidateRect(self.hwnd.as_raw(), None, true);
+            let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);
             self.reset_timer();
         }
         Ok(())
@@ -626,7 +630,12 @@ impl OsdWindow {
     /// Resets the auto-hide timer.
     fn reset_timer(&self) {
         unsafe {
-            let _ = SetTimer(self.hwnd.as_raw(), HIDE_TIMER_ID, self.timeout_ms, None);
+            let _ = SetTimer(
+                Some(self.hwnd.as_raw()),
+                HIDE_TIMER_ID,
+                self.timeout_ms,
+                None,
+            );
         }
     }
 
@@ -652,7 +661,7 @@ impl crate::core::controller::OsdSink for OsdWindow {
         handle: crate::core::controller::MonitorHandle,
         state: &MonitorState,
     ) -> Result<()> {
-        OsdWindow::show(self, HMONITOR(handle.0), state)
+        OsdWindow::show(self, hmonitor_from_isize(handle.0), state)
     }
     fn update(&mut self, state: &MonitorState) -> Result<()> {
         OsdWindow::update(self, state)

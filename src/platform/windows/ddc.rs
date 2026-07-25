@@ -13,7 +13,7 @@ use windows::Win32::Devices::Display::{
     GetPhysicalMonitorsFromHMONITOR, GetVCPFeatureAndVCPFeatureReply, PHYSICAL_MONITOR,
     SetVCPFeature,
 };
-use windows::Win32::Foundation::{BOOL, HANDLE, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{HANDLE, LPARAM, RECT};
 use windows::Win32::Graphics::Gdi::{
     DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR,
     MONITORINFOEXW,
@@ -21,6 +21,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Registry::{
     HKEY, KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegQueryValueExW,
 };
+use windows::core::BOOL;
 use windows::core::PCWSTR;
 
 use std::thread;
@@ -52,7 +53,7 @@ pub fn enumerate_monitors() -> Result<Vec<HMONITOR>> {
     // The callback function casts it back to &mut Vec<HMONITOR>.
     unsafe {
         if EnumDisplayMonitors(
-            HDC::default(),
+            None,
             None,
             Some(monitor_enum_proc),
             LPARAM(&raw mut monitors as isize),
@@ -87,6 +88,15 @@ pub struct PhysicalMonitor {
     // The raw Windows structure containing the handle and description.
     inner: PHYSICAL_MONITOR,
 }
+
+// SAFETY: A DDC physical-monitor handle is a process-scoped object with no
+// thread affinity — any thread in this process may use or destroy it, so
+// transferring ownership across threads cannot invalidate it. `Sync` is
+// deliberately NOT implemented: access stays single-threaded (the DDC worker
+// owns all instances). Since windows-rs 0.58, handle types implement neither
+// `Send` nor `Sync` by design and callers who know their threading model opt
+// in by wrapping — see microsoft/windows-rs#3093 and microsoft/windows-rs#3169.
+unsafe impl Send for PhysicalMonitor {}
 
 impl std::fmt::Debug for PhysicalMonitor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -418,7 +428,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
         SetupDiGetClassDevsW(
             Some(&GUID_DEVCLASS_MONITOR),
             None,
-            HWND::default(),
+            None,
             DIGCF_PRESENT | DIGCF_PROFILE,
         )
     }
@@ -504,7 +514,7 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
         SetupDiOpenDevRegKey(
             hdevinfo,
             devinfo_data,
-            DICS_FLAG_GLOBAL,
+            DICS_FLAG_GLOBAL.0,
             0,
             DIREG_DEV,
             KEY_READ.0,
@@ -549,14 +559,10 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             Some(&raw mut data_len),
         );
 
-        if let Err(e) = result {
-            Err(BrightnessError::windows_api(
-                "RegQueryValueExW",
-                e.code().0.cast_unsigned(),
-            ))
-        } else {
-            Ok(buffer)
-        }
+        result.ok().map_err(|e| {
+            BrightnessError::windows_api("RegQueryValueExW", e.code().0.cast_unsigned())
+        })?;
+        Ok(buffer)
     }
 }
 

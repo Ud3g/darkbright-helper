@@ -16,6 +16,8 @@ use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
 };
 
+use super::hmonitor_to_isize;
+
 /// Worker thread that handles all DDC/CI communication.
 ///
 /// The worker owns all `DdcMonitor` instances and processes commands
@@ -173,7 +175,8 @@ impl DdcWorker {
         // handle: a handle-open or brightness-read failure below must count
         // as unreadable, not as absent from the topology.
         enumerated.push(monitor_id.clone());
-        self.handle_cache.insert(hmonitor.0, monitor_id.clone());
+        self.handle_cache
+            .insert(hmonitor_to_isize(hmonitor), monitor_id.clone());
 
         // Get physical monitors for DDC
         let physical_monitors = get_physical_monitors(hmonitor)?;

@@ -7,12 +7,12 @@ rust-version = "1.88"
 publish = false
 
 [dependencies]
-# Windows API. Deliberately pinned at 0.52 for stability — an upgrade
-# touches nearly every FFI call site and is treated as its own undertaking
-# (see docs/improvement-ideas.md, Maintenance section), not allowed to drift.
-# Re-evaluate the pin at the next MSRV bump, at latest 2027-07; upgrading
-# earlier is always fine — the trigger bounds the decision, it is not a gate.
-windows = { version = "0.52", features = [
+# Windows API. Tracks the current minor; patch releases may drift freely.
+# Minor/major bumps change FFI signatures across src/platform/windows/ and
+# remain deliberate standalone undertakings with a full manual hardware test
+# pass (DDC, OSD, overlay, tray, hotkeys, power events) — never a side effect
+# of another change.
+windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",

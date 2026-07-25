@@ -14,15 +14,13 @@ use windows::Win32::System::Power::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GetMessageW, HMENU, HWND_MESSAGE, MSG, PBT_APMRESUMEAUTOMATIC,
-    PBT_APMRESUMESUSPEND, RegisterClassW, TranslateMessage, WM_POWERBROADCAST, WNDCLASSW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
+    RegisterClassW, TranslateMessage, WM_POWERBROADCAST, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
 
 use crate::core::state::BrightnessMessage;
 use crate::error::{BrightnessError, Result};
-use crate::platform::windows::last_error_as_brightness_error;
 
 thread_local! {
     /// Sender consulted by `power_wnd_proc` to notify the main thread of
@@ -171,16 +169,13 @@ impl PowerEventListener {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
-                HWND_MESSAGE, // Message-only window
-                HMENU::default(),
-                hinstance,
+                Some(HWND_MESSAGE), // Message-only window
+                None,
+                Some(hinstance.into()),
                 None,
             )
-        };
-
-        if hwnd.0 == 0 {
-            return Err(last_error_as_brightness_error("CreateWindowExW"));
         }
+        .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
         let notification = unsafe {
             RegisterSuspendResumeNotification(HANDLE(hwnd.0), DEVICE_NOTIFY_WINDOW_HANDLE)
@@ -195,7 +190,7 @@ impl PowerEventListener {
             )
         })?;
 
-        log::debug!(hwnd = hwnd.0; "Power event listener window created and registered");
+        log::debug!(hwnd:? = hwnd; "Power event listener window created and registered");
 
         Ok(Self { hwnd, notification })
     }
@@ -213,7 +208,7 @@ impl PowerEventListener {
             // > 0: Message retrieved
             // 0: WM_QUIT received
             // -1: Error
-            while GetMessageW(&raw mut msg, HWND::default(), 0, 0).0 > 0 {
+            while GetMessageW(&raw mut msg, None, 0, 0).0 > 0 {
                 let _ = TranslateMessage(&raw const msg);
                 let _ = DispatchMessageW(&raw const msg);
             }
@@ -227,11 +222,11 @@ impl Drop for PowerEventListener {
         unsafe {
             let _ = UnregisterSuspendResumeNotification(self.notification);
         }
-        if self.hwnd.0 != 0 {
+        if !self.hwnd.is_invalid() {
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
             }
-            log::debug!(hwnd = self.hwnd.0; "Power event listener window destroyed");
+            log::debug!(hwnd:? = self.hwnd; "Power event listener window destroyed");
         }
     }
 }

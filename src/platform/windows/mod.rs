@@ -56,7 +56,7 @@ pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
         // MONITOR_DEFAULTTONEAREST ensures we always get a handle,
         // even if the point is outside all monitors.
         let hmonitor = MonitorFromPoint(cursor_pos, MONITOR_DEFAULTTONEAREST);
-        if hmonitor.0 == 0 {
+        if hmonitor.is_invalid() {
             return Err(BrightnessError::windows_api("MonitorFromPoint", 0));
         }
 
@@ -71,14 +71,47 @@ pub struct CursorLocator;
 
 impl crate::core::controller::MonitorLocator for CursorLocator {
     fn monitor_under_cursor(&self) -> Result<crate::core::controller::MonitorHandle> {
-        get_monitor_under_cursor().map(|h| crate::core::controller::MonitorHandle(h.0))
+        get_monitor_under_cursor()
+            .map(|h| crate::core::controller::MonitorHandle(hmonitor_to_isize(h)))
     }
     fn resolve_id(
         &self,
         handle: crate::core::controller::MonitorHandle,
     ) -> Result<crate::core::state::MonitorId> {
-        ddc::get_monitor_id(HMONITOR(handle.0))
+        ddc::get_monitor_id(hmonitor_from_isize(handle.0))
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Handle ↔ isize Seam
+// ─────────────────────────────────────────────────────────────────────────────
+// `core/` carries monitor/window handles as plain `isize` (`MonitorHandle`,
+// `TrayStatusHandle`) to stay platform-free and `Send`. Win32 handles are
+// pointers, so every crossing of that seam converts here — keeping the
+// int↔pointer casts (and their lints) in one place.
+
+/// Rebuilds an `HMONITOR` from the `isize` form that crosses the `core` seam.
+#[must_use]
+pub(crate) fn hmonitor_from_isize(value: isize) -> HMONITOR {
+    HMONITOR(std::ptr::with_exposed_provenance_mut(value.cast_unsigned()))
+}
+
+/// Flattens an `HMONITOR` into the `isize` form that crosses the `core` seam.
+#[must_use]
+pub(crate) fn hmonitor_to_isize(handle: HMONITOR) -> isize {
+    handle.0.expose_provenance().cast_signed()
+}
+
+/// Rebuilds an `HWND` from the `isize` form stored in `TrayStatusHandle`.
+#[must_use]
+pub(crate) fn hwnd_from_isize(value: isize) -> HWND {
+    HWND(std::ptr::with_exposed_provenance_mut(value.cast_unsigned()))
+}
+
+/// Flattens an `HWND` into the `isize` form stored in `TrayStatusHandle`.
+#[must_use]
+pub(crate) fn hwnd_to_isize(handle: HWND) -> isize {
+    handle.0.expose_provenance().cast_signed()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -164,7 +197,7 @@ impl SafeHwnd {
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.hwnd.0 != 0
+        !self.hwnd.is_invalid()
     }
 
     /// Consumes the wrapper and returns the raw handle without destroying it.
@@ -220,7 +253,7 @@ impl SafeHandle {
     #[inline]
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.handle.0 != 0 && self.handle.0 != -1
+        !self.handle.is_invalid()
     }
 
     /// Consumes the wrapper and returns the raw handle without closing it.
@@ -260,7 +293,7 @@ fn show_message_box(title: &str, message: &str, style: MESSAGEBOX_STYLE) {
     // SAFETY: We pass valid null-terminated wide strings.
     unsafe {
         MessageBoxW(
-            HWND::default(),
+            None,
             windows::core::PCWSTR(message_wide.as_ptr()),
             windows::core::PCWSTR(title_wide.as_ptr()),
             style,
@@ -322,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_into_raw_prevents_drop() {
-        let hwnd = HWND(0);
+        let hwnd = HWND::default();
         let safe = SafeHwnd::new_borrowed(hwnd);
         let raw = safe.into_raw();
         assert_eq!(raw, hwnd);
