@@ -24,7 +24,7 @@ Rust (2024 edition) — chosen for cross-platform portability, low resource usag
 ### User Interface
 - OSD overlay (similar to Windows volume indicator)
 - Visual feedback on brightness changes
-- System tray icon with context menu (Settings, Quit)
+- System tray icon with context menu: live per-monitor status, Usage, Settings, Open Log Folder, Quit — plus warning entries and an icon badge while degraded (e.g. DDC unavailable)
 
 ## Hotkeys
 - **Primary**: `Ctrl+Shift+Up` / `Ctrl+Shift+Down` (reliable cross-keyboard default)
@@ -45,7 +45,7 @@ Prebuilt Windows binaries are published on
 
 ### Build
 ```bash
-git clone https://github.com/yourusername/darkbright-helper.git
+git clone https://github.com/Ud3g/darkbright-helper.git
 cd darkbright-helper
 cargo build --release
 ```
@@ -60,7 +60,7 @@ The executable will be at `target/release/darkbright-helper.exe`.
 
 - **Debug builds** show a console window where log messages appear (controlled by `RUST_LOG` environment variable)
 - **Release builds** use `windows_subsystem = "windows"` to hide the console, providing a clean GUI-only experience
-- To debug release-specific issues, use `RUST_LOG=debug cargo run --release` (note: output goes to debug logging, not console)
+- To diagnose a release build, enable the opt-in file log — see [Logging](#logging)
 
 ## Configuration
 
@@ -83,9 +83,14 @@ The configuration file is automatically created at:
   "brightness": {
     "step_percent": 5
   },
+  "monitors": {},
   "refresh": {
     "periodic_seconds": 60,
     "inactivity_seconds": 30
+  },
+  "logging": {
+    "file_enabled": false,
+    "file_level": "info"
   }
 }
 ```
@@ -98,6 +103,17 @@ The configuration file is automatically created at:
 - **brightness.step_percent**: Amount to change per keypress (1-50%).
 - **refresh.periodic_seconds**: Background refresh interval to resync with external changes (0-3600, 0 = disabled).
 - **refresh.inactivity_seconds**: Refresh before adjustment if inactive for this duration (0-600, 0 = disabled).
+- **logging.file_enabled**: Opt-in rolling file log for release diagnostics (default: false). See [Logging](#logging).
+- **logging.file_level**: Level filter for the file log — `error`/`warn`/`info`/`debug`/`trace` (default: info).
+
+The `monitors` field is reserved for future per-monitor settings and currently ignored.
+
+## Logging
+
+- **Debug builds** log to the visible console; the level is controlled by `RUST_LOG` (default: debug).
+- **Release builds** hide the console. For diagnostics, set `logging.file_enabled: true`: every log record is then also written to `%APPDATA%\BrightnessControl\darkbright.log`, reachable via the tray menu's "Open Log Folder". The file is size-capped: at 1 MB it rotates to `darkbright.log.old`, bounding disk use at ~2 MB while recent history survives.
+- `logging.file_level` filters the file independently of the console (`RUST_LOG` does not affect the file). At `debug` and below the file contains monitor serial numbers and absolute paths — fine for a deliberately created diagnostic artifact, but worth knowing before sharing it.
+- Crashes leave a trace: panics are logged (message + source location) and flushed to the file log before the process dies.
 
 ## Usage
 
@@ -105,7 +121,7 @@ The configuration file is automatically created at:
 2. Use `Ctrl+Shift+Up` to increase brightness.
 3. Use `Ctrl+Shift+Down` to decrease brightness.
 4. If brightness reaches 0%, continuing to decrease will activate the dimming overlay.
-5. Right-click the system tray icon to access Settings or Quit.
+5. Right-click the system tray icon to see per-monitor status and access Usage, Settings, the log folder, or Quit.
 
 ## Brightness Key Limitations
 
