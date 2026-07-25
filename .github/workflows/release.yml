@@ -1,0 +1,50 @@
+name: Release
+
+# Cut a release by pushing a bare-semver tag from main — see RELEASING.md.
+on:
+  push:
+    tags: ['[0-9]+.[0-9]+.[0-9]+']
+
+# The job creates the GitHub release and uploads the binary.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build + publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry and build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # A tag that disagrees with the manifest would publish a mislabeled
+      # binary; fail fast instead.
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
+          if ($version -ne $env:GITHUB_REF_NAME) {
+            throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          }
+
+      # The push that got tagged already passed CI on main, but nothing
+      # enforces that the tag points at such a commit — re-run the suite on
+      # exactly the tagged tree before shipping it.
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Create GitHub release with binary attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create $env:GITHUB_REF_NAME
+          target/release/darkbright-helper.exe
+          --title $env:GITHUB_REF_NAME
+          --notes "See CHANGELOG.md for the changes in this release."

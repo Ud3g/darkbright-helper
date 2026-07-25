@@ -10,6 +10,8 @@ history lives in the git log.
 - Panics are now logged (payload, source location, thread) and the log sinks
   flushed before the process dies, so a crash in a release build — where the
   console is hidden — leaves a trace in the opt-in file log.
+- Releases now ship a prebuilt `darkbright-helper.exe` on GitHub Releases,
+  built by a tag-triggered workflow; `RELEASING.md` documents the procedure.
 
 ### Fixed
 

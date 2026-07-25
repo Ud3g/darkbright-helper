@@ -33,6 +33,12 @@ Rust (2024 edition) — chosen for cross-platform portability, low resource usag
 
 ## Installation & Build
 
+### Download
+
+Prebuilt Windows binaries are published on
+[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases)
+(releases after 0.8.0). Alternatively, build from source as described below.
+
 ### Prerequisites
 - Rust 1.87+ (2024 edition)
 - Windows 10 or 11
