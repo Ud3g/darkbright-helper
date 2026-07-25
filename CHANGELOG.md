@@ -18,6 +18,12 @@ history lives in the git log.
   again. The file log now degrades to a temporarily oversized file as
   documented — records keep flowing, and the next over-cap write retries the
   rotation.
+- An OSD failure during a brightness adjustment aborted the adjustment after
+  the optimistic value was recorded but before the DDC command went out; the
+  watchdog then miscounted the orphaned pending as a DDC set timeout —
+  repeated OSD failures could falsely latch the degraded-DDC state on healthy
+  hardware. OSD failures are now logged and skipped: the adjustment always
+  reaches the hardware.
 
 ## [0.8.0] — 2026-07-24
 

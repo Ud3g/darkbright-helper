@@ -405,7 +405,9 @@ where
     /// # Errors
     ///
     /// Returns an error if the target monitor cannot be resolved or is
-    /// unknown, or if an OSD/overlay update fails.
+    /// unknown, or if an OSD/overlay update fails. An OSD failure after the
+    /// optimistic update is logged and skipped instead of propagated, so the
+    /// dispatched DDC set never dangles without a command in flight.
     fn handle_adjust(
         &mut self,
         monitor_id: Option<MonitorId>,
@@ -517,12 +519,19 @@ where
         }
         state.overlay_opacity = new_overlay;
 
-        // 6. Show or update OSD with optimistic values.
+        // 6. Show or update OSD with optimistic values. An OSD failure is
+        // logged, not propagated: the OSD is feedback only, and bailing out
+        // between set_pending and the DDC send would leave a pending with no
+        // command in flight — the watchdog would then misread it as a set
+        // timeout and count a healthy worker toward the hung-DDC latch.
         self.osd_monitor = Some(target_id.clone());
-        if self.osd.is_visible() {
-            self.osd.update(state)?;
+        let osd_result = if self.osd.is_visible() {
+            self.osd.update(state)
         } else {
-            self.osd.show(handle, state)?;
+            self.osd.show(handle, state)
+        };
+        if let Err(e) = osd_result {
+            log::error!(error:% = e; "OSD update failed; continuing adjustment");
         }
 
         // 7. Send DDC command to worker (non-blocking)
@@ -808,15 +817,22 @@ mod tests {
         shows: Vec<(MonitorHandle, u8)>,
         updates: Vec<u8>,
         error_updates: Vec<u8>,
+        fail: bool,
     }
 
     impl OsdSink for FakeOsd {
         fn show(&mut self, handle: MonitorHandle, state: &MonitorState) -> Result<()> {
+            if self.fail {
+                return Err(BrightnessError::ChannelSend);
+            }
             self.visible = true;
             self.shows.push((handle, state.effective_brightness()));
             Ok(())
         }
         fn update(&mut self, state: &MonitorState) -> Result<()> {
+            if self.fail {
+                return Err(BrightnessError::ChannelSend);
+            }
             self.updates.push(state.effective_brightness());
             Ok(())
         }
@@ -1287,6 +1303,30 @@ mod tests {
             })
         ));
         assert_eq!(c.osd_monitor.as_ref(), Some(&id));
+    }
+
+    #[test]
+    fn adjust_osd_failure_still_dispatches_ddc_command() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.osd.fail = true;
+
+        c.handle_adjust(None, 10, base)
+            .expect("OSD failure is feedback-only and must not abort the adjustment");
+
+        assert_eq!(
+            c.states[&id].effective_brightness(),
+            60,
+            "optimistic pending stays in place"
+        );
+        assert!(
+            matches!(
+                c.ddc.sent.last(),
+                Some(DdcCommand::SetBrightness { value: 60, .. })
+            ),
+            "DDC command must be dispatched despite the OSD failure"
+        );
     }
 
     #[test]
