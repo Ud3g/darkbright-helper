@@ -67,9 +67,8 @@ pub fn acquire() -> Result<InstanceLock> {
     // Read the thread-local last error as the very next operation, before any
     // allocation, logging, or further FFI can overwrite it. `MUTEX_NAME` is a
     // compile-time constant, so constructing the name argument allocated nothing
-    // whose drop could clobber the error. Do not use the `windows` crate's
-    // `GetLastError` binding here: it HRESULT-wraps the code and would never
-    // compare equal to `ERROR_ALREADY_EXISTS`.
+    // whose drop could clobber the error. `get_last_error_code()` reads it via
+    // std (raw error code, comparable to `ERROR_ALREADY_EXISTS`).
     let last_error = get_last_error_code();
 
     match created {

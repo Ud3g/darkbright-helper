@@ -145,13 +145,6 @@ pub fn last_error_as_brightness_error(function: impl Into<String>) -> Brightness
     BrightnessError::windows_api(function, get_last_error_code())
 }
 
-/// Checks if the last Windows error indicates success (`ERROR_SUCCESS` = 0).
-#[inline]
-#[must_use]
-pub fn last_error_is_success() -> bool {
-    get_last_error_code() == 0
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // RAII Handle Wrappers
 // ─────────────────────────────────────────────────────────────────────────────
