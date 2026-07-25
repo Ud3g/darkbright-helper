@@ -26,6 +26,7 @@ use windows::core::PCWSTR;
 use std::thread;
 use std::time::Duration;
 
+use crate::core::edid::parse_edid;
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -544,59 +545,6 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             Ok(buffer)
         }
     }
-}
-
-/// Parses basic information from EDID binary data.
-#[must_use]
-fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
-    if edid.len() < 128 {
-        return None;
-    }
-
-    // Manufacturer ID (bytes 8-9)
-    // Encoded as 5 bits per character (A=1, Z=26)
-    let mfg_id = u16::from_be_bytes([edid[8], edid[9]]);
-    let char1 = ((mfg_id >> 10) & 0x1F) as u8 + b'A' - 1;
-    let char2 = ((mfg_id >> 5) & 0x1F) as u8 + b'A' - 1;
-    let char3 = (mfg_id & 0x1F) as u8 + b'A' - 1;
-    let manufacturer = String::from_utf8_lossy(&[char1, char2, char3]).to_string();
-
-    // Model Name and Serial Number from Descriptors (bytes 54-125)
-    let mut model_name = String::new();
-    let mut serial_number = None;
-
-    for i in 0..4 {
-        let offset = 54 + i * 18;
-        if offset + 18 > edid.len() {
-            break;
-        }
-        let desc = &edid[offset..offset + 18];
-
-        // Check for string descriptors (Flag: 00 00 00 xx 00)
-        if desc[0] == 0 && desc[1] == 0 && desc[2] == 0 && desc[4] == 0 {
-            let tag = desc[3];
-            if tag == 0xFC {
-                // Model Name
-                model_name = parse_descriptor_string(&desc[5..]);
-            } else if tag == 0xFF {
-                // Serial Number
-                serial_number = Some(parse_descriptor_string(&desc[5..]));
-            }
-        }
-    }
-
-    if model_name.is_empty() {
-        model_name = "Generic Monitor".to_string();
-    }
-
-    Some(MonitorId::new(manufacturer, model_name, serial_number))
-}
-
-/// Helper to parse a string from an EDID descriptor block.
-/// Strings are terminated by 0x0A (newline) or end of block.
-fn parse_descriptor_string(bytes: &[u8]) -> String {
-    let len = bytes.iter().position(|&b| b == 0x0A).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..len]).trim().to_string()
 }
 
 #[cfg(test)]

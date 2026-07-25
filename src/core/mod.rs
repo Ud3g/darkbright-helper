@@ -5,11 +5,15 @@
 //! - [`brightness`] - Brightness calculation and value mapping
 //! - [`config`] - Configuration types and file handling
 //! - [`controller`] - Message-driven orchestration behind platform seams
+//! - [`edid`] - EDID parsing for monitor identification
+//! - [`logfile`] - Size-capped rolling file sink for diagnostic logging
+//! - [`reconcile`] - Refresh/respawn tracking and reconciliation policies
 //! - [`state`] - Application state and inter-thread messages
 
 pub mod brightness;
 pub mod config;
 pub mod controller;
+pub mod edid;
 pub mod logfile;
 pub mod reconcile;
 pub mod state;
