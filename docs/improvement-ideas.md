@@ -107,6 +107,10 @@ This document tracks potential future enhancements for the Brightness Control To
   undertaking with a full manual test pass (DDC, OSD, overlay, tray, hotkeys, power
   events) — never as a side effect of another change. Value grows over time: newer
   versions eliminate workarounds the code currently carries.
+  **Revisit trigger** (set 2026-07-25): re-evaluate the pin at the next MSRV bump, at
+  latest 2027-07 — whichever comes first. Re-evaluating means consciously deciding again
+  (upgrade now, or re-commit to the pin with a fresh trigger). Upgrading *earlier* is
+  always allowed; the trigger bounds how long the decision may rest, it is not a gate.
 
 ## 📝 LOWEST PRIORITY (High Effort / Low Value)
 **Marketing, documentation, and comprehensive rebranding:**

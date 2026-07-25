@@ -8,6 +8,8 @@ rust-version = "1.87"
 # Windows API. Deliberately pinned at 0.52 for stability — an upgrade
 # touches nearly every FFI call site and is treated as its own undertaking
 # (see docs/improvement-ideas.md, Maintenance section), not allowed to drift.
+# Re-evaluate the pin at the next MSRV bump, at latest 2027-07; upgrading
+# earlier is always fine — the trigger bounds the decision, it is not a gate.
 windows = { version = "0.52", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
