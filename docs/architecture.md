@@ -39,7 +39,7 @@ src/
 └── platform/
     ├── mod.rs            # Gates the platform submodule (Windows-only today)
     └── windows/          # #[cfg(windows)]
-        ├── mod.rs        # RAII handle wrappers, cursor locator, usage window, error helpers
+        ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes
         ├── ddc.rs        # DDC/CI communication (monitor handles)
         ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
         ├── hotkey.rs     # RegisterHotKey API + optional low-level keyboard hook
@@ -48,7 +48,8 @@ src/
         ├── overlay.rs    # Dimming overlay windows (implements the OverlaySink seam)
         ├── power.rs      # Power event listener (sleep/resume)
         ├── single_instance.rs # Per-session named-mutex single-instance guard
-        └── tray.rs       # System tray icon and menu
+        ├── tray.rs       # System tray icon and menu
+        └── usage.rs      # Modeless usage-instructions window
 ```
 
 The portability boundary is the set of controller seams in `core/controller.rs`

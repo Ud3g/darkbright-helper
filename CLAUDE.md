@@ -50,7 +50,7 @@ Message enums (`BrightnessMessage` to main, `DdcCommand` to worker) are defined 
 
 - `src/core/` — platform-agnostic: `brightness.rs` (adjustment math), `config.rs` (JSON config + validation), `controller.rs` (message-driven orchestration behind the platform seams), `edid.rs` (EDID → `MonitorId` parsing), `logfile.rs` (rolling file sink), `panic_hook.rs` (panic logging), `reconcile.rs` (refresh/respawn tracking), `state.rs` (state, messages, `MonitorId`, display-name generation).
 - `src/platform/mod.rs` — gates the platform submodule; the portability seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`) live in `core/controller.rs`.
-- `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `osd_render.rs`, `overlay.rs`, `power.rs`, `single_instance.rs`, `tray.rs`.
+- `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `osd_render.rs`, `overlay.rs`, `power.rs`, `single_instance.rs`, `tray.rs`, `usage.rs`.
 - `src/error.rs` — `BrightnessError` enum + `pub type Result<T>`.
 
 Read `docs/architecture.md` for full design rationale (it is the source of truth for behavior), `docs/code-conventions.md` for FFI/style rules, and `docs/improvement-ideas.md` for the roadmap.
