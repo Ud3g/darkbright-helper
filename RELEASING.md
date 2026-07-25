@@ -1,7 +1,7 @@
 # Releasing
 
 Releases are GitHub-only (nothing is published to crates.io — the crate's pub
-surface is internal). A release is cut from `main` by pushing a bare-semver
+surface is internal, enforced by `publish = false` in the manifest). A release is cut from `main` by pushing a bare-semver
 tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
 `.github/workflows/release.yml`.
 

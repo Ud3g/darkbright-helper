@@ -3,6 +3,8 @@ name = "darkbright-helper"
 version = "0.8.0"
 edition = "2024"
 rust-version = "1.87"
+# Internal pub surface, distributed via GitHub releases — never crates.io.
+publish = false
 
 [dependencies]
 # Windows API. Deliberately pinned at 0.52 for stability — an upgrade
