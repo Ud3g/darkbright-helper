@@ -280,6 +280,49 @@ is one root cause behind several residues rather than six separate nits — incl
 **Direction:** demote to `pub(crate)`/`pub(super)` everything the binary and `tests/` do not name;
 that restores the compiler as the dead-code detector.
 
+**✅ RESOLVED** — 2026-07-26, commit `6acda0c`. 259 demotable items → **116 `pub`, 131
+`pub(crate)`**, net 158 lines removed. **This row was under-sized at S**; it is an M. The reason is
+a mechanic the finding did not state: demoting a *module* buys nothing for a type that module
+re-exports, because a reachable type keeps every one of its `pub` methods reachable. Narrowing the
+five non-externally-named modules (`edid`, `ddc_worker`, `power`, `tray`, `usage`) produced **zero**
+new warnings on its own. Detection only came back with per-item demotion.
+
+Method: bulk-demote everything, then let rustc name the real surface — it is the only authority here,
+since the binary is a *separate crate* and `pub(crate)` is invisible to it. Four error shapes had to
+be handled to converge (E0603 private item, E0624 private method, E0616 private field, and the
+span-less "type … is private"). Verified two ways: `RUSTFLAGS="-W unreachable_pub" cargo clippy
+--lib` reports nothing, so no item is gratuitously `pub`; and re-demoting `RefreshConfig` /
+`MonitorConfig` proved they were an over-restore on my part, now corrected.
+
+**Found and deleted (~15, none predicted beyond the six in the finding):** `OsdWindow::show_error`
+(retired by design), `::hide` (the auto-hide timer in the window proc owns hiding) and `::hwnd`;
+`TrayIcon`'s `sender` field plus both accessors — the window procedure reaches the channel through a
+thread-local, so the struct's copy was unreachable, and dropping it made the constructor's `.clone()`
+needless; `DdcMonitor::id`, `::cached_brightness` **and the backing field** — closing out the
+write-only field flagged in row 1's note; `HotkeyManager::unregister_hotkey`; `Config::load`
+(superseded by `load_or_recover`); the `TrayMenuCreation` error variant and its constructor;
+`BRIGHTNESS_MIN`; `TrayMenuData`'s `hotkey_up`/`hotkey_down` (dead payload — the menu offers a
+"Usage" item that opens the usage window instead); and `SafeHwnd::new_borrowed` / `into_raw`.
+
+Two judgement calls worth flagging. **`SafeHwnd` lost its `owned` flag**: with borrowed construction
+gone, every wrapped window is one this crate created, so the flag encoded a distinction that no
+longer existed — the same hazard as row 3's fictional invariant. Its test was rewritten against
+`new_owned` (a null handle is inert on drop) and the `into_raw` test deleted, since it exercised only
+the deleted method. **Two of the four pre-existing `#[allow(dead_code)]` were masking real dead
+code** (`SafeHook::as_raw`/`is_valid`, one carrying a doc comment claiming a `CallNextHookEx` caller
+that does not exist) and are gone; the other two are genuine RAII keep-alives with clear comments and
+stayed.
+
+**Bonus, and the reason the row is worth more than its size:** `clippy::unnecessary_wraps` skips
+`pub` functions because the signature is API, so narrowing surfaced three infallible functions
+returning `Result`. `overlay::show_window`/`hide_window` and their two callers now return `()`;
+`OverlayManager::update` stays fallible through `set_opacity`, so the cascade stopped at one level.
+
+**One trap for next time, now documented in `code-conventions.md`:** `cargo clippy --all-targets`
+does **not** compile doc examples. The sweep passed clippy and the whole test suite except the
+`lib.rs` doctest, which is a consumer of the public API like any other — `calculate_adjustment` and
+`BrightnessAdjustment` are `pub` because that example names them, nothing else.
+
 **I7. The only DDC integration test cannot fail.**
 `tests/ddc_test.rs`.
 
@@ -383,15 +426,23 @@ record the choice.
 
 ## Resolution plan
 
-**Progress: rows 1 and 3–5 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
-(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`) — fmt, clippy (`-D warnings`, `--all-targets`) and the
-full suite green at each commit; 200 tests now (+2 for the display-change path, +7 for VCP scaling,
-the DDC probe moved to ignored-by-default). Rows 2 and 6+ remain open.
+**Progress: rows 1, 3–5 and 7 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
+(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`) — fmt, clippy (`-D warnings`,
+`--all-targets`) and the full suite green at each commit; 198 tests now (+2 for the display-change
+path, +7 for VCP scaling, −1 for a test that only exercised a deleted method; the DDC probe is
+ignored by default). Rows 2, 6 and 8+ remain open.
 
-Two lessons worth carrying, both from writing the test first. Row 5's stated direction was wrong and
-only the red run exposed it (see I3). Row 1's round-trip test *passed* on the deliberately-wrong
-stub, so it was checked against an injected rounding regression instead of being trusted (see C1) —
-a test that has never failed is not yet evidence of anything.
+Three lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
+(see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
+an injected rounding regression rather than trusted (see C1) — a test that has never failed is not
+yet evidence of anything. And row 7 was sized S when it is an M, because the finding named the
+symptom (`pub mod` suppresses `dead_code`) without the mechanic that makes it expensive to fix (a
+re-exported type keeps all its methods reachable, so module-level demotion alone changes nothing).
+
+**On this review's own accuracy so far:** every finding acted on has been real, but two of five
+carried a wrong or incomplete *direction* (rows 5 and 7) and one under-sized the work. The findings
+have held up better than the remedies attached to them — worth weighting when reading the rows still
+open, particularly the two marked "Needs decision".
 
 Ordered tackle list. **Complexity**: XS ≈ minutes, one edit site · S ≈ an hour-ish, one module plus
 tests/docs · M ≈ multi-site change needing real design care. **Clarity**: Clear = mechanical,
@@ -412,7 +463,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 4  | I7    | Mark the DDC probe manual-only (`tests/ddc_test.rs`)                    | Important | XS | Clear        | ✅ resolved `fc9c65b` |
 | 5  | I3    | `WM_DISPLAYCHANGE` → `Refresh` in the power window (`controller.rs:129`) | Important | S  | Clear        | ✅ resolved `d194bd2` — direction was wrong; window had to become top-level |
 | 6  | I4    | Surface a failed file-log attach in release (`main.rs:552`)              | Important | S  | Mostly clear | Tray degraded-state channel vs. one-time message box |
-| 7  | I6    | Demote the lib's incidental `pub` surface (`lib.rs`)                    | Important | S  | Clear        | — |
+| 7  | I6    | Demote the lib's incidental `pub` surface (`lib.rs`)                    | Important | S→M| Clear        | ✅ resolved `6acda0c` — sized S, was an M |
 | 8  | I8    | Adaptive main-loop cadence + document it (`main.rs:699`)                 | Important | XS | Mostly clear | Adaptive timeout vs. accept-and-document |
 | 9  | I2    | Hung-worker recovery: honest message or real abandon (`tray.rs:122`)     | Important | S–M| Needs decision | Fix the message only, or implement abandon-and-respawn |
 | 10 | DEP-3 | Drop the dead `Win32_UI_Controls` feature                               | Cosmetic  | XS | Clear        | — |
