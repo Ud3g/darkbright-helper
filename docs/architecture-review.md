@@ -566,6 +566,22 @@ record the choice.
   recorded anywhere in the docs. Either record the decision in `improvement-ideas.md` or delete it —
   and note that a file named "findings" containing none will mislead if it is ever committed.
 
+  **✅ RESOLVED** — 2026-07-26, commit `df1992b`: deleted, with no note kept. The warning about
+  committing it turned out to be overtaken — it *had* been committed, accidentally, by a `git add -A`
+  in `6acda0c` earlier in this same cycle.
+
+  Dated 2026-01-10 and stale in five of its six sections: it has config resolving paths through
+  `dirs_next` (removed in 0.8.0), EDID parsing inside `ddc.rs` (extracted to `core/edid.rs`), the
+  usage window inside `mod.rs` (now `usage.rs`), `osd.rs` at ~800 lines (573, since `osd_render.rs`
+  was split out) and the tray at ~500 (1064). Its last 30 lines are a raw transcript dump from
+  another tool — token counts, cost, colour markup.
+
+  No decision note was kept, deliberately: the six months since were themselves the decision. Not one
+  of the prompts was ever run, and the codebase moved the other way — extracting `core/edid.rs`,
+  splitting `osd_render.rs`, introducing the seam traits, upgrading `windows` to 0.62, *reducing*
+  third-party dependencies. Writing "we considered crates and declined" would have documented a
+  deliberation that never happened.
+
 ## Resolution plan
 
 **Progress: every Critical and Important row except 8 resolved 2026-07-26** on branch
@@ -574,7 +590,8 @@ record the choice.
 commit; 216 tests now (+2 for the display-change path, +7 for VCP scaling, +5 for the
 unreadable-monitor path, +9 for the split DDC health state, +4 for the file-log warning, −1 for a
 test that only exercised a deleted method; the DDC probe is ignored by default). Row 8 (I8,
-main-loop cadence) is the last Important one open, plus the cosmetics.
+main-loop cadence) is the last Important one open, plus the cosmetics — of which row 16 is also done
+(`df1992b`).
 
 Four lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
 (see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
@@ -624,7 +641,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 13 | DOC-4 | Fix `MonitorState` sample drift in architecture.md + CLAUDE.md          | Cosmetic  | XS | Clear        | architecture.md half done in `5c8a653`; CLAUDE.md half open |
 | 14 | DOC-5 | Mark "Automated testing suite" partially implemented                    | Cosmetic  | XS | Clear        | — |
 | 15 | DOC-2 | Reconcile the `monitors` round-trip claim with `MonitorConfig`           | Cosmetic  | S  | Mostly clear | Loosen the type vs. soften the doc |
-| 16 | UX-3  | Decide and record the hand-rolled-vs-crates question; drop the scratch   | Cosmetic  | XS | Needs decision | Whether to pursue crate replacement at all |
+| 16 | UX-3  | Decide and record the hand-rolled-vs-crates question; drop the scratch   | Cosmetic  | XS | Needs decision | ✅ resolved `df1992b` — file deleted, no note kept; six months of opposite-direction work were the decision |
 | 17 | DEP-2 | Confirm `winres` upstream status; swap to `winresource` or pin-note      | Cosmetic  | S  | Needs decision | Requires a crates.io check first |
 | 18 | DEP-1 | Add Dependabot (weekly, grouped, PRs only)                              | Cosmetic  | XS | Mostly clear | — |
 | 19 | STR-1 | Fold `DdcSupervisor` onto `RespawnGate`; test the real wiring            | Cosmetic  | S  | Clear        | — |
