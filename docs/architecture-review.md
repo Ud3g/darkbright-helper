@@ -93,6 +93,40 @@ use `u8::try_from(...)` instead of the allowed truncation. Log the reported max 
 maintainer's hardware is consistent with those monitors reporting 100, the common case. The
 frequency is unverified; the defect is not.
 
+**✅ RESOLVED** — 2026-07-26, commit `7a1607a`. **Open decision settled: scale to percent at the
+platform boundary**, not store-native-and-convert-on-display. Everything above the seam is already
+percent — `DdcCommand::SetBrightness { value: u8 }`, `MonitorState`, `BRIGHTNESS_MIN/MAX`, the
+overlay math, `config.max_brightness` — and `calculate_adjustment`'s `delta: i8` step is only
+meaningful in percent (a step of 5 on a max=65535 panel is imperceptible). Storing native would have
+pushed a per-monitor scale into state, config and the OSD; percent-at-the-boundary confined the
+change to `ddc.rs` + `ddc_worker.rs` and added no state above the seam. `DdcMonitor` is now
+explicitly documented as that boundary: it learns `reported_max` on each successful read, converts
+both directions, and no raw value escapes it. The `as u8` truncation and its `#[allow]` are gone.
+
+Fallback when no read has yet succeeded (the enumerable-but-unreadable monitor of I1): assume max
+100, which is *identical* to the pre-fix behaviour, so that monitor is no worse off. A reported max
+of 0 is rejected the same way rather than trusted — it is not a scale, and it would divide by zero.
+
+TDD, in `core/` so the math is host-testable: 7 tests written first. Two-step red — the functions
+did not exist (compile error), so stubs encoding the *current* pass-through/truncate semantics went
+in next, making the red output the review's own worked example verbatim (`left: 100, right: 50` for
+500 of 1000). That also confirms empirically the claim that the wraparound lands inside the
+plausible range. Coverage: both scaling directions, the unknown/zero-max fallback, a monitor
+reporting a current value above its own maximum, a sub-100 range (percentages collapse onto raw
+values — inherent, now documented), and `u32::MAX` to pin the u64 widening.
+
+One test — the 505-case round trip over max ∈ {100, 101, 255, 1000, 65535} — passed on the stub
+(identity round-trips trivially), so it was verified to be load-bearing rather than trusted:
+replacing the write's round-half-up with truncation fails it at 51% / max 101, which would drift the
+OSD by a step on every refresh. Rounding, not truncation, is what makes read-back stable, and that
+is the test that holds it.
+
+**Hardware:** the probe now prints `current of max → percent`, and on this machine reports
+`45 of 100 → 45%` — so the scaling is a verified no-op here, which is exactly why the defect
+survived to a published binary. **Still unverified:** behaviour on a monitor that actually reports a
+maximum other than 100. No such panel is available; the conversion is covered by unit tests, but the
+end-to-end path on non-100 hardware is untested by construction.
+
 ### Important
 
 **I1. A monitor that enumerates but whose brightness read fails never gets state — so it is
@@ -116,9 +150,12 @@ is present in `enumerated`. The enumerable-but-unreadable shape is explicitly mo
 for the refresh cadence (`periodic_refresh_gates_on_enumerated_not_readable`, `controller.rs:1022`)
 — thought through for pruning, missed for state creation.
 
-**This scopes C1.** Both defects sit at the same boundary — what the controller does with a
-brightness read — so seeding state from `enumerated` and carrying the reported `max` are one pass
-over `handle_ddc_refresh_result` and the `(MonitorId, u8)` result tuple, not two.
+**This was expected to scope C1** — both defects sit at the same boundary, so seeding state from
+`enumerated` and carrying the reported `max` looked like one pass over `handle_ddc_refresh_result`
+and the `(MonitorId, u8)` result tuple. **It did not turn out that way** (see C1's note, resolved
+`7a1607a`): carrying the max needed no change to either, because the conversion belongs one layer
+down, inside `DdcMonitor`. The result tuple still carries a percentage and its shape is untouched, so
+this finding stands unchanged and unblocked as a controller-side change on its own.
 
 **Direction:** seed `MonitorState` from `enumerated` as well (last-known or default value plus an
 "unknown" marker), or at minimum surface the dead end on the OSD.
@@ -346,11 +383,15 @@ record the choice.
 
 ## Resolution plan
 
-**Progress: rows 3–5 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
-(`a2a9896`, `fc9c65b`, `d194bd2`) — fmt, clippy (`-D warnings`, `--all-targets`) and the full suite
-green at each commit; 193 tests now (+2 for the display-change path, the DDC probe moved to
-ignored-by-default). Rows 1–2 and 6+ remain open. One lesson worth carrying: row 5's stated
-direction was wrong, and only writing the test first exposed it — see I3's resolution note.
+**Progress: rows 1 and 3–5 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
+(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`) — fmt, clippy (`-D warnings`, `--all-targets`) and the
+full suite green at each commit; 200 tests now (+2 for the display-change path, +7 for VCP scaling,
+the DDC probe moved to ignored-by-default). Rows 2 and 6+ remain open.
+
+Two lessons worth carrying, both from writing the test first. Row 5's stated direction was wrong and
+only the red run exposed it (see I3). Row 1's round-trip test *passed* on the deliberately-wrong
+stub, so it was checked against an injected rounding regression instead of being trusted (see C1) —
+a test that has never failed is not yet evidence of anything.
 
 Ordered tackle list. **Complexity**: XS ≈ minutes, one edit site · S ≈ an hour-ish, one module plus
 tests/docs · M ≈ multi-site change needing real design care. **Clarity**: Clear = mechanical,
@@ -358,11 +399,14 @@ direction fully specified · Mostly clear = one small implementation choice with
 Needs decision = genuine open question to settle before implementation. Ordering: severity first;
 within severity, clear quick wins before larger items, decision-blocked items last.
 
-C1 and I1 are deliberately adjacent — same code path, one pass.
+C1 and I1 were listed adjacent on the expectation of a single pass. In the event they proved
+separable: C1 resolved entirely inside `ddc.rs`/`ddc_worker.rs` without touching
+`handle_ddc_refresh_result` or the `(MonitorId, u8)` result-tuple shape, which is where I1 lives.
+Row 2 is therefore a standalone controller-side change, not the second half of row 1.
 
 | #  | ID    | Issue (anchor)                                                          | Severity  | Cx | Clarity      | Open decision |
 |----|-------|-------------------------------------------------------------------------|-----------|----|--------------|---------------|
-| 1  | C1    | Scale VCP 0x10 by reported max; stop truncating (`ddc.rs:311`)           | Critical  | M  | Mostly clear | Scale to percent at the boundary vs. store native + convert on display |
+| 1  | C1    | Scale VCP 0x10 by reported max; stop truncating (`ddc.rs:311`)           | Critical  | M  | Mostly clear | ✅ resolved `7a1607a` — settled on scale-to-percent at the boundary |
 | 2  | I1    | Seed state for enumerable-but-unreadable monitors (`controller.rs:285`)  | Important | S  | Needs decision | What value/marker to seed; whether the OSD shows "unknown" |
 | 3  | I5    | Delete dead `handle_cache` + both fictional comments (`ddc_worker.rs:33`)| Important | XS | Clear        | ✅ resolved `a2a9896` |
 | 4  | I7    | Mark the DDC probe manual-only (`tests/ddc_test.rs`)                    | Important | XS | Clear        | ✅ resolved `fc9c65b` |
