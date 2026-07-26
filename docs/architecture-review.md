@@ -224,6 +224,65 @@ to retry"` (`:122`) versus `"⚠ Hotkeys stopped working — restart the app"` (
 worker (leak the thread, drop its handles, spawn a replacement) — a genuine design decision, worth
 recording either way.
 
+**✅ RESOLVED** — 2026-07-26, commit `43bec28`. **Open decision settled: honest message *and*
+automatic recovery, but no abandon-and-respawn.**
+
+*One correction to the finding.* The tray text is not wrong twice — it is right for one of the two
+causes. On the backoff path `clear_degraded()` calls `clear_backoff()`, which empties the respawn
+history, so the next 250 ms supervision tick sees `!is_alive()` and respawns: "press a brightness
+hotkey to retry" describes exactly what happens. Only the hang path is a false affordance. That is
+why the fix is a split rather than a rewrite.
+
+*The direction's binary framing missed the option that mattered.* **The proof of life already
+arrives and was already being thrown away.** When a blocked DDC call finally returns, the worker
+sends its result (`ddc_worker.rs:121`) — that is conclusive evidence the thread is not stuck. The
+main thread receives it, and then: only the `Confirmed|GroundTruth` branch reset the timeout counter,
+the `Ignored` branch reset nothing, a `DdcRefreshResult` reset nothing at all, and **no result of any
+kind cleared the degraded flag**. So recovery from a bounded hang needed no new mechanism, no second
+thread and no leak — just acting on a message that was already being delivered. Every worker result
+now counts, including failures (a worker reporting a NAK is answering; a hang is about not answering)
+and results the reconciler discards as stale.
+
+*Why the keypress recovery had to go, not just the text.* It is what makes the badge lie: the press
+clears a flag it cannot fix, so the warning vanishes and returns ~24 s later when the next set times
+out. A standing condition needs a standing signal — the same reasoning as row 2's tray marker.
+System resume stays a recovery trigger, because a resume plausibly *does* unstick the hardware (the
+panel that stalled the bus was likely asleep); a keypress adds no information to the system.
+
+*Abandon-and-respawn: deliberately not built, and the finding under-states its cost.* The design's
+stated hazard — "two threads against the same physical-monitor handles" — is not the real one: a
+fresh worker calls `GetPhysicalMonitorsFromHMONITOR` again and gets its *own* handles, so aliasing
+never arises. The real hazard is the I²C bus underneath. If the old thread is stuck mid-transaction,
+the replacement can stall on the same bus, and the result is two hung threads instead of one. Add
+permanently leaked `PhysicalMonitor` handles per abandon, a latch to stop an abandon loop, and thus a
+*third* respawn policy beside the two STR-1 (row 19) already flags as duplicate — against a failure
+mode this review lists under "could not verify". Not worth it at this project's calibration.
+
+*Dispatch is deliberately still not gated while degraded.* Suppressing sets in the hang state was
+considered and rejected: a false hang diagnosis would turn a merely slow worker into a dead one, and
+the queue is harmless because sets are seq-correlated, so a late-delivered backlog reconciles to the
+correct final value.
+
+TDD: 8 tests red first. The most telling was `set_timeout_reverts_counts_and_disables_after_limit`
+failing `left: WorkerDead, right: WorkerHung` — the two causes collapsing onto one state, which is
+the finding stated as a value.
+
+**A gap the finding did not name, caught by the red run.** Removing the keypress recovery would have
+stranded the app: `supervise_worker` returns early for any degraded state, so a worker diagnosed as
+hung that *subsequently died* would never be respawned, and nothing else clears that state. Before
+this row a keypress covered it by accident. `a_hung_worker_that_later_dies_is_respawned_without_a_
+keypress` failed `left: 0, right: 1` (no respawn); death now supersedes the hang diagnosis, since the
+reason not to respawn went with the thread. Net result there is better than before: what used to
+need a keypress is now automatic.
+
+One test — the `wparam` bit round trip — passed on first write, so it was checked rather than
+trusted: shifting the hotkey bit by one decodes "hotkeys lost" as "monitor hung", which is precisely
+the silent cross-thread misreport it exists to catch.
+
+**Still unverified:** the hang itself, unchanged from this review's own note. Every rule added here
+is testable at the `DdcPort` seam and is tested; whether a real Win32 DDC call ever blocks
+unboundedly is not something this codebase can answer.
+
 **I3. `id_cache` is keyed by a handle the OS may recycle, and nothing watches for topology changes.**
 `src/core/controller.rs:129`, `:215`, `:356`, `:449-455`.
 
@@ -466,24 +525,31 @@ record the choice.
 
 ## Resolution plan
 
-**Progress: rows 1–5 and 7 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
-(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`, `5c8a653`) — fmt, clippy (`-D warnings`,
-`--all-targets`) and the full suite green at each commit; 198 tests now (+2 for the display-change
-path, +7 for VCP scaling, +5 for the unreadable-monitor path, −1 for a test that only exercised a
-deleted method; the DDC probe is ignored by default). Rows 6 and 8+ remain open — every Critical and
-all but two Important rows are done.
+**Progress: rows 1–5, 7 and 9 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
+(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`, `5c8a653`, `43bec28`) — fmt, clippy
+(`-D warnings`, `--all-targets`) and the full suite green at each commit; 212 tests now (+2 for the
+display-change path, +7 for VCP scaling, +5 for the unreadable-monitor path, +9 for the split DDC
+health state, −1 for a test that only exercised a deleted method; the DDC probe is ignored by
+default). Rows 6 and 8 are the last two Important ones open; every Critical is done.
 
-Three lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
+Four lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
 (see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
 an injected rounding regression rather than trusted (see C1) — a test that has never failed is not
-yet evidence of anything. And row 7 was sized S when it is an M, because the finding named the
-symptom (`pub mod` suppresses `dead_code`) without the mechanic that makes it expensive to fix (a
-re-exported type keeps all its methods reachable, so module-level demotion alone changes nothing).
+yet evidence of anything; row 9's bit round trip was checked the same way for the same reason. Row 7
+was sized S when it is an M, because the finding named the symptom (`pub mod` suppresses
+`dead_code`) without the mechanic that makes it expensive to fix (a re-exported type keeps all its
+methods reachable, so module-level demotion alone changes nothing). And row 9 shows the cost of a
+finding that frames its remedy as a binary: "fix the message or build abandon-and-respawn" hid a
+third option that needed neither, because the evidence the expensive one would have manufactured was
+already being delivered and discarded.
 
-**On this review's own accuracy so far:** every finding acted on has been real, but two of five
-carried a wrong or incomplete *direction* (rows 5 and 7) and one under-sized the work. The findings
-have held up better than the remedies attached to them — worth weighting when reading the rows still
-open, particularly the two marked "Needs decision".
+**On this review's own accuracy so far:** every finding acted on has been real, but three of six
+carried a wrong, incomplete or too-narrow *direction* (rows 5, 7 and 9) and one under-sized the work.
+Two rows also turned up a defect adjacent to the one described — row 2 found the docs promising
+behaviour that was only half-built, row 9 found that removing the useless recovery would strand a
+hung-then-dead worker. The findings have held up better than the remedies attached to them, and the
+code around a finding has been worth reading as carefully as the finding itself — worth weighting
+when reading the rows still open.
 
 Ordered tackle list. **Complexity**: XS ≈ minutes, one edit site · S ≈ an hour-ish, one module plus
 tests/docs · M ≈ multi-site change needing real design care. **Clarity**: Clear = mechanical,
@@ -506,7 +572,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 6  | I4    | Surface a failed file-log attach in release (`main.rs:552`)              | Important | S  | Mostly clear | Tray degraded-state channel vs. one-time message box |
 | 7  | I6    | Demote the lib's incidental `pub` surface (`lib.rs`)                    | Important | S→M| Clear        | ✅ resolved `6acda0c` — sized S, was an M |
 | 8  | I8    | Adaptive main-loop cadence + document it (`main.rs:699`)                 | Important | XS | Mostly clear | Adaptive timeout vs. accept-and-document |
-| 9  | I2    | Hung-worker recovery: honest message or real abandon (`tray.rs:122`)     | Important | S–M| Needs decision | Fix the message only, or implement abandon-and-respawn |
+| 9  | I2    | Hung-worker recovery: honest message or real abandon (`tray.rs:122`)     | Important | S–M| Needs decision | ✅ resolved `43bec28` — split the state, act on proof of life; abandon-and-respawn declined with reasons |
 | 10 | DEP-3 | Drop the dead `Win32_UI_Controls` feature                               | Cosmetic  | XS | Clear        | — |
 | 11 | DOC-1 | CHANGELOG: add the hotkey-startup-wait fix                              | Cosmetic  | XS | Clear        | — |
 | 12 | DOC-3 | Add `panic_hook.rs` to the module tree                                  | Cosmetic  | XS | Clear        | — |
@@ -546,6 +612,9 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 - **I1's sharp case** — a panel that persistently NAKs VCP reads while honouring writes — is reasoned
   from the worker's own rationale for keeping the handle; no evidence such a panel is in use.
 - **I2's hang** is reasoned from code, not reproduced; no test can model a truly blocking Win32 call.
+  _Unchanged by the row-9 fix (`43bec28`): every rule it adds is tested at the `DdcPort` seam, but
+  whether a real DDC call ever blocks unboundedly — the question that decides whether declining
+  abandon-and-respawn was right — remains open._
 - **I3's premise** that Windows actually recycles `HMONITOR` values on the dock/undock transitions
   this app sees. The hazard follows from the API contract; the decisive check is a manual
   dock/undock with `refresh.periodic_seconds = 0`.
