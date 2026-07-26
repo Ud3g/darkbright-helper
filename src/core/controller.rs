@@ -17,7 +17,7 @@ use crate::core::reconcile::{
 };
 use crate::core::state::{
     BrightnessMessage, DdcCommand, HealthWarnings, MonitorId, MonitorState, SetOutcome,
-    TrayMenuData, TrayMonitorInfo, generate_display_names,
+    TrayMenuData, TrayMonitorInfo, UNREAD_BRIGHTNESS_SEED, generate_display_names,
 };
 use crate::error::{BrightnessError, Result};
 
@@ -309,6 +309,24 @@ where
                 log::debug!(monitor_id:% = monitor_id.full_identity(); "New monitor identity");
                 self.states
                     .insert(monitor_id, MonitorState::new(brightness));
+            }
+        }
+
+        // A monitor that identified itself but refused the brightness read is
+        // reported as enumerated only. It still gets state: the worker kept its
+        // physical handle, so writes are attempted regardless, and a panel that
+        // NAKs reads while honouring writes would otherwise be permanently and
+        // silently uncontrollable. Insert-only — an existing state holds a real
+        // last-known value that outranks any seed.
+        for monitor_id in &enumerated {
+            if !self.states.contains_key(monitor_id) {
+                log::warn!(
+                    monitor:% = monitor_id.base_display_name(),
+                    seed = UNREAD_BRIGHTNESS_SEED;
+                    "Monitor enumerated but brightness unreadable; seeding so it stays adjustable"
+                );
+                self.states
+                    .insert(monitor_id.clone(), MonitorState::unread());
             }
         }
 
@@ -793,6 +811,7 @@ where
                 TrayMonitorInfo {
                     display_name,
                     hardware_brightness: state.effective_brightness(),
+                    brightness_known: state.brightness_known,
                     overlay_opacity: state.overlay_opacity,
                 }
             })
@@ -1033,6 +1052,104 @@ mod tests {
             before + 1,
             "gate stays open while enumerable"
         );
+    }
+
+    // ── Enumerable-but-unreadable monitors ───────────────────────────────
+
+    #[test]
+    fn an_enumerated_but_unreadable_monitor_is_seeded_so_it_stays_controllable() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        // The panel identifies (EDID readable) but NAKs the VCP read. The
+        // worker keeps its handle so writes are still attempted.
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        let state = c
+            .states
+            .get(&test_id())
+            .expect("unreadable monitor gets state");
+        assert_eq!(
+            state.cached_brightness, UNREAD_BRIGHTNESS_SEED,
+            "seeded at the documented midpoint"
+        );
+        assert!(
+            !state.brightness_known,
+            "the seed is a guess, not an observation"
+        );
+    }
+
+    #[test]
+    fn a_seeded_monitor_accepts_an_adjustment_instead_of_a_dead_keypress() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        c.handle_adjust(None, 10, base)
+            .expect("an unreadable but writable monitor must still adjust");
+
+        assert!(
+            matches!(
+                c.ddc.sent.last(),
+                Some(DdcCommand::SetBrightness { value: 60, .. })
+            ),
+            "the write reaches the hardware"
+        );
+        assert!(c.osd.visible, "and the user gets feedback");
+    }
+
+    #[test]
+    fn a_later_successful_read_replaces_the_seed() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        deliver_refresh(&mut c, vec![(test_id(), 70)], vec![test_id()], base);
+
+        let state = &c.states[&test_id()];
+        assert_eq!(state.cached_brightness, 70);
+        assert!(state.brightness_known, "an observation outranks the seed");
+    }
+
+    #[test]
+    fn a_confirmed_set_establishes_a_seeded_monitors_brightness() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+        c.handle_adjust(None, 10, base).unwrap();
+
+        c.handle_message(
+            BrightnessMessage::DdcSetResult {
+                monitor_id: test_id(),
+                value: 60,
+                seq: 0,
+                success: true,
+                error: None,
+            },
+            base,
+        )
+        .unwrap();
+
+        let state = &c.states[&test_id()];
+        assert_eq!(state.cached_brightness, 60);
+        assert!(
+            state.brightness_known,
+            "a write the hardware accepted establishes the value"
+        );
+    }
+
+    #[test]
+    fn seeding_never_overwrites_a_monitor_that_already_has_state() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 80);
+
+        // Read starts failing (standby, KVM) while the panel stays enumerable.
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        let state = &c.states[&test_id()];
+        assert_eq!(state.cached_brightness, 80, "last known value survives");
+        assert!(state.brightness_known, "and stays an observation");
     }
 
     #[test]

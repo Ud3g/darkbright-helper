@@ -221,11 +221,20 @@ pub(crate) enum SetOutcome {
     Ignored,
 }
 
+/// Brightness assumed for a monitor that enumerates but will not answer a read.
+///
+/// The midpoint of the range, chosen to bound how far the first adjustment can
+/// jump in either direction from a value nobody knows. It is corrected the
+/// moment any read or accepted write establishes the real one.
+pub(crate) const UNREAD_BRIGHTNESS_SEED: u8 = 50;
+
 /// Per-monitor state tracking brightness values and cache status.
 #[derive(Debug)]
 pub struct MonitorState {
     /// Last confirmed DDC brightness value (0-100).
     pub(crate) cached_brightness: u8,
+    /// Whether `cached_brightness` came from the hardware rather than a seed.
+    pub(crate) brightness_known: bool,
     /// Optimistic brightness set awaiting DDC confirmation.
     pub(crate) pending: Option<PendingSet>,
     /// Current overlay opacity (0-100, where 0 = invisible).
@@ -244,6 +253,25 @@ impl MonitorState {
     pub(crate) fn new(initial_brightness: u8) -> Self {
         Self {
             cached_brightness: initial_brightness.min(100),
+            brightness_known: true,
+            pending: None,
+            overlay_opacity: 0,
+            missing_since: None,
+        }
+    }
+
+    /// Creates state for a monitor that enumerates but will not answer a
+    /// brightness read.
+    ///
+    /// The worker keeps such a monitor's handle so writes are still attempted,
+    /// so it gets state and stays controllable. Without it every adjustment
+    /// failed with "monitor not found" — a keypress that did nothing and, since
+    /// the error path returns before the OSD, said nothing either.
+    #[must_use]
+    pub(crate) fn unread() -> Self {
+        Self {
+            cached_brightness: UNREAD_BRIGHTNESS_SEED,
+            brightness_known: false,
             pending: None,
             overlay_opacity: 0,
             missing_since: None,
@@ -279,6 +307,7 @@ impl MonitorState {
             Some(pending) if pending.seq == seq => {
                 if success {
                     self.cached_brightness = pending.value;
+                    self.brightness_known = true;
                     self.pending = None;
                     SetOutcome::Confirmed
                 } else {
@@ -295,6 +324,7 @@ impl MonitorState {
                 // out-of-order delivery would need a seq gate on this branch.
                 if success {
                     self.cached_brightness = value.min(100);
+                    self.brightness_known = true;
                     SetOutcome::GroundTruth
                 } else {
                     SetOutcome::Ignored
@@ -321,6 +351,7 @@ impl MonitorState {
     /// an optimistic set that is still awaiting its own result.
     pub(crate) fn update_from_ddc(&mut self, value: u8) {
         self.cached_brightness = value.min(100);
+        self.brightness_known = true;
     }
 }
 
@@ -341,6 +372,8 @@ pub(crate) struct TrayMonitorInfo {
     pub(crate) display_name: String,
     /// Current hardware brightness value (0-100).
     pub(crate) hardware_brightness: u8,
+    /// Whether that value was read from the monitor rather than seeded.
+    pub(crate) brightness_known: bool,
     /// Current overlay opacity (0-100, where 0 = invisible).
     pub(crate) overlay_opacity: u8,
 }

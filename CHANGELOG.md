@@ -47,6 +47,12 @@ history lives in the git log.
 
 ### Fixed
 
+- A monitor that identifies itself but refuses the brightness read got no state
+  at all, so every hotkey press on it failed with "monitor not found" before
+  reaching the OSD — nothing moved and nothing was shown. Such monitors are now
+  seeded at 50% and stay adjustable, which is what the documented "unreadable
+  monitors stay set-capable" behaviour always intended; the seed is corrected by
+  the first successful read or write, and the tray marks it `~` until then.
 - Brightness was silently wrong on any monitor whose DDC luminance range is not
   0-100. The maximum the monitor reports was read and discarded, so raw values
   were treated as percentages: a monitor reporting 500 of 1000 (50%) displayed

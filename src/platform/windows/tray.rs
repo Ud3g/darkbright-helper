@@ -586,8 +586,12 @@ fn show_context_menu(hwnd: HWND) {
 
             // Monitor info rows (disabled/non-clickable)
             for (index, monitor) in data.monitors.iter().enumerate() {
+                // "~" marks a brightness this app seeded rather than read: the
+                // monitor answers writes but not reads, so the number is our
+                // model of it, not a measurement.
+                let approx = if monitor.brightness_known { "" } else { "~" };
                 let monitor_text = format!(
-                    "{}: 🕶{}% 🔆{}%",
+                    "{}: 🕶{}% 🔆{approx}{}%",
                     monitor.display_name, monitor.overlay_opacity, monitor.hardware_brightness
                 );
                 // Menu IDs are u32; index won't exceed monitor count (typically < 10)

@@ -605,6 +605,27 @@ reverting through the normal optimistic protocol) instead of failing with
 "monitor not found" until the next refresh. Only the reported brightness
 value is missing — the main thread retains its cached value meanwhile.
 
+Set-capable requires *state*, so the main thread creates it for every
+enumerated monitor, not only the readable ones. A monitor that has never been
+read has no cached value to retain, so it is seeded at `UNREAD_BRIGHTNESS_SEED`
+(50, the midpoint — it bounds how far the first adjustment can jump from a value
+nobody knows) and marked `brightness_known: false`. Seeding is insert-only: a
+monitor that was readable before keeps its real last-known value, which always
+outranks a seed.
+
+The marker matters because the seed is a guess the user should not mistake for a
+measurement. It is cleared by the first evidence either way — a successful read
+or a write the hardware accepted — and until then the tray menu prefixes the
+value with `~`. The sharp case this covers is a panel that persistently NAKs the
+VCP *read* while honouring the *write*: previously permanently and silently
+uncontrollable, since every keypress returned "monitor not found" before
+reaching the OSD, so nothing moved and nothing was shown.
+
+The OSD deliberately shows the seeded value without a distinct visual state:
+after the first adjustment the value is authoritative anyway (the write
+established it), so a warning styling would flash once and never return. The
+standing signal lives in the tray, where it can persist.
+
 **Overlay Reconcile on External Change:**
 
 A refresh read above the hardware floor (`> 0`) for a monitor whose sub-zero
@@ -712,9 +733,9 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
 ```rust
 struct MonitorState {
     cached_brightness: u8,          // Last confirmed DDC value
+    brightness_known: bool,         // False while the value is a seed, not an observation
     pending: Option<PendingSet>,    // Optimistic value + seq + sent-at, awaiting confirmation
     overlay_opacity: u8,            // Current overlay dimming level
-    last_refresh: Instant,
     missing_since: Option<Instant>, // First observed miss from the enumerated set; None while present
 }
 ```
