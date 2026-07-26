@@ -104,6 +104,59 @@ Dedicated threads for I/O, main thread owns state and UI:
 - Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
+#### Main-Loop Cadence
+
+The main loop blocks in `rx.recv_timeout(16ms)` and pumps the Win32 message queue on
+every iteration, so it wakes ~62×/s for the life of the process. That number is chosen,
+not accreted, and this is the reasoning.
+
+**Why poll at all.** Three windows live on the main thread — OSD, dimming overlay and the
+usage window — and none has a message loop of its own; they are serviced only by
+`pump_windows_messages()`. A thread cannot block on an MPSC channel and the Win32 message
+queue at the same time, so one of the two has to be polled. The channel carries a rich
+enum and the queue does not, so the queue is the one that gets polled.
+
+**The timeout is not input latency.** Any `send()` wakes `recv_timeout` immediately, so
+hotkey presses, DDC results and the tray's menu-data request are served without waiting
+out the interval. The first OSD paint is not delayed either: after a message is handled
+the loop continues to the top and pumps before blocking again. The interval governs one
+thing only — how quickly *unsolicited* window messages are noticed.
+
+**What that leaves.** Only the OSD's auto-hide `WM_TIMER` and interaction with the usage
+window (its OK button, close box and repaints). The overlay needs no pumping at all: it is
+a layered `LWA_ALPHA` window with no `WM_PAINT` handler, composited by the DWM, and it is
+click-through like the OSD, so neither receives input.
+
+**The bounds are fixed by two other decisions.** Below, `osd.timeout_ms` may be configured
+as low as 100 ms, and an auto-hide must not visibly overshoot it. Above, Windows treats a
+top-level window whose thread has not pumped for 5 s as unresponsive and ghosts it. Any
+interval from roughly 25 ms to 1 s satisfies both; 16 ms sits at the responsive end.
+
+**Measured cost** (2026-07-26, release build, 11.9 h uptime): 0.72 s of CPU total, i.e.
+**0.0017 % of one core**, or ~60 ms per hour — and that figure includes startup, EDID
+parsing, window creation and every DDC refresh in the window. Sampled over 30 s of idle,
+the accumulated CPU time did not advance at all: ~0.27 µs of work per wake is below the
+scheduler's accounting granularity. The process does not call `timeBeginPeriod`, so it
+never raises the global timer resolution and its waits stay coalescable by the OS. Not
+covered by that measurement: the energy cost of denying the core deeper idle states, which
+is real but small next to any GUI process on the same machine.
+
+**An adaptive interval was considered and declined** — 16 ms while the OSD or usage window
+is up, ~250 ms otherwise. It works, it is about ten lines, and it would cut idle wakes 15×.
+It was not worth it: the saving is ~1.2 s of CPU per day, paid for with a predicate that
+can silently rot. A window added to the main thread later would have to be remembered in
+it, and forgetting is not something a test would catch — the symptom is a sluggish UI, not
+a failure. The overlay would also have to be deliberately *excluded* from such a predicate,
+since sub-zero dimming can be active for hours; including it out of caution would keep the
+fast path running through exactly the scenario the app exists for. A fully event-driven
+loop (`MsgWaitForMultipleObjects` plus a wake-post from every sender) was rejected further:
+`std::sync::mpsc` exposes no waitable handle, a forgotten post would delay a message
+silently, and supervision would still need a ~250 ms timer — so it lands at the same wake
+rate as the adaptive variant, for a transport rewrite.
+
+Revisit if a main-thread window ever becomes long-lived and interactive, or if battery
+profiling on a mobile machine says otherwise.
+
 ### State Management
 
 Message-passing with single ownership:
