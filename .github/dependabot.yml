@@ -1,0 +1,57 @@
+version: 2
+
+# Freshness, not advisories. CI's weekly `cargo audit` job already covers known
+# vulnerabilities; what it cannot see is a dependency quietly falling years
+# behind while nothing is wrong with it. Both of this repo's real drifts —
+# `windows` sitting on a Nov-2023 release until 2026, `thiserror` on 1.0 for
+# ~18 months — were caught by human review, never by tooling.
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    commit-message:
+      prefix: chore
+      include: scope
+    # Version updates only; security fixes come through the advisory path and
+    # are not rate-limited by this number.
+    open-pull-requests-limit: 5
+    groups:
+      # One PR for the whole low-risk batch, reviewed and merged in one pass.
+      # Majors fall outside the group and arrive individually, which is what
+      # this repo actually needs: the update it missed for 18 months was a
+      # major, and a breaking one must not hold up the safe ones.
+      cargo-minor-patch:
+        patterns:
+          - "*"
+        exclude-patterns:
+          # Ungrouped on purpose. A minor bump here rewrites FFI signatures
+          # across src/platform/windows/ and is only mergeable after a manual
+          # hardware pass (DDC, OSD, overlay, tray, hotkeys, power events), per
+          # the note in Cargo.toml. Inside the group it would block every
+          # cheap update behind that pass.
+          - "windows"
+        update-types:
+          - minor
+          - patch
+
+  # Workflow action pins drift the same way and expire harder: a major that
+  # goes unmerged eventually stops running when GitHub retires the runtime.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/Berlin
+    commit-message:
+      prefix: ci
+      include: scope
+    open-pull-requests-limit: 3
+    groups:
+      github-actions:
+        patterns:
+          - "*"

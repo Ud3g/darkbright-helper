@@ -15,6 +15,19 @@
 | Serialization | `serde` + `serde_json` | De facto standard, config file handling |
 | Logging | `log` + `env_logger` | Standard facade pattern, runtime-configurable |
 
+Two mechanisms keep this set current, because they fail differently. CI's weekly
+`cargo audit` job answers "is anything here *known bad*"; Dependabot
+(`.github/dependabot.yml`, weekly) answers "is anything here *quietly stale*",
+which is this repo's actual failure mode — every drift so far was found by human
+review, never by tooling. Minor and patch updates arrive as one grouped PR;
+majors arrive individually so a breaking one cannot hold up the safe batch.
+
+`windows` is deliberately excluded from that group. A minor bump rewrites FFI
+signatures across `platform/windows/` and is only mergeable after the manual
+hardware pass noted in `Cargo.toml`, so it stands alone rather than blocking
+everything grouped with it. A bump that raises the minimum toolchain is caught
+by CI's separate MSRV job, not by the update PR itself.
+
 ---
 
 ## Core Architecture
