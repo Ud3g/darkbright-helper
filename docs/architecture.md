@@ -531,6 +531,17 @@ retrievable artifact for field reports. Mechanics:
   line.
 - **Access:** the tray menu's "Open Log Folder" entry opens the directory in
   Explorer.
+- **Attach failure:** if the sink cannot be built (no `APPDATA`, an unwritable
+  directory, a locked file, a full disk), the app runs on without it — but the
+  failure is reported through the **tray**, not only the log. Announcing the
+  loss of a diagnostic channel on that same channel would reach nobody: the
+  file is by definition absent, and release builds hide the console, so a user
+  who set `file_enabled = true` to chase a problem would find an empty folder
+  and no explanation. The warning line points at the log folder because "Open
+  Log Folder" sits in the same menu, which is where that user is heading. It is
+  deliberately the one warning that does **not** raise the icon's amber badge —
+  see §13. Unlike a failed rotation, the attach is attempted exactly once, so
+  the condition is latched for the process.
 
 Formatting (timestamps, level, target, `key=value` pairs) comes from a second
 `env_logger` instance writing into the rotating file via `Target::Pipe`, so
@@ -829,7 +840,8 @@ file, brightness in the hardware, overlay windows die with the process).
 
 Both degraded states — DDC disabled and hotkeys given up — are surfaced to the
 user through the tray icon, tooltip, and menu (see §13, "Degraded-State
-Indicator"), not just the log.
+Indicator"), not just the log. A third condition rides the same channel without
+being a supervision state at all: a file log that failed to attach (§8).
 
 **Panic policy (deliberate).** Supervision covers *environmental* failures —
 hung hardware, dead threads. Panics are bugs and are handled fail-fast: a panic
@@ -882,8 +894,9 @@ The application runs as a background process with a system tray icon for user in
 
 **Degraded-State Indicator:**
 
-The two supervision give-up states (§12) — DDC disabled and hotkeys lost — are
-visible in the tray through two complementary paths:
+Three conditions are visible in the tray: the two supervision give-up states
+(§12) — DDC disabled and hotkeys lost — plus a file log that failed to attach
+(§8). They reach the user through two complementary paths:
 
 - **Pull (menu):** `TrayMenuData` carries a `HealthWarnings` snapshot; while a
   warning is active the menu opens with grayed warning lines at the very top.
@@ -891,8 +904,9 @@ visible in the tray through two complementary paths:
   actually applies: "⚠ DDC unavailable — press a brightness hotkey to retry"
   for a dead worker, "⚠ Monitor not responding — restart the app if this
   persists" for an unresponsive one (hedged, since it often frees itself).
-  Alongside them, "⚠ Hotkeys stopped working — restart the app". Always
-  current because the menu is populated on open.
+  Alongside them, "⚠ Hotkeys stopped working — restart the app" and "⚠ File
+  logging failed to start — check the log folder is writable". Always current
+  because the menu is populated on open.
 - **Push (icon + tooltip):** the main loop compares the controller's
   `HealthWarnings` each tick and, on a transition, posts a custom window
   message to the tray thread via `TrayStatusHandle` (`PostMessageW`, safe
@@ -902,7 +916,12 @@ visible in the tray through two complementary paths:
   badge — no second icon asset), and the tooltip appends the active warnings
   (e.g. "Brightness Control – DDC unavailable"). The `HealthWarnings` snapshot
   crosses to the tray thread packed into the message's `wparam`, so the cause
-  has to survive that hop — a round-trip test pins the encoding.
+  has to survive that hop — a round-trip test pins the encoding. The badge
+  itself is raised only by the two supervision states: it means the app cannot
+  do its job, and a missing diagnostic log does not stop a single adjustment,
+  so letting it light the badge would weaken the signal for the conditions that
+  do. A failed file log therefore shows in the menu and the tooltip, never on
+  the icon.
 
 Recovery follows §12 and differs per cause: a dead worker's warning clears on
 user activity or resume, an unresponsive worker's clears when the worker answers
@@ -1019,6 +1038,8 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 5. **Expected**: Explorer opens the folder containing `config.json` and `darkbright.log`
 6. Set `logging.file_level` to `"verbose"` (invalid) and restart
 7. **Expected**: An error line reports the invalid value; the file logs at the default `info` level
+8. With `file_enabled` still `true`, make the sink unbuildable — e.g. deny your user write access to `%APPDATA%\BrightnessControl`, or hold `darkbright.log` open exclusively from another process — and start a **release** build (no console)
+9. **Expected**: The app runs normally and the tray menu opens with a grayed "⚠ File logging failed to start — check the log folder is writable" line; the tray icon stays unbadged (this condition does not mean brightness control is broken); the tooltip reads "Brightness Control – file logging off"
 
 #### Degraded-State Tray Indicator Test
 1. Start the application with `RUST_LOG=debug`

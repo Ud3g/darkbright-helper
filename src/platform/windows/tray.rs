@@ -109,6 +109,9 @@ fn compose_tooltip(warnings: HealthWarnings) -> String {
     if warnings.hotkeys_lost {
         parts.push("hotkeys stopped");
     }
+    if warnings.file_log_failed {
+        parts.push("file logging off");
+    }
     if parts.is_empty() {
         TRAY_TOOLTIP.to_string()
     } else {
@@ -135,7 +138,23 @@ fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
         // The give-up latch only clears with a fresh process.
         lines.push("⚠ Hotkeys stopped working — restart the app");
     }
+    if warnings.file_log_failed {
+        // "Open Log Folder" sits a few items below in this same menu, which is
+        // what someone hunting for a missing log clicks — so point at the
+        // folder rather than explain an I/O error nobody can act on.
+        lines.push("⚠ File logging failed to start — check the log folder is writable");
+    }
     lines
+}
+
+/// Whether the tray icon should carry the amber warning badge.
+///
+/// Deliberately excludes a failed file log. The badge says the app cannot do
+/// its job; a missing diagnostic log does not stop a single adjustment, and
+/// letting it light the badge would weaken the signal for the two conditions
+/// that genuinely mean something is broken.
+fn wants_warning_badge(warnings: HealthWarnings) -> bool {
+    warnings.ddc.is_degraded() || warnings.hotkeys_lost
 }
 
 /// Packs warnings into the `wparam` payload of a [`WM_TRAY_STATUS`] post.
@@ -148,7 +167,7 @@ fn warnings_to_bits(warnings: HealthWarnings) -> usize {
         DdcHealth::WorkerDead => 1,
         DdcHealth::WorkerHung => 2,
     };
-    ddc | (usize::from(warnings.hotkeys_lost) << 2)
+    ddc | (usize::from(warnings.hotkeys_lost) << 2) | (usize::from(warnings.file_log_failed) << 3)
 }
 
 /// Unpacks what [`warnings_to_bits`] wrote. Unknown bit patterns decode as
@@ -161,6 +180,7 @@ fn warnings_from_bits(bits: usize) -> HealthWarnings {
             _ => DdcHealth::Ok,
         },
         hotkeys_lost: bits & 0b100 != 0,
+        file_log_failed: bits & 0b1000 != 0,
     }
 }
 
@@ -460,7 +480,7 @@ fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
     let Some(icons) = STATUS_ICONS.with(|s| *s.borrow()) else {
         return;
     };
-    let icon = if warnings.ddc.is_degraded() || warnings.hotkeys_lost {
+    let icon = if wants_warning_badge(warnings) {
         icons.warning
     } else {
         icons.normal
@@ -1030,17 +1050,24 @@ mod tests {
         );
     }
 
+    /// Warnings with only the DDC condition set.
+    fn ddc_only(ddc: DdcHealth) -> HealthWarnings {
+        HealthWarnings {
+            ddc,
+            ..HealthWarnings::default()
+        }
+    }
+
     #[test]
     fn tooltip_lists_active_warnings() {
-        let ddc = HealthWarnings {
-            ddc: DdcHealth::WorkerDead,
-            hotkeys_lost: false,
-        };
-        assert_eq!(compose_tooltip(ddc), "Brightness Control – DDC unavailable");
+        assert_eq!(
+            compose_tooltip(ddc_only(DdcHealth::WorkerDead)),
+            "Brightness Control – DDC unavailable"
+        );
 
         let keys = HealthWarnings {
-            ddc: DdcHealth::Ok,
             hotkeys_lost: true,
+            ..HealthWarnings::default()
         };
         assert_eq!(
             compose_tooltip(keys),
@@ -1050,6 +1077,7 @@ mod tests {
         let both = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
+            file_log_failed: false,
         };
         assert_eq!(
             compose_tooltip(both),
@@ -1059,13 +1087,21 @@ mod tests {
 
     #[test]
     fn tooltip_says_not_responding_for_a_hung_worker() {
-        let hung = HealthWarnings {
-            ddc: DdcHealth::WorkerHung,
-            hotkeys_lost: false,
+        assert_eq!(
+            compose_tooltip(ddc_only(DdcHealth::WorkerHung)),
+            "Brightness Control – monitor not responding"
+        );
+    }
+
+    #[test]
+    fn tooltip_names_a_failed_file_log() {
+        let logging = HealthWarnings {
+            file_log_failed: true,
+            ..HealthWarnings::default()
         };
         assert_eq!(
-            compose_tooltip(hung),
-            "Brightness Control – monitor not responding"
+            compose_tooltip(logging),
+            "Brightness Control – file logging off"
         );
     }
 
@@ -1073,46 +1109,79 @@ mod tests {
     fn menu_warning_lines_match_active_warnings() {
         assert!(warning_menu_lines(HealthWarnings::default()).is_empty());
 
-        let both = HealthWarnings {
+        let all = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
+            file_log_failed: true,
         };
-        let lines = warning_menu_lines(both);
-        assert_eq!(lines.len(), 2);
+        let lines = warning_menu_lines(all);
+        assert_eq!(lines.len(), 3);
         assert!(lines[0].contains("DDC"));
         assert!(lines[1].contains("Hotkeys"));
+        assert!(lines[2].contains("logging"));
     }
 
     #[test]
     fn only_a_dead_worker_is_advertised_as_hotkey_recoverable() {
         // A keypress clears the respawn backoff, so the advice is sound here…
-        let dead = HealthWarnings {
-            ddc: DdcHealth::WorkerDead,
-            hotkeys_lost: false,
-        };
+        let dead = ddc_only(DdcHealth::WorkerDead);
         assert!(warning_menu_lines(dead)[0].contains("hotkey"));
 
         // …but nothing the user can press unsticks a blocked DDC call, so
         // offering the same retry would be a false affordance.
-        let hung = HealthWarnings {
-            ddc: DdcHealth::WorkerHung,
-            hotkeys_lost: false,
-        };
-        let line = warning_menu_lines(hung)[0];
+        let line = warning_menu_lines(ddc_only(DdcHealth::WorkerHung))[0];
         assert!(!line.contains("hotkey"), "must not promise a hotkey retry");
         assert!(line.contains("restart"));
+    }
+
+    #[test]
+    fn a_failed_file_log_is_announced_where_the_user_goes_looking() {
+        let logging = HealthWarnings {
+            file_log_failed: true,
+            ..HealthWarnings::default()
+        };
+        let lines = warning_menu_lines(logging);
+        assert_eq!(lines.len(), 1);
+        // The same menu carries "Open Log Folder" a few items down, which is
+        // what someone hunting for a missing log clicks — so the line points
+        // at the folder rather than explaining an I/O error.
+        assert!(lines[0].contains("log folder"), "got: {}", lines[0]);
+    }
+
+    #[test]
+    fn a_failed_file_log_does_not_raise_the_warning_badge() {
+        // The badge means the app cannot do its job. A missing diagnostic log
+        // does not stop a single brightness adjustment, and diluting the badge
+        // would weaken the signal for the two conditions that do.
+        let logging = HealthWarnings {
+            file_log_failed: true,
+            ..HealthWarnings::default()
+        };
+        assert!(!wants_warning_badge(logging));
+
+        assert!(wants_warning_badge(ddc_only(DdcHealth::WorkerHung)));
+        assert!(wants_warning_badge(HealthWarnings {
+            hotkeys_lost: true,
+            ..HealthWarnings::default()
+        }));
     }
 
     #[test]
     fn status_bits_round_trip_every_warning_combination() {
         for ddc in [DdcHealth::Ok, DdcHealth::WorkerDead, DdcHealth::WorkerHung] {
             for hotkeys_lost in [false, true] {
-                let warnings = HealthWarnings { ddc, hotkeys_lost };
-                assert_eq!(
-                    warnings_from_bits(warnings_to_bits(warnings)),
-                    warnings,
-                    "lost across the window-message hop"
-                );
+                for file_log_failed in [false, true] {
+                    let warnings = HealthWarnings {
+                        ddc,
+                        hotkeys_lost,
+                        file_log_failed,
+                    };
+                    assert_eq!(
+                        warnings_from_bits(warnings_to_bits(warnings)),
+                        warnings,
+                        "lost across the window-message hop"
+                    );
+                }
             }
         }
     }

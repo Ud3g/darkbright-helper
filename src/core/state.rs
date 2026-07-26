@@ -413,6 +413,10 @@ pub struct HealthWarnings {
     pub(crate) ddc: DdcHealth,
     /// The hotkey thread died repeatedly and supervision gave up.
     pub(crate) hotkeys_lost: bool,
+    /// The opt-in file log was requested but could not be attached. Unlike its
+    /// siblings this says nothing about whether brightness control works — it
+    /// only means the user asked for a diagnostic that is not being written.
+    pub(crate) file_log_failed: bool,
 }
 
 /// Data sent from the main thread to the tray thread for menu population.

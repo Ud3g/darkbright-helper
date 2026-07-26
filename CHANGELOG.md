@@ -47,6 +47,13 @@ history lives in the git log.
 
 ### Fixed
 
+- Enabling `logging.file_enabled` and getting no log file gave no clue why. If
+  the sink could not be built (unwritable `%APPDATA%`, a locked file, a full
+  disk), the warning went to the log — which is exactly what had failed — and
+  to a console that release builds hide, so the feature just appeared not to
+  work. The tray menu now says so, and points at the log folder, which is where
+  "Open Log Folder" already leads. It deliberately does not badge the tray
+  icon: brightness control is unaffected.
 - The tray told users to "press a brightness hotkey to retry" for a DDC worker
   that had stopped responding — advice that cannot work, since no keypress
   unsticks a thread blocked inside a DDC call. Worse, the press cleared the

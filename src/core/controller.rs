@@ -148,6 +148,8 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     ddc_health: DdcHealth,
     /// True once hotkey supervision gave up; latched until app restart.
     hotkeys_lost: bool,
+    /// True once the opt-in file log failed to attach; latched until restart.
+    file_log_failed: bool,
     /// Monitor whose state the OSD is currently showing (for error restyling).
     osd_monitor: Option<MonitorId>,
 }
@@ -184,6 +186,7 @@ where
             consecutive_set_timeouts: 0,
             ddc_health: DdcHealth::Ok,
             hotkeys_lost: false,
+            file_log_failed: false,
             osd_monitor: None,
         }
     }
@@ -198,12 +201,24 @@ where
         self.hotkeys_lost = true;
     }
 
+    /// Records that the opt-in file log could not be attached.
+    ///
+    /// Latched, because the attach is attempted exactly once at startup: there
+    /// is no path by which the log can start appearing later, so nothing should
+    /// clear this. The report has to travel through the tray because the
+    /// failure of a diagnostic channel cannot be announced on that same
+    /// channel, and a release build hides the console.
+    pub fn set_file_log_failed(&mut self) {
+        self.file_log_failed = true;
+    }
+
     /// Returns the currently active degraded-subsystem warnings.
     #[must_use]
     pub fn health_warnings(&self) -> HealthWarnings {
         HealthWarnings {
             ddc: self.ddc_health,
             hotkeys_lost: self.hotkeys_lost,
+            file_log_failed: self.file_log_failed,
         }
     }
 
@@ -2035,6 +2050,30 @@ mod tests {
             "the menu picks its wording from the cause, so the cause must survive"
         );
         assert!(!data.warnings.hotkeys_lost);
+    }
+
+    #[test]
+    fn a_failed_file_log_attach_is_surfaced_and_latched() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+
+        c.set_file_log_failed();
+
+        assert!(
+            c.health_warnings().file_log_failed,
+            "the console warning is invisible in release; the tray is the channel that exists"
+        );
+
+        // The attach is attempted exactly once at startup, so nothing that
+        // happens afterwards can make the log appear.
+        c.handle_adjust(None, 10, base).unwrap();
+        c.handle_message(BrightnessMessage::SystemResumed, base)
+            .unwrap();
+        assert!(
+            c.health_warnings().file_log_failed,
+            "no recovery path exists, so the warning must not clear"
+        );
     }
 
     #[test]
