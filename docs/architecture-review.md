@@ -340,6 +340,49 @@ are handled and tested (`logfile.rs`).
 **Direction:** surface it through a channel that exists in release — the tray degraded-state path
 already carries exactly this kind of news — or a one-time message box.
 
+**✅ RESOLVED** — 2026-07-26, commit `311560d`. **Open decision settled: the tray, not a message
+box.** `HealthWarnings` gains `file_log_failed`; the controller latches it via
+`set_file_log_failed()`, and `main.rs` carries the attach outcome past the controller's construction
+(the failure at `:552` predates both controller and tray by design — the file log must attach as
+early as possible so startup lines land in it).
+
+*Why not the message box.* Both existing startup message boxes (single-instance, hotkey registration)
+announce conditions where the app **cannot do its job**, and both `return` immediately after. Here
+the app runs normally. A modal box also blocks the startup path of something typically launched at
+logon, would reappear every boot for a transient cause such as a scanner holding the file, and is
+flash-not-standing — the same property that decided rows 2 and 9 the other way. Three consecutive
+rows asking "transient signal or standing one?" should not get three different answers.
+
+*Why the tray is the right surface specifically.* The affected user is, by definition, someone who
+set `file_enabled = true` and later goes looking for the log — and the tray menu already carries
+"Open Log Folder", so it sits on that user's guaranteed path. The warning line therefore points at
+the folder rather than explaining an I/O error.
+
+*One sub-decision the finding did not raise: the badge.* A failed file log is the one warning that
+deliberately does **not** raise the icon's amber badge, which was factored out of `handle_status_update`
+into a testable `wants_warning_badge`. The badge means the app cannot do its job; a missing
+diagnostic log does not stop a single adjustment, and letting it in would weaken the signal for the
+two conditions that do. Menu and tooltip only.
+
+**The finding missed an inconsistency inside the module.** Right next door, `logfile.rs:56-61`
+handles a failed *rotation* by degrading to an oversized file and retrying on the next over-cap
+write — "logging never stops". The *attach* is the one place in the file-log design that gives up
+permanently after a single try (`TeeLogger.file` is a `OnceLock`, `build_file_logger` is called
+once), so a transient lock costs the whole session's file log. **Deliberately not fixed here:** a
+retry addresses the transient causes, while this row is about the persistent ones (unwritable
+directory, missing `APPDATA`) presenting as silence — and a periodic filesystem probe sits awkwardly
+beside row 8, which questions this app's wake cadence in the first place. Recorded as the right
+follow-up if transient attach failures are ever actually observed.
+
+TDD: 5 tests red first, including the round trip losing the new state across the `wparam` hop
+(`file_log_failed: true` in, `false` out). The badge test passed on the stub — it asserts an
+exclusion, and the stub excluded by ignorance — so it was checked by injection: adding
+`|| warnings.file_log_failed` to `wants_warning_badge` fails it.
+
+**Still unverified:** the release-build behaviour on a genuinely unwritable `%APPDATA%`. The
+warning-line and badge logic are pure functions and tested; the `main.rs` wiring that feeds them is
+three lines in the binary and is covered only by the manual step added to architecture.md §14.
+
 **I5. A dead field carries a comment instructing future maintainers to maintain an invariant that
 does not exist.**
 `src/platform/windows/ddc_worker.rs:33`, `:51`, `:140`, `:178`, `:29-32`;
@@ -525,12 +568,13 @@ record the choice.
 
 ## Resolution plan
 
-**Progress: rows 1–5, 7 and 9 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
-(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`, `5c8a653`, `43bec28`) — fmt, clippy
-(`-D warnings`, `--all-targets`) and the full suite green at each commit; 212 tests now (+2 for the
-display-change path, +7 for VCP scaling, +5 for the unreadable-monitor path, +9 for the split DDC
-health state, −1 for a test that only exercised a deleted method; the DDC probe is ignored by
-default). Rows 6 and 8 are the last two Important ones open; every Critical is done.
+**Progress: every Critical and Important row except 8 resolved 2026-07-26** on branch
+`arch-review-fixes-2026-07-26` (`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`, `5c8a653`,
+`43bec28`, `311560d`) — fmt, clippy (`-D warnings`, `--all-targets`) and the full suite green at each
+commit; 216 tests now (+2 for the display-change path, +7 for VCP scaling, +5 for the
+unreadable-monitor path, +9 for the split DDC health state, +4 for the file-log warning, −1 for a
+test that only exercised a deleted method; the DDC probe is ignored by default). Row 8 (I8,
+main-loop cadence) is the last Important one open, plus the cosmetics.
 
 Four lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
 (see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
@@ -543,13 +587,14 @@ finding that frames its remedy as a binary: "fix the message or build abandon-an
 third option that needed neither, because the evidence the expensive one would have manufactured was
 already being delivered and discarded.
 
-**On this review's own accuracy so far:** every finding acted on has been real, but three of six
-carried a wrong, incomplete or too-narrow *direction* (rows 5, 7 and 9) and one under-sized the work.
-Two rows also turned up a defect adjacent to the one described — row 2 found the docs promising
+**On this review's own accuracy:** every finding acted on has been real, but three of seven carried a
+wrong, incomplete or too-narrow *direction* (rows 5, 7 and 9) and one under-sized the work. Three
+rows also turned up something adjacent to the defect described — row 2 found the docs promising
 behaviour that was only half-built, row 9 found that removing the useless recovery would strand a
-hung-then-dead worker. The findings have held up better than the remedies attached to them, and the
-code around a finding has been worth reading as carefully as the finding itself — worth weighting
-when reading the rows still open.
+hung-then-dead worker, row 6 found the attach to be the only part of the file log that gives up
+after one try while its neighbour retries forever. The findings have held up better than the
+remedies attached to them, and the code *around* a finding has been worth reading as carefully as the
+finding itself.
 
 Ordered tackle list. **Complexity**: XS ≈ minutes, one edit site · S ≈ an hour-ish, one module plus
 tests/docs · M ≈ multi-site change needing real design care. **Clarity**: Clear = mechanical,
@@ -569,7 +614,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 3  | I5    | Delete dead `handle_cache` + both fictional comments (`ddc_worker.rs:33`)| Important | XS | Clear        | ✅ resolved `a2a9896` |
 | 4  | I7    | Mark the DDC probe manual-only (`tests/ddc_test.rs`)                    | Important | XS | Clear        | ✅ resolved `fc9c65b` |
 | 5  | I3    | `WM_DISPLAYCHANGE` → `Refresh` in the power window (`controller.rs:129`) | Important | S  | Clear        | ✅ resolved `d194bd2` — direction was wrong; window had to become top-level |
-| 6  | I4    | Surface a failed file-log attach in release (`main.rs:552`)              | Important | S  | Mostly clear | Tray degraded-state channel vs. one-time message box |
+| 6  | I4    | Surface a failed file-log attach in release (`main.rs:552`)              | Important | S  | Mostly clear | ✅ resolved `311560d` — tray menu line + tooltip, deliberately no icon badge |
 | 7  | I6    | Demote the lib's incidental `pub` surface (`lib.rs`)                    | Important | S→M| Clear        | ✅ resolved `6acda0c` — sized S, was an M |
 | 8  | I8    | Adaptive main-loop cadence + document it (`main.rs:699`)                 | Important | XS | Mostly clear | Adaptive timeout vs. accept-and-document |
 | 9  | I2    | Hung-worker recovery: honest message or real abandon (`tray.rs:122`)     | Important | S–M| Needs decision | ✅ resolved `43bec28` — split the state, act on proof of life; abandon-and-respawn declined with reasons |
