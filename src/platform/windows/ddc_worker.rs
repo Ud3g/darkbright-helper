@@ -87,7 +87,7 @@ impl DdcWorker {
     /// Handles a `SetBrightness` command.
     fn handle_set_brightness(&mut self, monitor_id: &MonitorId, value: u8, seq: u64) {
         let result = if let Some(monitor) = self.monitors.get_mut(monitor_id) {
-            monitor.set_brightness(u32::from(value))
+            monitor.set_brightness(value)
         } else {
             log::warn!(monitor_id:% = monitor_id; "Monitor not found");
             Err(crate::BrightnessError::MonitorNotFound(
@@ -179,12 +179,13 @@ impl DdcWorker {
             // Read current brightness
             match ddc_mon.get_brightness() {
                 Ok(brightness) => {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let brightness_u8 = brightness as u8;
+                    // The monitor's declared range travels with the value: a
+                    // maximum other than 100 is the one condition that makes
+                    // every brightness number in a log suspect, and a field log
+                    // is the only place it can be observed.
+                    log::debug!(monitor_id:% = monitor_id.full_identity(), brightness = brightness, reported_max:? = ddc_mon.reported_max(); "Read monitor brightness");
 
-                    log::debug!(monitor_id:% = monitor_id.full_identity(), brightness = brightness_u8; "Read monitor brightness");
-
-                    results.push((monitor_id.clone(), brightness_u8));
+                    results.push((monitor_id.clone(), brightness));
                     self.monitors.insert(monitor_id.clone(), ddc_mon);
                 }
                 Err(e) => {

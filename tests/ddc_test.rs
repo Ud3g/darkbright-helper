@@ -9,8 +9,10 @@
 //! ```
 //!
 //! `--nocapture` is the point — the printed per-monitor breakdown (identity,
-//! physical handle count, current/maximum brightness) is what makes this
-//! useful for diagnosing "brightness does nothing on this monitor" reports.
+//! physical handle count, current/maximum brightness and the percentage it
+//! scales to) is what makes this useful for diagnosing "brightness does nothing
+//! on this monitor" reports. A reported maximum other than 100 is the single
+//! most useful thing this probe can tell you.
 //! The assertions only pin the two outcomes that would make the probe itself
 //! meaningless: no monitors enumerated at all, or not one of them answering a
 //! brightness read.
@@ -19,6 +21,7 @@
 #[test]
 #[ignore = "requires a real DDC/CI-capable display; run with --ignored --nocapture"]
 fn ddc_hardware_probe() -> darkbright_helper::Result<()> {
+    use darkbright_helper::core::brightness::percent_from_vcp;
     use darkbright_helper::platform::windows::ddc::{
         enumerate_monitors, get_monitor_id, get_physical_monitors, get_vcp_feature,
     };
@@ -60,7 +63,14 @@ fn ddc_hardware_probe() -> darkbright_helper::Result<()> {
                     // 4. Read Brightness (VCP 0x10)
                     match get_vcp_feature(pm, &format!("physical #{j}"), 0x10) {
                         Ok((current, max)) => {
-                            println!("    [Physical #{j}] Brightness: {current} (Max: {max})");
+                            // Both numbers, because they are the ones that
+                            // diverge: a maximum other than 100 means the raw
+                            // value is not the percentage, and this line is
+                            // where that shows up.
+                            let percent = percent_from_vcp(current, Some(max));
+                            println!(
+                                "    [Physical #{j}] Brightness: {current} of {max} → {percent}%"
+                            );
                             brightness_reads += 1;
                         }
                         Err(e) => {

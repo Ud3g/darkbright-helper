@@ -147,7 +147,15 @@ enum DdcCommand {
 The overlay is only used at 0% brightness. For all values > 0%, DDC/CI is used exclusively. This maximizes hardware control and minimizes GPU usage. Monitors with a high minimum brightness (e.g., DDC only goes down to 20%) will remain at that minimum level when set to 1-20%.
 
 **Mapping Algorithm: Linear**
-Logical brightness (0-100%) maps 1:1 to hardware values. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means exactly 50% backlight power.
+Logical brightness (0-100%) maps linearly onto whatever luminance range the monitor exposes. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means 50% of that range.
+
+**The DDC scale is per-monitor and must not be assumed to be 0-100.**
+VCP 0x10 is a *continuous* control: the value is 16-bit on the wire and MCCS does not require the maximum to be 100. `GetVCPFeatureAndVCPFeatureReply` returns the monitor's declared maximum alongside the current value; `DdcMonitor` records it on each successful read and converts in both directions via `core::brightness::percent_from_vcp` / `vcp_from_percent`. Percentages are therefore the only currency above the platform seam, and no raw value leaves `platform/windows/ddc.rs`.
+
+Consequences worth knowing:
+- Until a read succeeds the common 0-100 scale is assumed, which makes the conversion a pass-through — an unreadable monitor is no worse off than before scaling existed.
+- On a monitor whose range is narrower than 100 steps, distinct percentages necessarily collapse onto the same raw value. Both ends stay reachable; the resolution is the hardware's.
+- The declared maximum is logged with each refresh read at `debug`, because a maximum other than 100 is the one condition that makes every brightness number in a log suspect, and it is not otherwise observable.
 
 ### 2. Monitor Identification: EDID-Based
 

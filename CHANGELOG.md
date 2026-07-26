@@ -37,6 +37,13 @@ history lives in the git log.
 
 ### Fixed
 
+- Brightness was silently wrong on any monitor whose DDC luminance range is not
+  0-100. The maximum the monitor reports was read and discarded, so raw values
+  were treated as percentages: a monitor reporting 500 of 1000 (50%) displayed
+  as 100%, and setting "100%" on a 0-255 monitor asked for ≈39% backlight. Both
+  directions are now scaled by the reported maximum, which is also logged with
+  each refresh read at `debug`. Monitors reporting a maximum of 100 — the common
+  case, including the maintainer's — are unaffected.
 - With `intercept_brightness_keys` enabled, a failed low-level hook
   installation left the dedicated brightness keys silently dead; they now fall
   back to plain hotkey registration.
