@@ -1,6 +1,24 @@
+//! Manual DDC/CI hardware probe.
+//!
+//! Ignored by default: it needs a real display that answers DDC/CI, which a
+//! headless CI runner does not have. Run it deliberately, on the machine whose
+//! monitors are in question:
+//!
+//! ```text
+//! cargo test --test ddc_test -- --ignored --nocapture
+//! ```
+//!
+//! `--nocapture` is the point — the printed per-monitor breakdown (identity,
+//! physical handle count, current/maximum brightness) is what makes this
+//! useful for diagnosing "brightness does nothing on this monitor" reports.
+//! The assertions only pin the two outcomes that would make the probe itself
+//! meaningless: no monitors enumerated at all, or not one of them answering a
+//! brightness read.
+
 #[cfg(target_os = "windows")]
 #[test]
-fn test_ddc_communication() -> darkbright_helper::Result<()> {
+#[ignore = "requires a real DDC/CI-capable display; run with --ignored --nocapture"]
+fn ddc_hardware_probe() -> darkbright_helper::Result<()> {
     use darkbright_helper::platform::windows::ddc::{
         enumerate_monitors, get_monitor_id, get_physical_monitors, get_vcp_feature,
     };
@@ -8,11 +26,14 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
     // 1. Enumerate Monitors
     let monitors = enumerate_monitors()?;
     println!("Found {} logical monitors.", monitors.len());
+    assert!(
+        !monitors.is_empty(),
+        "no logical monitors enumerated — run this on a machine with a display attached"
+    );
 
-    if monitors.is_empty() {
-        println!("No monitors found. Skipping DDC tests.");
-        return Ok(());
-    }
+    // Tracks whether any monitor answered a brightness read, so the probe can
+    // distinguish "DDC works here" from "every monitor refused".
+    let mut brightness_reads = 0_usize;
 
     for (i, &hmonitor) in monitors.iter().enumerate() {
         println!("\n--- Logical Monitor #{i} ---");
@@ -40,6 +61,7 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
                     match get_vcp_feature(pm, &format!("physical #{j}"), 0x10) {
                         Ok((current, max)) => {
                             println!("    [Physical #{j}] Brightness: {current} (Max: {max})");
+                            brightness_reads += 1;
                         }
                         Err(e) => {
                             println!("    [Physical #{j}] Failed to read brightness: {e}");
@@ -52,6 +74,12 @@ fn test_ddc_communication() -> darkbright_helper::Result<()> {
             }
         }
     }
+
+    assert!(
+        brightness_reads > 0,
+        "no monitor answered a VCP 0x10 brightness read — DDC/CI is unavailable on this machine \
+         (check the monitor's DDC/CI setting, the cable, and any KVM in between)"
+    );
 
     Ok(())
 }
