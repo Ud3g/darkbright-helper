@@ -123,9 +123,11 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     config: Config,
     /// Cache mapping platform handles to monitor ids (avoids repeated EDID reads).
     ///
-    /// The DDC worker keeps its own independent handle→id cache (thread
-    /// ownership, no shared state), each side invalidating on refresh under
-    /// its own rules. Changes to handle→identity mapping must cover both.
+    /// The only handle→identity mapping in the app: resolving one costs a
+    /// display-device enumeration plus a registry EDID read, far too slow for
+    /// the hotkey path. Invalidated wholesale when a refresh begins (handles
+    /// may be recycled across topology changes) and per-entry when a monitor
+    /// is pruned.
     id_cache: HashMap<MonitorHandle, MonitorId>,
     /// Supervised DDC worker.
     ddc: Ddc,

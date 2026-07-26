@@ -16,21 +16,17 @@ use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
 };
 
-use super::hmonitor_to_isize;
-
 /// Worker thread that handles all DDC/CI communication.
 ///
 /// The worker owns all `DdcMonitor` instances and processes commands
 /// from the main thread, sending results back via the response channel.
 pub struct DdcWorker {
     /// DDC monitors indexed by their `MonitorId`.
-    monitors: HashMap<MonitorId, DdcMonitor>,
-    /// Maps `HMONITOR` handles to `MonitorId` for quick lookup.
     ///
-    /// The core controller keeps its own independent handle→id cache (thread
-    /// ownership, no shared state), each side invalidating on refresh under
-    /// its own rules. Changes to handle→identity mapping must cover both.
-    handle_cache: HashMap<isize, MonitorId>,
+    /// Commands address monitors by identity, never by platform handle, so the
+    /// worker needs no handle→id mapping of its own; resolving a cursor
+    /// position to an identity happens on the main thread.
+    monitors: HashMap<MonitorId, DdcMonitor>,
     /// Receiver for commands from the main thread.
     cmd_rx: Receiver<DdcCommand>,
     /// Sender for results back to the main thread.
@@ -48,7 +44,6 @@ impl DdcWorker {
     pub fn new(cmd_rx: Receiver<DdcCommand>, resp_tx: Sender<BrightnessMessage>) -> Self {
         Self {
             monitors: HashMap::new(),
-            handle_cache: HashMap::new(),
             cmd_rx,
             resp_tx,
         }
@@ -137,7 +132,6 @@ impl DdcWorker {
 
         // Clear existing state
         self.monitors.clear();
-        self.handle_cache.clear();
 
         let mut results: Vec<(MonitorId, u8)> = Vec::new();
         let mut enumerated: Vec<MonitorId> = Vec::new();
@@ -175,8 +169,6 @@ impl DdcWorker {
         // handle: a handle-open or brightness-read failure below must count
         // as unreadable, not as absent from the topology.
         enumerated.push(monitor_id.clone());
-        self.handle_cache
-            .insert(hmonitor_to_isize(hmonitor), monitor_id.clone());
 
         // Get physical monitors for DDC
         let physical_monitors = get_physical_monitors(hmonitor)?;
@@ -341,7 +333,6 @@ mod tests {
 
         // Worker should start with empty state
         assert!(worker.monitors.is_empty());
-        assert!(worker.handle_cache.is_empty());
 
         // Clean up
         drop(cmd_tx);
