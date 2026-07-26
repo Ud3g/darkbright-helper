@@ -506,6 +506,43 @@ design-ownership finding, not a measured regression. **Direction:** an adaptive 
 the OSD is visible, ~250 ms otherwise) is a few lines and changes nothing observable; either way,
 record the choice.
 
+**✅ RESOLVED** — 2026-07-26, commit `b09ff80`. **Open decision settled: accept and document, not
+adapt.** No behaviour change; `architecture.md` §"Main-Loop Cadence" now carries the reasoning and
+the number, and `main.rs` points at it from the `recv_timeout` site.
+
+*The magnitude is no longer unmeasured, and that is what decided it.* A release instance had been
+running 11.9 h: **0.72 s of CPU total — 0.0017 % of one core**, ~60 ms per hour, and that includes
+startup, EDID parsing, window creation and every DDC refresh in the window. Sampled over 30 s of
+idle the accumulated CPU time did not advance at all; ~0.27 µs per wake is below the scheduler's
+accounting granularity. The adaptive variant is real and would cut idle wakes 15×, but the saving it
+buys is **~1.2 s of CPU per day**, against a predicate that can silently rot — a window added to the
+main thread later has to be remembered in it, and forgetting produces a sluggish UI, which no test
+catches. Before the measurement the adaptive option looked like the obvious trade; the number
+inverted it.
+
+*Two corrections to the finding, in opposite directions.* "The 16 ms figure only matters while the
+OSD is visible" is wrong twice over. It **over-counts the overlay**, which needs no pumping at all —
+a layered `LWA_ALPHA` window with no `WM_PAINT` handler, composited by the DWM — and the overlay is
+precisely the long-lived one, so an adaptive predicate would have had to *exclude* it deliberately or
+keep the fast path running for hours through the app's headline feature. And it **misses the usage
+window** entirely: created on the main thread (`main.rs:126`), no message loop of its own, and the
+only main-thread window that takes input at all — the OSD and overlay are both `WS_EX_TRANSPARENT`.
+So the one surface that genuinely justifies a fast pump is the one the finding does not mention.
+
+*What the interval actually governs, which reframes the whole row.* Not input latency: any `send()`
+wakes `recv_timeout` immediately, so hotkeys, DDC results and the tray's menu-data request never wait
+it out, and the first OSD paint happens on the next loop top rather than after a timeout. It bounds
+only how late an *unsolicited* window message is noticed. Its bounds were already fixed by two
+existing decisions — `OSD_TIMEOUT_MIN = 100 ms` below (an auto-hide must not visibly overshoot) and
+Windows' 5 s hang-detection above — which leaves roughly 25 ms…1 s admissible. That the value sits at
+the responsive end of a legitimate range is a much smaller charge than "accreted rather than chosen".
+
+*The event-driven option was rejected with a sharper reason than expected.* `std::sync::mpsc` exposes
+no waitable handle, so `MsgWaitForMultipleObjects` needs a wake-post from all four sender threads,
+and a forgotten post delays a message silently. But the decisive point is that supervision still
+needs a ~250 ms timer, so a full transport rewrite lands at **the same wake rate as the ten-line
+adaptive variant**.
+
 ### Cosmetic / nice-to-have
 
 **Docs & changelog** _(DOC-1 … DOC-5)_
@@ -584,16 +621,16 @@ record the choice.
 
 ## Resolution plan
 
-**Progress: every Critical and Important row except 8 resolved 2026-07-26** on branch
+**Progress: every Critical and Important row resolved 2026-07-26** on branch
 `arch-review-fixes-2026-07-26` (`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`, `5c8a653`,
-`43bec28`, `311560d`) — fmt, clippy (`-D warnings`, `--all-targets`) and the full suite green at each
-commit; 216 tests now (+2 for the display-change path, +7 for VCP scaling, +5 for the
+`43bec28`, `311560d`, `b09ff80`) — fmt, clippy (`-D warnings`, `--all-targets`) and the full suite
+green at each commit; 216 tests now (+2 for the display-change path, +7 for VCP scaling, +5 for the
 unreadable-monitor path, +9 for the split DDC health state, +4 for the file-log warning, −1 for a
-test that only exercised a deleted method; the DDC probe is ignored by default). Row 8 (I8,
-main-loop cadence) is the last Important one open, plus the cosmetics — of which row 16 is also done
-(`df1992b`).
+test that only exercised a deleted method; the DDC probe is ignored by default). Row 8 alone landed
+as documentation with no code change, on a measurement. Only the cosmetics remain — of which row 16
+is also done (`df1992b`).
 
-Four lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
+Five lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
 (see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
 an injected rounding regression rather than trusted (see C1) — a test that has never failed is not
 yet evidence of anything; row 9's bit round trip was checked the same way for the same reason. Row 7
@@ -602,10 +639,13 @@ was sized S when it is an M, because the finding named the symptom (`pub mod` su
 methods reachable, so module-level demotion alone changes nothing). And row 9 shows the cost of a
 finding that frames its remedy as a binary: "fix the message or build abandon-and-respawn" hid a
 third option that needed neither, because the evidence the expensive one would have manufactured was
-already being delivered and discarded.
+already being delivered and discarded. And row 8 is the one row where **measuring first changed the
+answer**: ten lines for a 15× cut in idle wakes reads as an obvious trade until the thing being cut
+turns out to be 0.0017 % of a core. A finding that says its own magnitude is unmeasured should be
+measured before it is implemented, not after.
 
-**On this review's own accuracy:** every finding acted on has been real, but three of seven carried a
-wrong, incomplete or too-narrow *direction* (rows 5, 7 and 9) and one under-sized the work. Three
+**On this review's own accuracy:** every finding acted on has been real, but four of eight carried a
+wrong, incomplete or too-narrow *direction* (rows 5, 7, 8 and 9) and one under-sized the work. Three
 rows also turned up something adjacent to the defect described — row 2 found the docs promising
 behaviour that was only half-built, row 9 found that removing the useless recovery would strand a
 hung-then-dead worker, row 6 found the attach to be the only part of the file log that gives up
@@ -633,7 +673,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 5  | I3    | `WM_DISPLAYCHANGE` → `Refresh` in the power window (`controller.rs:129`) | Important | S  | Clear        | ✅ resolved `d194bd2` — direction was wrong; window had to become top-level |
 | 6  | I4    | Surface a failed file-log attach in release (`main.rs:552`)              | Important | S  | Mostly clear | ✅ resolved `311560d` — tray menu line + tooltip, deliberately no icon badge |
 | 7  | I6    | Demote the lib's incidental `pub` surface (`lib.rs`)                    | Important | S→M| Clear        | ✅ resolved `6acda0c` — sized S, was an M |
-| 8  | I8    | Adaptive main-loop cadence + document it (`main.rs:699`)                 | Important | XS | Mostly clear | Adaptive timeout vs. accept-and-document |
+| 8  | I8    | Adaptive main-loop cadence + document it (`main.rs:699`)                 | Important | XS | Mostly clear | ✅ resolved `b09ff80` — measured at 0.0017 % of a core, so accept-and-document; adaptive declined |
 | 9  | I2    | Hung-worker recovery: honest message or real abandon (`tray.rs:122`)     | Important | S–M| Needs decision | ✅ resolved `43bec28` — split the state, act on proof of life; abandon-and-respawn declined with reasons |
 | 10 | DEP-3 | Drop the dead `Win32_UI_Controls` feature                               | Cosmetic  | XS | Clear        | — |
 | 11 | DOC-1 | CHANGELOG: add the hotkey-startup-wait fix                              | Cosmetic  | XS | Clear        | — |
@@ -680,7 +720,12 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 - **I3's premise** that Windows actually recycles `HMONITOR` values on the dock/undock transitions
   this app sees. The hazard follows from the API contract; the decisive check is a manual
   dock/undock with `refresh.periodic_seconds = 0`.
-- **I8's magnitude** — no profiling of idle CPU or energy impact was done.
+- ~~**I8's magnitude** — no profiling of idle CPU or energy impact was done.~~ _Answered 2026-07-26:
+  a release instance at 11.9 h uptime had used 0.72 s of CPU, i.e. **0.0017 % of one core**, with no
+  measurable advance over a 30 s idle sample. That number decided row 8. The **energy** half stands
+  open — CPU time does not capture the cost of denying the core deeper idle states, and no battery
+  profiling was done; it is bounded by the wake count and unremarkable beside any GUI process on the
+  same machine, but it is an argument, not a measurement._
 - **`winres`/`winresource` upstream status and dates** (DEP-2) — asserted from recollection, no
   network check.
 - **Live RustSec advisory state** — `cargo audit` is not installed locally; CI's weekly job is the
