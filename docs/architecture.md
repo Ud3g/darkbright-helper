@@ -553,6 +553,7 @@ The application maintains cached brightness values for instant OSD response. The
 | **Periodic** | 60s | `refresh.periodic_seconds` | Catches gradual drift from external changes |
 | **Inactivity** | 30s | `refresh.inactivity_seconds` | Resyncs before first adjustment after idle period |
 | **System Resume** | Always | (not configurable) | Monitors may reset brightness after sleep/hibernate |
+| **Display Change** | Always | (not configurable) | Topology changed: monitors added/removed, and handles may be reused for a different display |
 
 **Behavior:**
 
@@ -560,7 +561,11 @@ The application maintains cached brightness values for instant OSD response. The
 
 2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
 
-3. **System Resume**: Power event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` (`WM_POWERBROADCAST`, handled in the window procedure — it is a sent message, never queued). The listener's message-only window must be explicitly subscribed via `RegisterSuspendResumeNotification`, since message-only windows are excluded from message broadcasts. Triggers immediate refresh since monitors often reset to default brightness after sleep.
+3. **System Resume**: The system event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` (`WM_POWERBROADCAST`, handled in the window procedure — it is a sent message, never queued). The window is explicitly subscribed via `RegisterSuspendResumeNotification`, the documented delivery guarantee for this message. Triggers immediate refresh since monitors often reset to default brightness after sleep.
+
+4. **Display Change**: The same listener handles `WM_DISPLAYCHANGE` and sends a plain `Refresh`. This is the only trigger that cannot be disabled or delayed by configuration, and it is the one that keeps handle→identity mapping honest: Windows may reuse a monitor handle for a different display across a topology change, so a stale `id_cache` entry could otherwise send an adjustment to the wrong monitor. Absence evidence is deliberately *not* reset — a monitor genuinely unplugged here should still age out and be pruned.
+
+   The listener's window is therefore a hidden **top-level** window, not a message-only one: message-only windows are excluded from broadcast messages, and `WM_DISPLAYCHANGE` is broadcast. (This is the same trap that once cost this module its resume detection; a unit test now pins the window's parent to the desktop so the property cannot silently regress.)
 
 **Overlap Protection:**
 

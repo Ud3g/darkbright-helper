@@ -14,6 +14,11 @@ history lives in the git log.
   built by a tag-triggered workflow; `RELEASING.md` documents the procedure.
 - Unknown config keys (typos, misplaced settings) are now warned about at
   load with their full path instead of being silently ignored.
+- A display change (monitor plugged, unplugged, or resolution switched) now
+  triggers an immediate refresh. Previously the new topology was picked up
+  only by the periodic refresh — up to a minute later, or never if that
+  refresh was disabled — during which an adjustment could land on the wrong
+  monitor, because Windows may reuse a monitor handle for a different display.
 
 ### Changed
 
