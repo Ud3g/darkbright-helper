@@ -112,6 +112,19 @@ impl RespawnGate {
     pub fn record_spawn_failure(&mut self) {
         self.gave_up = true;
     }
+
+    /// Reopens the gate: forgets the recorded deaths *and* releases the latch.
+    ///
+    /// For callers that have an external recovery trigger — the DDC worker is
+    /// retried on a brightness keypress and on system resume. Clearing only the
+    /// history would leave the latch set and every later death would answer
+    /// [`RespawnDecision::AlreadyGaveUp`], so the trigger would do nothing. The
+    /// hotkey thread has no such trigger and never calls this: once its
+    /// restarts are exhausted the app says so and means it.
+    pub fn reset(&mut self) {
+        self.recent.clear();
+        self.gave_up = false;
+    }
 }
 
 /// Result of a supervisor respawn attempt.
@@ -311,6 +324,34 @@ mod tests {
         assert_eq!(
             gate.on_death(base + Duration::from_secs(1)),
             RespawnDecision::AlreadyGaveUp
+        );
+    }
+
+    #[test]
+    fn respawn_gate_reset_clears_the_latch_as_well_as_the_history() {
+        let base = Instant::now();
+        let mut gate = RespawnGate::new(Duration::from_secs(60), 3);
+
+        for i in 0..3 {
+            assert_eq!(
+                gate.on_death(base + Duration::from_secs(i)),
+                RespawnDecision::Attempt
+            );
+        }
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(3)),
+            RespawnDecision::GaveUpNow
+        );
+
+        gate.reset();
+
+        // Clearing only the history would leave the latch set, and every later
+        // death would answer AlreadyGaveUp — a caller with an external recovery
+        // trigger would have no way back.
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(3)),
+            RespawnDecision::Attempt,
+            "a reset gate starts over at the same instant"
         );
     }
 

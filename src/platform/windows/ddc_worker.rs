@@ -10,7 +10,9 @@ use std::time::Instant;
 
 use windows::Win32::Graphics::Gdi::HMONITOR;
 
-use crate::core::reconcile::{RESPAWN_MAX, RESPAWN_WINDOW, RespawnOutcome, respawn_allowed};
+use crate::core::reconcile::{
+    RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate, RespawnOutcome,
+};
 use crate::core::state::{BrightnessMessage, DdcCommand, MonitorId};
 use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
@@ -225,12 +227,18 @@ impl DdcWorker {
 ///
 /// The supervisor holds the command-channel sender, the worker's join handle,
 /// and a persistent response-channel sender used to wire each new worker.
-/// Respawns are rate-limited by a sliding window (see [`respawn_allowed`]).
+///
+/// The restart *policy* is not implemented here: it is [`RespawnGate`], the
+/// same crash-loop backoff the hotkey thread uses, so there is one place to
+/// change how often a supervised thread may be restarted. This type decides
+/// only what a decision means for a worker — spawn a replacement, or report
+/// that none was spawned — and translates it into [`RespawnOutcome`], which is
+/// what the controller actually needs to know.
 pub struct DdcSupervisor {
     cmd_tx: Sender<DdcCommand>,
     handle: JoinHandle<()>,
     resp_tx: Sender<BrightnessMessage>,
-    recent_respawns: Vec<Instant>,
+    gate: RespawnGate,
 }
 
 impl DdcSupervisor {
@@ -245,7 +253,7 @@ impl DdcSupervisor {
             cmd_tx,
             handle,
             resp_tx,
-            recent_respawns: Vec::new(),
+            gate: RespawnGate::new(RESPAWN_WINDOW, RESPAWN_MAX),
         }
     }
 
@@ -275,23 +283,22 @@ impl DdcSupervisor {
 
     /// Attempts to respawn a dead worker, honouring the backoff window.
     pub(crate) fn respawn(&mut self, now: Instant) -> RespawnOutcome {
-        self.recent_respawns
-            .retain(|&t| now.saturating_duration_since(t) < RESPAWN_WINDOW);
-
-        if !respawn_allowed(&self.recent_respawns, now, RESPAWN_WINDOW, RESPAWN_MAX) {
-            return RespawnOutcome::BackoffExceeded;
+        match self.gate.on_death(now) {
+            RespawnDecision::Attempt => {
+                let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
+                self.cmd_tx = cmd_tx;
+                self.handle = handle;
+                RespawnOutcome::Respawned
+            }
+            RespawnDecision::GaveUpNow | RespawnDecision::AlreadyGaveUp => {
+                RespawnOutcome::BackoffExceeded
+            }
         }
-
-        let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
-        self.cmd_tx = cmd_tx;
-        self.handle = handle;
-        self.recent_respawns.push(now);
-        RespawnOutcome::Respawned
     }
 
     /// Clears the respawn history so recovery can retry immediately.
     pub(crate) fn clear_backoff(&mut self) {
-        self.recent_respawns.clear();
+        self.gate.reset();
     }
 
     /// Asks the worker to shut down (best-effort; does not join).
@@ -322,6 +329,117 @@ impl crate::core::controller::DdcPort for DdcSupervisor {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Spawns a supervisor whose results nobody reads.
+    ///
+    /// The receiver is returned rather than dropped: dropping it would make
+    /// every `resp_tx.send` fail, which is a different scenario than the
+    /// backoff tests intend to exercise.
+    fn supervisor() -> (DdcSupervisor, mpsc::Receiver<BrightnessMessage>) {
+        let (resp_tx, resp_rx) = mpsc::channel();
+        (DdcSupervisor::spawn(resp_tx), resp_rx)
+    }
+
+    #[test]
+    fn respawn_is_rate_limited_to_the_budget_within_the_window() {
+        let (mut sup, _resp_rx) = supervisor();
+        let base = Instant::now();
+        let budget = u64::try_from(RESPAWN_MAX).expect("respawn budget fits in u64");
+
+        // Deaths one second apart: all inside the sliding window.
+        for secs in 0..budget {
+            assert_eq!(
+                sup.respawn(base + Duration::from_secs(secs)),
+                RespawnOutcome::Respawned,
+                "respawn {secs} is within budget"
+            );
+        }
+        assert_eq!(
+            sup.respawn(base + Duration::from_secs(budget)),
+            RespawnOutcome::BackoffExceeded,
+            "one past the budget is a crash loop, not a restart"
+        );
+    }
+
+    #[test]
+    fn clear_backoff_reopens_an_exhausted_gate() {
+        // The whole recovery path depends on this. Once the backoff is
+        // exhausted the controller stops calling respawn at all, and the only
+        // way back is a keypress or a system resume clearing it. A policy that
+        // latched permanently would leave the app with no worker — and no way
+        // to get one — for the rest of the session.
+        let (mut sup, _resp_rx) = supervisor();
+        let base = Instant::now();
+        let budget = u64::try_from(RESPAWN_MAX).expect("respawn budget fits in u64");
+
+        for secs in 0..budget {
+            let _ = sup.respawn(base + Duration::from_secs(secs));
+        }
+        assert_eq!(
+            sup.respawn(base + Duration::from_secs(budget)),
+            RespawnOutcome::BackoffExceeded
+        );
+
+        sup.clear_backoff();
+
+        assert_eq!(
+            sup.respawn(base + Duration::from_secs(budget)),
+            RespawnOutcome::Respawned,
+            "clearing the backoff must reopen the gate at the same instant"
+        );
+    }
+
+    #[test]
+    fn deaths_spaced_beyond_the_window_never_exhaust_the_budget() {
+        // A worker that dies once a day is not a crash loop. Only deaths
+        // clustered inside the window count, so the history has to age out.
+        let (mut sup, _resp_rx) = supervisor();
+        let base = Instant::now();
+
+        for i in 1..=6 {
+            assert_eq!(
+                sup.respawn(base + RESPAWN_WINDOW * 2 * i),
+                RespawnOutcome::Respawned,
+                "isolated death {i} must still be recoverable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_respawned_worker_answers_on_the_result_channel() {
+        let (mut sup, resp_rx) = supervisor();
+
+        assert_eq!(sup.respawn(Instant::now()), RespawnOutcome::Respawned);
+        assert!(sup.is_alive(), "the replacement worker is running");
+
+        // A set for a monitor that does not exist needs no hardware: the worker
+        // resolves it to MonitorNotFound and answers. That answer is the proof
+        // the replacement is draining the *new* command channel and still holds
+        // a live clone of the result sender — the wiring between respawn and
+        // the main thread, which a canned RespawnOutcome cannot exercise.
+        let id = MonitorId::new("TST", "PROBE", None);
+        sup.send(DdcCommand::SetBrightness {
+            monitor_id: id.clone(),
+            value: 42,
+            seq: 7,
+        })
+        .expect("the command channel points at the replacement worker");
+
+        match resp_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(BrightnessMessage::DdcSetResult {
+                monitor_id,
+                seq,
+                success,
+                ..
+            }) => {
+                assert_eq!(monitor_id, id);
+                assert_eq!(seq, 7, "the sequence number survives the round trip");
+                assert!(!success, "no such monitor exists");
+            }
+            other => panic!("expected a set result from the respawned worker, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_ddc_worker_creation() {

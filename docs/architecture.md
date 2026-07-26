@@ -901,14 +901,27 @@ reconciles to the correct final value.
 | `RESPAWN_MAX` / `RESPAWN_WINDOW` | 3 / 60 s | Respawn backoff before disabling DDC |
 | `HUNG_TIMEOUT_LIMIT` | 3 | Consecutive set timeouts before diagnosing a hang |
 
+**One restart policy, two supervised threads.** `RespawnGate`
+(`core/reconcile.rs`) holds the whole rule — deaths spaced apart restart
+indefinitely, a rapid crash loop within `RESPAWN_WINDOW` latches into a
+give-up state — and both the DDC worker and the hotkey thread run on that one
+instance of it. What differs is not the policy but the way back out:
+
+- The **DDC worker** has external recovery triggers, so `DdcSupervisor` calls
+  `RespawnGate::reset()` when one fires (a brightness keypress or a system
+  resume) and the gate reopens. The supervisor itself only translates a
+  decision into an action — spawn a replacement, or report that none was
+  spawned — because `RespawnOutcome` is what the controller needs to know.
+- The **hotkey thread** has no such trigger and never resets: once its restarts
+  are exhausted the tray says "restart the app" and means it. A failed restart
+  *attempt* latches immediately (`record_spawn_failure`) — a second attempt
+  would fail the same way.
+
 **Hotkey thread liveness.** The hotkey thread — the app's primary input — gets
 the same treatment: its message loop logs both exit paths (`WM_QUIT` and a
 `GetMessageW` error), and the main loop polls its `JoinHandle::is_finished()`.
-A dead hotkey thread is restarted (fresh message window, hotkeys re-registered)
-under a `RespawnGate` with the same `RESPAWN_MAX`/`RESPAWN_WINDOW` backoff:
-deaths spaced apart restart indefinitely, a rapid crash loop (or a failed
-restart attempt) latches into a logged give-up state until the app is
-restarted. The tray and power threads remain unsupervised by design — both are
+A dead hotkey thread is restarted with a fresh message window and hotkeys
+re-registered. The tray and power threads remain unsupervised by design — both are
 non-fatal conveniences. One release-build consequence is worth knowing: with
 the console hidden there is no Ctrl+C, so the tray menu's Quit is the only
 *graceful* shutdown path — if the tray thread dies, ending the process takes
