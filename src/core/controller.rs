@@ -804,8 +804,6 @@ where
 
         TrayMenuData {
             monitors,
-            hotkey_up: self.config.hotkeys.brightness_up.clone(),
-            hotkey_down: self.config.hotkeys.brightness_down.clone(),
             warnings: self.health_warnings(),
         }
     }
@@ -1727,7 +1725,6 @@ mod tests {
         assert_eq!(data.monitors[0].display_name, "DEL U2722D");
         assert_eq!(data.monitors[0].hardware_brightness, 55);
         assert_eq!(data.monitors[0].overlay_opacity, 20);
-        assert_eq!(data.hotkey_up, c.config.hotkeys.brightness_up);
     }
 
     #[test]

@@ -22,6 +22,16 @@ history lives in the git log.
 
 ### Changed
 
+- Narrowed the library's public surface to what the binary and integration tests
+  actually name (116 items, down from 259). The lib exists only so `core/` is
+  host-testable and three integration tests can reach the platform layer, but
+  everything `pub` in a `pub mod` counts as externally reachable — so rustc had
+  been reporting no unused items anywhere in the crate. Restoring that check
+  found ~15 dead items, now deleted: a retired OSD error-state method, a
+  redundant tray sender and its accessors, `DdcMonitor`'s unread cache, an
+  unused hotkey unregistration path, `SafeHwnd`'s borrowed variant (leaving it
+  owning-by-construction), a superseded `Config::load`, and an unconstructed
+  error variant. No behaviour change; net 158 lines removed.
 - Upgraded the `windows` crate from 0.52 to 0.62. No intended behavior change;
   debug-log output now shows window/monitor handles as pointers instead of
   integers.

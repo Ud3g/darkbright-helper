@@ -13,24 +13,24 @@ use crate::error::{BrightnessError, Result};
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Current configuration file version.
-pub const CONFIG_VERSION: u32 = 1;
+pub(crate) const CONFIG_VERSION: u32 = 1;
 
 /// Default hotkey for brightness up.
 pub const DEFAULT_HOTKEY_UP: &str = "Ctrl+Shift+Up";
 /// Default hotkey for brightness down.
 pub const DEFAULT_HOTKEY_DOWN: &str = "Ctrl+Shift+Down";
 /// Default OSD timeout in milliseconds.
-pub const DEFAULT_OSD_TIMEOUT_MS: u32 = 1000;
+pub(crate) const DEFAULT_OSD_TIMEOUT_MS: u32 = 1000;
 /// Default OSD opacity (0.0-1.0).
-pub const DEFAULT_OSD_OPACITY: f32 = 1.0;
+pub(crate) const DEFAULT_OSD_OPACITY: f32 = 1.0;
 /// Default brightness step percentage.
-pub const DEFAULT_STEP_PERCENT: u8 = 5;
+pub(crate) const DEFAULT_STEP_PERCENT: u8 = 5;
 /// Default periodic refresh interval in seconds (0 = disabled).
-pub const DEFAULT_REFRESH_PERIODIC_SECONDS: u32 = 60;
+pub(crate) const DEFAULT_REFRESH_PERIODIC_SECONDS: u32 = 60;
 /// Default inactivity threshold in seconds before refresh (0 = disabled).
-pub const DEFAULT_REFRESH_INACTIVITY_SECONDS: u32 = 30;
+pub(crate) const DEFAULT_REFRESH_INACTIVITY_SECONDS: u32 = 30;
 /// Default level filter for the rolling log file.
-pub const DEFAULT_FILE_LOG_LEVEL: &str = "info";
+pub(crate) const DEFAULT_FILE_LOG_LEVEL: &str = "info";
 
 // Validation ranges
 const OSD_TIMEOUT_MIN: u32 = 100;
@@ -53,13 +53,13 @@ pub struct Config {
     /// mismatch is logged as a warning, the fields are interpreted as the
     /// current schema, and the value is reset to [`CONFIG_VERSION`].
     #[serde(default = "default_version")]
-    pub version: u32,
+    pub(crate) version: u32,
     /// Hotkey bindings.
     #[serde(default)]
     pub hotkeys: HotkeyConfig,
     /// Per-monitor settings (reserved for future use).
     #[serde(default)]
-    pub monitors: HashMap<String, MonitorConfig>,
+    pub(crate) monitors: HashMap<String, MonitorConfig>,
     /// OSD appearance settings.
     #[serde(default)]
     pub osd: OsdConfig,
@@ -68,7 +68,7 @@ pub struct Config {
     pub brightness: BrightnessConfig,
     /// Refresh/resync settings.
     #[serde(default)]
-    pub refresh: RefreshConfig,
+    pub(crate) refresh: RefreshConfig,
     /// File-logging settings.
     #[serde(default)]
     pub logging: LoggingConfig,
@@ -97,13 +97,13 @@ pub struct HotkeyConfig {
 
 /// Per-monitor configuration (reserved for future use).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MonitorConfig {
+pub(crate) struct MonitorConfig {
     /// Minimum brightness limit for this monitor.
-    pub min_brightness: Option<u8>,
+    pub(crate) min_brightness: Option<u8>,
     /// Maximum brightness limit for this monitor.
-    pub max_brightness: Option<u8>,
+    pub(crate) max_brightness: Option<u8>,
     /// Disable DDC for this monitor.
-    pub ddc_disabled: Option<bool>,
+    pub(crate) ddc_disabled: Option<bool>,
 }
 
 /// OSD appearance configuration.
@@ -148,16 +148,16 @@ pub struct LoggingConfig {
 /// Controls how the application stays in sync with external brightness changes
 /// (e.g., physical monitor buttons, other apps).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefreshConfig {
+pub(crate) struct RefreshConfig {
     /// Interval in seconds for periodic background refresh (0 = disabled).
     /// Range: 0-3600 (1 hour max).
     #[serde(default = "default_refresh_periodic")]
-    pub periodic_seconds: u32,
+    pub(crate) periodic_seconds: u32,
     /// Inactivity threshold in seconds before triggering a refresh on next adjustment.
     /// When the user adjusts brightness after being inactive for this duration,
     /// a refresh is triggered first. (0 = disabled). Range: 0-600 (10 min max).
     #[serde(default = "default_refresh_inactivity")]
-    pub inactivity_seconds: u32,
+    pub(crate) inactivity_seconds: u32,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -316,18 +316,6 @@ impl Config {
         Self::default_dir().map(|dir| dir.join("config.json"))
     }
 
-    /// Loads configuration from the default path, or returns defaults if not found.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the file exists but cannot be read or parsed.
-    pub fn load() -> Result<Self> {
-        match Self::default_path() {
-            Some(path) if path.exists() => Self::load_from(&path),
-            _ => Ok(Self::default()),
-        }
-    }
-
     /// Collects dotted paths of keys present in `file` but absent from
     /// `schema`, recursing into nested objects. `schema` is the parsed
     /// config's own serialization, so it contains exactly the known keys —
@@ -375,7 +363,7 @@ impl Config {
     ///
     /// Returns `ConfigRead` if the file cannot be read, or `ConfigParse` if
     /// the JSON is invalid.
-    pub fn load_from(path: &std::path::Path) -> Result<Self> {
+    pub(crate) fn load_from(path: &std::path::Path) -> Result<Self> {
         let path_str = log_safe_file_name(path);
 
         let contents = std::fs::read_to_string(path)

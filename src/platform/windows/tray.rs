@@ -820,8 +820,6 @@ fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
 pub struct TrayIcon {
     /// Message-only window that receives tray notifications.
     hwnd: SafeHwnd,
-    /// Channel sender to communicate with the main thread.
-    sender: Sender<BrightnessMessage>,
     /// Handle to the loaded icon resource.
     /// Kept alive to prevent Windows from releasing the icon while the tray is active.
     #[allow(dead_code)]
@@ -875,7 +873,7 @@ impl TrayIcon {
         log::debug!("Tray message window created");
 
         // Store sender in thread-local storage for window procedure access
-        set_tray_sender(sender.clone());
+        set_tray_sender(sender);
 
         // Load the application icon
         let icon_handle = load_tray_icon()?;
@@ -901,7 +899,6 @@ impl TrayIcon {
 
         Ok(Self {
             hwnd: unsafe { SafeHwnd::new_owned(hwnd) },
-            sender,
             icon_handle,
         })
     }
@@ -943,18 +940,6 @@ impl TrayIcon {
         }
 
         Ok(())
-    }
-
-    /// Returns the window handle for the tray message window.
-    #[must_use]
-    pub fn hwnd(&self) -> HWND {
-        self.hwnd.as_raw()
-    }
-
-    /// Returns a clone of the message sender.
-    #[must_use]
-    pub fn sender(&self) -> Sender<BrightnessMessage> {
-        self.sender.clone()
     }
 
     /// Returns a cross-thread handle for posting status updates.

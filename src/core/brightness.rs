@@ -8,10 +8,8 @@
 //! a *percentage* throughout this crate — the one place raw hardware values
 //! exist is inside the Windows DDC module, which converts at its boundary.
 
-/// Minimum hardware brightness value.
-pub const BRIGHTNESS_MIN: u8 = 0;
 /// Maximum hardware brightness value.
-pub const BRIGHTNESS_MAX: u8 = 100;
+pub(crate) const BRIGHTNESS_MAX: u8 = 100;
 
 /// Result of a brightness adjustment calculation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,7 +23,7 @@ pub struct BrightnessAdjustment {
 impl BrightnessAdjustment {
     /// Creates a new brightness adjustment result.
     #[must_use]
-    pub const fn new(hardware_brightness: u8, overlay_opacity: u8) -> Self {
+    pub(crate) const fn new(hardware_brightness: u8, overlay_opacity: u8) -> Self {
         Self {
             hardware_brightness,
             overlay_opacity,
@@ -134,7 +132,7 @@ fn calculate_increase(
 ///
 /// Also the most common real value, which makes the assumption a pass-through
 /// rather than a guess with consequences.
-pub const VCP_ASSUMED_MAX: u32 = 100;
+pub(crate) const VCP_ASSUMED_MAX: u32 = 100;
 
 /// Resolves the scale to divide by: the monitor's own maximum when it reported
 /// a usable one, otherwise the assumed scale.
@@ -179,7 +177,7 @@ pub fn percent_from_vcp(raw: u32, reported_max: Option<u32>) -> u8 {
 /// necessarily collapse onto the same raw value — both ends of the range stay
 /// reachable, but the resolution is the hardware's, not ours.
 #[must_use]
-pub fn vcp_from_percent(percent: u8, reported_max: Option<u32>) -> u32 {
+pub(crate) fn vcp_from_percent(percent: u8, reported_max: Option<u32>) -> u32 {
     let scale = vcp_scale(reported_max);
     let percent = u64::from(percent.min(BRIGHTNESS_MAX));
 

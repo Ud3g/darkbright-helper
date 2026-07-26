@@ -29,7 +29,7 @@ pub struct MonitorId {
 impl MonitorId {
     /// Creates a new monitor identifier.
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         manufacturer: impl Into<String>,
         model_name: impl Into<String>,
         serial_number: Option<String>,
@@ -48,7 +48,7 @@ impl MonitorId {
     /// For all other purposes use `Display`/[`Self::base_display_name`],
     /// which are serial-free.
     #[must_use]
-    pub fn full_identity(&self) -> String {
+    pub(crate) fn full_identity(&self) -> String {
         match &self.serial_number {
             Some(sn) => format!("{} (SN:{})", self.base_display_name(), sn),
             None => self.base_display_name(),
@@ -66,7 +66,7 @@ impl MonitorId {
     /// Use [`generate_display_names`] to get unique names with index suffixes
     /// when multiple monitors share the same base name.
     #[must_use]
-    pub fn base_display_name(&self) -> String {
+    pub(crate) fn base_display_name(&self) -> String {
         // Check if model_name already starts with manufacturer prefix (case-insensitive)
         // to avoid duplication like "PHL PHL 346B1C" when EDID contains redundant info
         let prefix = format!("{} ", self.manufacturer);
@@ -163,7 +163,7 @@ mod monitor_id_tests {
 /// - Single unique monitor: `"Dell U2722D"`
 /// - Two identical monitors: `"Dell U2722D #1"`, `"Dell U2722D #2"`
 #[must_use]
-pub fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, String> {
+pub(crate) fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, String> {
     // Count occurrences of each base name
     let mut base_name_counts: HashMap<String, usize> = HashMap::new();
     for id in ids {
@@ -199,18 +199,18 @@ pub fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, String> {
 
 /// An optimistic brightness set awaiting its DDC result.
 #[derive(Debug, Clone, Copy)]
-pub struct PendingSet {
+pub(crate) struct PendingSet {
     /// Target brightness value (0-100).
-    pub value: u8,
+    pub(crate) value: u8,
     /// Sequence id correlating this set to its DDC result.
-    pub seq: u64,
+    pub(crate) seq: u64,
     /// When the command was enqueued to the worker.
-    pub sent_at: Instant,
+    pub(crate) sent_at: Instant,
 }
 
 /// Outcome of reconciling a DDC set result against the pending set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetOutcome {
+pub(crate) enum SetOutcome {
     /// Matched the pending set and committed the new value.
     Confirmed,
     /// Matched the pending set and reverted after a hardware failure.
@@ -225,23 +225,23 @@ pub enum SetOutcome {
 #[derive(Debug)]
 pub struct MonitorState {
     /// Last confirmed DDC brightness value (0-100).
-    pub cached_brightness: u8,
+    pub(crate) cached_brightness: u8,
     /// Optimistic brightness set awaiting DDC confirmation.
-    pub pending: Option<PendingSet>,
+    pub(crate) pending: Option<PendingSet>,
     /// Current overlay opacity (0-100, where 0 = invisible).
-    pub overlay_opacity: u8,
+    pub(crate) overlay_opacity: u8,
     /// First observation of this monitor's current run of enumeration absence.
     ///
     /// `None` while the monitor is present (or absence was never observed).
     /// Stamped by the controller on the first current-generation refresh that
     /// does not enumerate the monitor; a later miss ≥ the prune window prunes.
-    pub missing_since: Option<Instant>,
+    pub(crate) missing_since: Option<Instant>,
 }
 
 impl MonitorState {
     /// Creates a new monitor state with the given initial brightness.
     #[must_use]
-    pub fn new(initial_brightness: u8) -> Self {
+    pub(crate) fn new(initial_brightness: u8) -> Self {
         Self {
             cached_brightness: initial_brightness.min(100),
             pending: None,
@@ -254,12 +254,12 @@ impl MonitorState {
     ///
     /// Uses the pending value if a set is in flight, otherwise the cached value.
     #[must_use]
-    pub fn effective_brightness(&self) -> u8 {
+    pub(crate) fn effective_brightness(&self) -> u8 {
         self.pending.map_or(self.cached_brightness, |p| p.value)
     }
 
     /// Records a new optimistic brightness set (awaiting DDC confirmation).
-    pub fn set_pending(&mut self, value: u8, seq: u64, now: Instant) {
+    pub(crate) fn set_pending(&mut self, value: u8, seq: u64, now: Instant) {
         self.pending = Some(PendingSet {
             value: value.min(100),
             seq,
@@ -274,7 +274,7 @@ impl MonitorState {
     /// ignored (a newer set is in flight). A success arriving when nothing is
     /// pending — e.g. after the watchdog already reverted — is authoritative:
     /// the hardware did change, so the cached value is updated as ground truth.
-    pub fn apply_set_result(&mut self, seq: u64, value: u8, success: bool) -> SetOutcome {
+    pub(crate) fn apply_set_result(&mut self, seq: u64, value: u8, success: bool) -> SetOutcome {
         match self.pending {
             Some(pending) if pending.seq == seq => {
                 if success {
@@ -304,13 +304,13 @@ impl MonitorState {
     }
 
     /// Unconditionally clears any pending set (used by the state watchdog).
-    pub fn force_revert(&mut self) {
+    pub(crate) fn force_revert(&mut self) {
         self.pending = None;
     }
 
     /// Whether a pending set has been outstanding for at least `timeout`.
     #[must_use]
-    pub fn pending_timed_out(&self, now: Instant, timeout: Duration) -> bool {
+    pub(crate) fn pending_timed_out(&self, now: Instant, timeout: Duration) -> bool {
         self.pending
             .is_some_and(|p| now.saturating_duration_since(p.sent_at) >= timeout)
     }
@@ -319,7 +319,7 @@ impl MonitorState {
     ///
     /// Leaves any live pending set intact: a refresh read is older intent than
     /// an optimistic set that is still awaiting its own result.
-    pub fn update_from_ddc(&mut self, value: u8) {
+    pub(crate) fn update_from_ddc(&mut self, value: u8) {
         self.cached_brightness = value.min(100);
     }
 }
@@ -336,35 +336,31 @@ impl Default for MonitorState {
 
 /// Information about a single monitor for display in the tray menu.
 #[derive(Debug, Clone)]
-pub struct TrayMonitorInfo {
+pub(crate) struct TrayMonitorInfo {
     /// Display name with optional index suffix (e.g., "Dell U2722D" or "Dell U2722D #1").
-    pub display_name: String,
+    pub(crate) display_name: String,
     /// Current hardware brightness value (0-100).
-    pub hardware_brightness: u8,
+    pub(crate) hardware_brightness: u8,
     /// Current overlay opacity (0-100, where 0 = invisible).
-    pub overlay_opacity: u8,
+    pub(crate) overlay_opacity: u8,
 }
 
 /// Degraded-subsystem warnings surfaced to the user via the tray icon/menu.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HealthWarnings {
     /// DDC is disabled after respawn backoff or a diagnosed worker hang.
-    pub ddc_degraded: bool,
+    pub(crate) ddc_degraded: bool,
     /// The hotkey thread died repeatedly and supervision gave up.
-    pub hotkeys_lost: bool,
+    pub(crate) hotkeys_lost: bool,
 }
 
 /// Data sent from the main thread to the tray thread for menu population.
 #[derive(Debug, Clone)]
 pub struct TrayMenuData {
     /// List of monitors with their current brightness/overlay state.
-    pub monitors: Vec<TrayMonitorInfo>,
-    /// Configured hotkey string for brightness up (e.g., "Ctrl+Shift+Up").
-    pub hotkey_up: String,
-    /// Configured hotkey string for brightness down (e.g., "Ctrl+Shift+Down").
-    pub hotkey_down: String,
+    pub(crate) monitors: Vec<TrayMonitorInfo>,
     /// Active degraded-subsystem warnings to show in the menu.
-    pub warnings: HealthWarnings,
+    pub(crate) warnings: HealthWarnings,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

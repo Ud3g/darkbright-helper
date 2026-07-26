@@ -15,19 +15,24 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::error::{BrightnessError, Result};
 
+// Only the modules the binary and `tests/` name by path are `pub`; the rest are
+// crate-internal and reach the binary through the re-exports below. This is
+// load-bearing, not tidiness: everything `pub` in a `pub mod` counts as
+// externally reachable, so rustc reports no unused items inside one. Keeping
+// the surface at its true width is what lets `dead_code` see this crate at all.
 pub mod ddc;
-pub mod ddc_worker;
+pub(crate) mod ddc_worker;
 pub mod hotkey;
 pub mod osd;
 mod osd_render;
 pub mod overlay;
-pub mod power;
+pub(crate) mod power;
 pub mod single_instance;
-pub mod tray;
-pub mod usage;
+pub(crate) mod tray;
+pub(crate) mod usage;
 
 // Re-export commonly used types
-pub use ddc_worker::{DdcSupervisor, DdcWorker, RespawnOutcome};
+pub use ddc_worker::DdcSupervisor;
 pub use power::PowerEventListener;
 pub use single_instance::{InstanceLock, SingleInstance};
 pub use tray::{TrayIcon, TrayStatusHandle};
@@ -45,7 +50,7 @@ pub use usage::UsageWindow;
 /// # Errors
 ///
 /// Returns an error if the Windows API call fails.
-pub fn get_monitor_under_cursor() -> Result<HMONITOR> {
+pub(crate) fn get_monitor_under_cursor() -> Result<HMONITOR> {
     let mut cursor_pos = POINT::default();
     unsafe {
         // SAFETY: We pass a valid raw pointer to a POINT struct.
@@ -126,7 +131,7 @@ pub(crate) fn hwnd_to_isize(handle: HWND) -> isize {
 /// the Windows `GetLastError()` API.
 #[inline]
 #[must_use]
-pub fn get_last_error_code() -> u32 {
+pub(crate) fn get_last_error_code() -> u32 {
     std::io::Error::last_os_error()
         .raw_os_error()
         .unwrap_or(0)
@@ -143,7 +148,7 @@ pub fn get_last_error_code() -> u32 {
 ///
 /// A `BrightnessError` initialized with the function name and last error code.
 #[must_use]
-pub fn last_error_as_brightness_error(function: impl Into<String>) -> BrightnessError {
+pub(crate) fn last_error_as_brightness_error(function: impl Into<String>) -> BrightnessError {
     BrightnessError::windows_api(function, get_last_error_code())
 }
 
@@ -153,12 +158,12 @@ pub fn last_error_as_brightness_error(function: impl Into<String>) -> Brightness
 
 /// RAII wrapper for a Windows `HWND` (window handle).
 ///
-/// Automatically calls `DestroyWindow` when dropped.
+/// Owning by construction: every window this crate wraps is one it created and
+/// must destroy, so there is no borrowed variant and no ownership flag to check
+/// on drop.
 #[derive(Debug)]
-pub struct SafeHwnd {
+pub(crate) struct SafeHwnd {
     hwnd: HWND,
-    /// If false, the handle is borrowed and won't be destroyed on drop.
-    owned: bool,
 }
 
 impl SafeHwnd {
@@ -169,46 +174,28 @@ impl SafeHwnd {
     /// The caller must ensure that `hwnd` is a valid window handle
     /// that should be destroyed when this wrapper is dropped.
     #[must_use]
-    pub const unsafe fn new_owned(hwnd: HWND) -> Self {
-        Self { hwnd, owned: true }
-    }
-
-    /// Creates a borrowed `SafeHwnd` that will NOT be destroyed on drop.
-    ///
-    /// Use this for window handles that are managed elsewhere.
-    #[must_use]
-    pub const fn new_borrowed(hwnd: HWND) -> Self {
-        Self { hwnd, owned: false }
+    pub(crate) const unsafe fn new_owned(hwnd: HWND) -> Self {
+        Self { hwnd }
     }
 
     /// Returns the raw `HWND`.
     #[inline]
     #[must_use]
-    pub const fn as_raw(&self) -> HWND {
+    pub(crate) const fn as_raw(&self) -> HWND {
         self.hwnd
     }
 
     /// Returns true if this handle is valid (non-zero).
     #[inline]
     #[must_use]
-    pub fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         !self.hwnd.is_invalid()
-    }
-
-    /// Consumes the wrapper and returns the raw handle without destroying it.
-    ///
-    /// The caller becomes responsible for destroying the window.
-    #[must_use]
-    pub fn into_raw(self) -> HWND {
-        let hwnd = self.hwnd;
-        std::mem::forget(self);
-        hwnd
     }
 }
 
 impl Drop for SafeHwnd {
     fn drop(&mut self) {
-        if self.owned && self.is_valid() {
+        if self.is_valid() {
             // SAFETY: We own this handle and it's valid.
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
@@ -280,17 +267,11 @@ mod tests {
 
     #[test]
     fn test_safe_hwnd_null_is_invalid() {
-        let hwnd = SafeHwnd::new_borrowed(HWND::default());
+        // A null handle must read as invalid — that is what stops `Drop` from
+        // calling `DestroyWindow` on a window that was never created.
+        // SAFETY: a null handle is never destroyed, so wrapping it is inert.
+        let hwnd = unsafe { SafeHwnd::new_owned(HWND::default()) };
         assert!(!hwnd.is_valid());
-    }
-
-    #[test]
-    fn test_into_raw_prevents_drop() {
-        let hwnd = HWND::default();
-        let safe = SafeHwnd::new_borrowed(hwnd);
-        let raw = safe.into_raw();
-        assert_eq!(raw, hwnd);
-        // No drop called, no crash
     }
 
     // Round-trips the handle seam conversions. Guards against a future

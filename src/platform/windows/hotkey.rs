@@ -111,20 +111,6 @@ impl SafeHook {
     const unsafe fn new(hook: HHOOK) -> Self {
         Self(hook)
     }
-
-    /// Returns the raw `HHOOK` handle.
-    ///
-    /// Used when calling `CallNextHookEx`.
-    #[allow(dead_code)]
-    const fn as_raw(&self) -> HHOOK {
-        self.0
-    }
-
-    /// Returns `true` if the hook handle is valid (non-null).
-    #[allow(dead_code)]
-    fn is_valid(&self) -> bool {
-        !self.0.is_invalid()
-    }
 }
 
 impl Drop for SafeHook {
@@ -327,21 +313,6 @@ impl HotkeyManager {
         }
         log::debug!(hotkey_id = id; "Registered hotkey");
         self.registered_ids.push(id);
-        Ok(())
-    }
-
-    /// Unregisters a hotkey.
-    ///
-    /// # Errors
-    ///
-    /// Returns `BrightnessError::WindowsApi` if unregistration fails.
-    pub fn unregister_hotkey(&mut self, id: i32) -> Result<()> {
-        unsafe {
-            UnregisterHotKey(Some(self.hwnd), id).map_err(|e| {
-                BrightnessError::windows_api("UnregisterHotKey", e.code().0.cast_unsigned())
-            })?;
-        }
-        self.registered_ids.retain(|&x| x != id);
         Ok(())
     }
 

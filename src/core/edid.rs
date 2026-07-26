@@ -14,7 +14,7 @@ use crate::core::state::MonitorId;
 /// Content is otherwise taken as-is: a block without string descriptors
 /// falls back to a `"Generic Monitor"` model name and no serial.
 #[must_use]
-pub fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
+pub(crate) fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
     if edid.len() < 128 {
         return None;
     }

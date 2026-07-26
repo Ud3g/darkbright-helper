@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use windows::Win32::Graphics::Gdi::HMONITOR;
 
-use crate::core::reconcile::{RESPAWN_MAX, RESPAWN_WINDOW, respawn_allowed};
+use crate::core::reconcile::{RESPAWN_MAX, RESPAWN_WINDOW, RespawnOutcome, respawn_allowed};
 use crate::core::state::{BrightnessMessage, DdcCommand, MonitorId};
 use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
@@ -20,7 +20,7 @@ use crate::platform::windows::ddc::{
 ///
 /// The worker owns all `DdcMonitor` instances and processes commands
 /// from the main thread, sending results back via the response channel.
-pub struct DdcWorker {
+pub(crate) struct DdcWorker {
     /// DDC monitors indexed by their `MonitorId`.
     ///
     /// Commands address monitors by identity, never by platform handle, so the
@@ -41,7 +41,7 @@ impl DdcWorker {
     /// * `cmd_rx` - Receiver for `DdcCommand` messages from the main thread.
     /// * `resp_tx` - Sender for `BrightnessMessage` results back to the main thread.
     #[must_use]
-    pub fn new(cmd_rx: Receiver<DdcCommand>, resp_tx: Sender<BrightnessMessage>) -> Self {
+    pub(crate) fn new(cmd_rx: Receiver<DdcCommand>, resp_tx: Sender<BrightnessMessage>) -> Self {
         Self {
             monitors: HashMap::new(),
             cmd_rx,
@@ -53,7 +53,7 @@ impl DdcWorker {
     ///
     /// This method blocks until a `DdcCommand::Shutdown` is received
     /// or the command channel is disconnected.
-    pub fn run(mut self) {
+    pub(crate) fn run(mut self) {
         log::info!("DDC worker thread started");
 
         loop {
@@ -221,8 +221,6 @@ impl DdcWorker {
     }
 }
 
-pub use crate::core::reconcile::RespawnOutcome;
-
 /// Owns the DDC worker thread and can respawn it after a confirmed death.
 ///
 /// The supervisor holds the command-channel sender, the worker's join handle,
@@ -265,18 +263,18 @@ impl DdcSupervisor {
     ///
     /// Returns `SendError` if the worker's receiver has been dropped (the
     /// worker has died) — callers treat this as a hard failure.
-    pub fn send(&self, cmd: DdcCommand) -> Result<(), SendError<DdcCommand>> {
+    pub(crate) fn send(&self, cmd: DdcCommand) -> Result<(), SendError<DdcCommand>> {
         self.cmd_tx.send(cmd)
     }
 
     /// Whether the worker thread is still running.
     #[must_use]
-    pub fn is_alive(&self) -> bool {
+    pub(crate) fn is_alive(&self) -> bool {
         !self.handle.is_finished()
     }
 
     /// Attempts to respawn a dead worker, honouring the backoff window.
-    pub fn respawn(&mut self, now: Instant) -> RespawnOutcome {
+    pub(crate) fn respawn(&mut self, now: Instant) -> RespawnOutcome {
         self.recent_respawns
             .retain(|&t| now.saturating_duration_since(t) < RESPAWN_WINDOW);
 
@@ -292,12 +290,12 @@ impl DdcSupervisor {
     }
 
     /// Clears the respawn history so recovery can retry immediately.
-    pub fn clear_backoff(&mut self) {
+    pub(crate) fn clear_backoff(&mut self) {
         self.recent_respawns.clear();
     }
 
     /// Asks the worker to shut down (best-effort; does not join).
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         let _ = self.cmd_tx.send(DdcCommand::Shutdown);
     }
 }

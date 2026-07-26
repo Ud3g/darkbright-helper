@@ -74,29 +74,29 @@ const BASE_PERCENT_TEXT_WIDTH: i32 = 45;
 
 /// Metrics for the OSD window, scaled for a specific DPI.
 #[derive(Debug, Clone, Copy)]
-pub struct OsdMetrics {
+pub(crate) struct OsdMetrics {
     /// OSD window width in pixels.
-    pub width: i32,
+    pub(crate) width: i32,
     /// OSD window height in pixels (compact mode).
-    pub height: i32,
+    pub(crate) height: i32,
     /// OSD window height when displaying an error message (expanded mode).
-    pub height_with_error: i32,
+    pub(crate) height_with_error: i32,
     /// Margin from the bottom of the monitor in pixels.
-    pub bottom_margin: i32,
+    pub(crate) bottom_margin: i32,
     /// Height reserved for the error message row.
-    pub error_row_height: i32,
+    pub(crate) error_row_height: i32,
     /// Padding inside the OSD window.
-    pub padding: i32,
+    pub(crate) padding: i32,
     /// Height of the progress bar.
-    pub bar_height: i32,
+    pub(crate) bar_height: i32,
     /// Gap between the left (overlay) and right (hardware) bar sections.
-    pub bar_gap: i32,
+    pub(crate) bar_gap: i32,
     /// Font size for text elements.
-    pub font_size: i32,
+    pub(crate) font_size: i32,
     /// Width reserved for each icon.
-    pub icon_width: i32,
+    pub(crate) icon_width: i32,
     /// Width reserved for percentage text (e.g., "100%").
-    pub percent_text_width: i32,
+    pub(crate) percent_text_width: i32,
 }
 
 impl Default for OsdMetrics {
@@ -110,7 +110,7 @@ impl OsdMetrics {
     ///
     /// Base values are designed for 96 DPI (100% scaling).
     #[must_use]
-    pub fn for_dpi(dpi: u32) -> Self {
+    pub(crate) fn for_dpi(dpi: u32) -> Self {
         #[allow(clippy::cast_precision_loss)]
         let scale = dpi as f32 / 96.0;
 
@@ -260,7 +260,7 @@ fn with_metrics<R>(f: impl FnOnce(&OsdMetrics) -> R) -> R {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
-pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
+pub(crate) fn ensure_osd_class_registered() -> Result<PCWSTR> {
     REGISTER_CLASS_ONCE
         .get_or_init(|| {
             unsafe {
@@ -306,7 +306,7 @@ pub fn ensure_osd_class_registered() -> Result<PCWSTR> {
 ///
 /// Returns `BrightnessError::WindowsApi` if window class registration or
 /// `CreateWindowExW` fails.
-pub fn create_osd_window() -> Result<SafeHwnd> {
+pub(crate) fn create_osd_window() -> Result<SafeHwnd> {
     let class_name = ensure_osd_class_registered()?;
 
     unsafe {
@@ -346,7 +346,7 @@ pub fn create_osd_window() -> Result<SafeHwnd> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
-pub fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> Result<()> {
+pub(crate) fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> Result<()> {
     // Get DPI for the target monitor and update thread-local metrics
     let dpi = get_monitor_dpi(hmonitor);
     update_osd_metrics(dpi);
@@ -422,7 +422,7 @@ fn resize_osd_window(hwnd: HWND, with_error: bool) -> Result<()> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
-pub fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
+pub(crate) fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     unsafe {
@@ -519,7 +519,7 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window positioning fails.
-    pub fn show(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
+    pub(crate) fn show(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
         position_osd_window(self.hwnd.as_raw(), hmonitor, false)?;
         update_osd_state(state, false);
 
@@ -550,38 +550,6 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window positioning fails.
-    pub fn show_error(&mut self, hmonitor: HMONITOR, state: &MonitorState) -> Result<()> {
-        position_osd_window(self.hwnd.as_raw(), hmonitor, true)?;
-        update_osd_state(state, true);
-
-        unsafe {
-            let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);
-            let _ = ShowWindow(self.hwnd.as_raw(), SW_SHOW);
-            self.reset_timer();
-        }
-
-        log::debug!(
-            hardware = state.effective_brightness(),
-            overlay = state.overlay_opacity;
-            "OSD shown with error state"
-        );
-
-        Ok(())
-    }
-
-    /// Hides the OSD window immediately.
-    ///
-    /// # Errors
-    ///
-    /// This method is currently infallible but returns `Result` for consistency with Win32 APIs.
-    pub fn hide(&self) -> Result<()> {
-        unsafe {
-            let _ = ShowWindow(self.hwnd.as_raw(), SW_HIDE);
-        }
-        log::debug!("OSD hidden");
-        Ok(())
-    }
-
     /// Triggers a redraw of the OSD with updated state.
     ///
     /// Resizes to compact height (no error row) and resets the auto-hide timer.
@@ -593,7 +561,7 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window resizing fails.
-    pub fn update(&mut self, state: &MonitorState) -> Result<()> {
+    pub(crate) fn update(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, false);
         // Resize to compact height (in case we were showing an error before)
         resize_osd_window(self.hwnd.as_raw(), false)?;
@@ -616,7 +584,7 @@ impl OsdWindow {
     /// # Errors
     ///
     /// Returns an error if window resizing fails.
-    pub fn update_error(&mut self, state: &MonitorState) -> Result<()> {
+    pub(crate) fn update_error(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, true);
         // Resize to expanded height to show error message
         resize_osd_window(self.hwnd.as_raw(), true)?;
@@ -641,17 +609,11 @@ impl OsdWindow {
 
     /// Returns `true` if the OSD window is currently visible.
     #[must_use]
-    pub fn is_visible(&self) -> bool {
+    pub(crate) fn is_visible(&self) -> bool {
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
             IsWindowVisible(self.hwnd.as_raw()).as_bool()
         }
-    }
-
-    /// Returns the raw window handle for advanced operations.
-    #[must_use]
-    pub fn hwnd(&self) -> HWND {
-        self.hwnd.as_raw()
     }
 }
 

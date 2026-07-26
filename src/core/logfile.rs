@@ -12,9 +12,6 @@ use std::path::PathBuf;
 /// File name of the active log file (lives in the config directory).
 pub const LOG_FILE_NAME: &str = "darkbright.log";
 
-/// File name of the rotated predecessor.
-pub const LOG_FILE_OLD_NAME: &str = "darkbright.log.old";
-
 /// Rotation threshold for the active file (worst-case disk use is ~2×).
 pub const LOG_MAX_BYTES: u64 = 1024 * 1024;
 
@@ -104,6 +101,11 @@ impl Write for RotatingFileWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Name the rotation is expected to produce. Production code derives it by
+    /// appending to whatever path it was opened with, so this is the tests' own
+    /// statement of the expected result, not a shared constant.
+    const LOG_FILE_OLD_NAME: &str = "darkbright.log.old";
 
     fn test_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(name);
