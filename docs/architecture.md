@@ -774,8 +774,37 @@ permanently degrade the app. Two decoupled mechanisms:
 
 A worker that is hung (not dead) is never respawned — that would run two threads
 against the same physical-monitor handles. After `HUNG_TIMEOUT_LIMIT` consecutive
-set timeouts it is diagnosed as hung and DDC is disabled. A disabled DDC state
-recovers on user activity (a hotkey adjustment) or on system resume.
+set timeouts it is diagnosed as unresponsive.
+
+**The two degraded DDC states are distinct, because they differ in what ends
+them** (`DdcHealth` in `core/state.rs`). Conflating them is how a tray line
+comes to advertise a recovery that cannot work:
+
+| State | Cause | What ends it |
+|---|---|---|
+| `WorkerDead` | Respawn backoff exhausted; the thread is gone | A hotkey press (clears the backoff, so the next supervision pass respawns), or system resume |
+| `WorkerHung` | Thread alive but blocked inside a DDC call | **Any result the worker sends** — a result is proof it is not blocked. Also system resume, or the worker dying (below) |
+
+A keypress deliberately does **not** clear `WorkerHung`: it cannot unstick a
+blocked call, so clearing would only retract a warning that is still true and
+let it reappear seconds later when the next set times out — a flickering badge
+instead of a standing one.
+
+Proof-of-life is taken from *every* worker result, including failures and
+results the reconciler discards as stale: a worker reporting a NAK is answering,
+and answering is the whole of what the diagnosis denied. This is the only exit
+from `WorkerHung` that needs neither a resume nor a restart, and it costs
+nothing — the results already arrive.
+
+An unresponsive worker that subsequently *dies* is treated as a plain death and
+respawned. The reason not to respawn a hung worker went with the thread, and
+since no user action clears that state, leaving it standing would strand the app
+with no worker at all.
+
+Dispatch is deliberately **not** gated while degraded. A false hang diagnosis
+would otherwise turn a merely slow worker into a dead one, and the queue is
+harmless: sets are correlated by sequence id, so a backlog delivered late
+reconciles to the correct final value.
 
 | Constant | Value | Purpose |
 |---|---|---|
@@ -857,10 +886,13 @@ The two supervision give-up states (§12) — DDC disabled and hotkeys lost — 
 visible in the tray through two complementary paths:
 
 - **Pull (menu):** `TrayMenuData` carries a `HealthWarnings` snapshot; while a
-  warning is active the menu opens with grayed warning lines at the very top
-  ("⚠ DDC unavailable — press a brightness hotkey to retry", "⚠ Hotkeys
-  stopped working — restart the app"). Always current because the menu is
-  populated on open.
+  warning is active the menu opens with grayed warning lines at the very top.
+  The DDC line is chosen by cause, because each names the recovery that
+  actually applies: "⚠ DDC unavailable — press a brightness hotkey to retry"
+  for a dead worker, "⚠ Monitor not responding — restart the app if this
+  persists" for an unresponsive one (hedged, since it often frees itself).
+  Alongside them, "⚠ Hotkeys stopped working — restart the app". Always
+  current because the menu is populated on open.
 - **Push (icon + tooltip):** the main loop compares the controller's
   `HealthWarnings` each tick and, on a transition, posts a custom window
   message to the tray thread via `TrayStatusHandle` (`PostMessageW`, safe
@@ -868,10 +900,14 @@ visible in the tray through two complementary paths:
   via `NIM_MODIFY`: while degraded the icon carries an amber corner badge
   (generated at startup by drawing the base icon into a DIB and painting the
   badge — no second icon asset), and the tooltip appends the active warnings
-  (e.g. "Brightness Control – DDC unavailable").
+  (e.g. "Brightness Control – DDC unavailable"). The `HealthWarnings` snapshot
+  crosses to the tray thread packed into the message's `wparam`, so the cause
+  has to survive that hop — a round-trip test pins the encoding.
 
-Recovery follows §12: DDC warnings clear on user activity or resume (the icon
-reverts automatically); the hotkey warning is latched until the app restarts.
+Recovery follows §12 and differs per cause: a dead worker's warning clears on
+user activity or resume, an unresponsive worker's clears when the worker answers
+again or on resume (the icon reverts automatically in both cases); the hotkey
+warning is latched until the app restarts.
 
 **Usage Window:**
 
@@ -987,8 +1023,10 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 #### Degraded-State Tray Indicator Test
 1. Start the application with `RUST_LOG=debug`
 2. Force a degraded DDC state (e.g. temporarily lower `HUNG_TIMEOUT_LIMIT`/`SET_TIMEOUT` in a test build and use a monitor/cable that drops DDC, or unplug all DDC-capable monitors and adjust repeatedly until "disabling DDC" is logged)
-3. **Expected**: The tray icon gains an amber corner badge; hovering shows "Brightness Control – DDC unavailable"; the menu opens with the grayed "⚠ DDC unavailable" line at the top; the menu's bottom line shows the running version
-4. Press a brightness hotkey (user activity is the recovery signal)
-5. **Expected**: Log shows "Recovering from degraded DDC state"; icon, tooltip, and menu revert to normal
+3. **Expected**: The tray icon gains an amber corner badge; the menu's bottom line shows the running version. The wording depends on which state was reached — check the log line to know which one you provoked:
+   - respawn backoff exhausted (`respawn backoff exceeded`): tooltip "Brightness Control – DDC unavailable", menu line "⚠ DDC unavailable — press a brightness hotkey to retry"
+   - unresponsive worker (`DDC worker unresponsive`): tooltip "Brightness Control – monitor not responding", menu line "⚠ Monitor not responding — restart the app if this persists"
+4. Press a brightness hotkey
+5. **Expected**: after the *backoff* state, the log shows "Recovering from degraded DDC state" and the icon, tooltip and menu revert. After the *unresponsive* state, the warning deliberately stays — a keypress cannot unstick a blocked call. It clears on its own once the worker answers again ("DDC worker answered again"), on system resume, or if the stuck thread exits ("Unresponsive DDC worker has exited")
 
 ---

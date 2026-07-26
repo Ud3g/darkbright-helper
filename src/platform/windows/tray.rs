@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::core::state::{BrightnessMessage, HealthWarnings, TrayMenuData};
+use crate::core::state::{BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData};
 use crate::error::{BrightnessError, Result};
 
 use super::{SafeHwnd, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
@@ -52,7 +52,7 @@ const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 100;
 
 /// Custom message posted by the main thread when degraded-state warnings
-/// change; wparam bit 0 = DDC degraded, bit 1 = hotkeys lost.
+/// change; the payload is packed by [`warnings_to_bits`].
 const WM_TRAY_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 101;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,8 +101,10 @@ const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
 /// Composes the tray tooltip text from the active warnings.
 fn compose_tooltip(warnings: HealthWarnings) -> String {
     let mut parts: Vec<&str> = Vec::new();
-    if warnings.ddc_degraded {
-        parts.push("DDC unavailable");
+    match warnings.ddc {
+        DdcHealth::Ok => {}
+        DdcHealth::WorkerDead => parts.push("DDC unavailable"),
+        DdcHealth::WorkerHung => parts.push("monitor not responding"),
     }
     if warnings.hotkeys_lost {
         parts.push("hotkeys stopped");
@@ -117,15 +119,49 @@ fn compose_tooltip(warnings: HealthWarnings) -> String {
 /// Grayed warning lines shown at the top of the tray menu.
 fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
     let mut lines = Vec::new();
-    if warnings.ddc_degraded {
-        // User activity is the recovery signal for a degraded DDC state.
-        lines.push("⚠ DDC unavailable — press a brightness hotkey to retry");
+    match warnings.ddc {
+        DdcHealth::Ok => {}
+        // A keypress clears the respawn backoff, so this retry is real.
+        DdcHealth::WorkerDead => {
+            lines.push("⚠ DDC unavailable — press a brightness hotkey to retry");
+        }
+        // Nothing the user can press unsticks a blocked DDC call. It often
+        // frees itself, so restarting is advice, not an instruction.
+        DdcHealth::WorkerHung => {
+            lines.push("⚠ Monitor not responding — restart the app if this persists");
+        }
     }
     if warnings.hotkeys_lost {
         // The give-up latch only clears with a fresh process.
         lines.push("⚠ Hotkeys stopped working — restart the app");
     }
     lines
+}
+
+/// Packs warnings into the `wparam` payload of a [`WM_TRAY_STATUS`] post.
+///
+/// The tray runs on its own thread, so the state has to survive a trip through
+/// a window message; low two bits carry the DDC condition, bit 2 the hotkeys.
+fn warnings_to_bits(warnings: HealthWarnings) -> usize {
+    let ddc = match warnings.ddc {
+        DdcHealth::Ok => 0,
+        DdcHealth::WorkerDead => 1,
+        DdcHealth::WorkerHung => 2,
+    };
+    ddc | (usize::from(warnings.hotkeys_lost) << 2)
+}
+
+/// Unpacks what [`warnings_to_bits`] wrote. Unknown bit patterns decode as
+/// healthy — a garbled post must not invent a warning.
+fn warnings_from_bits(bits: usize) -> HealthWarnings {
+    HealthWarnings {
+        ddc: match bits & 0b11 {
+            1 => DdcHealth::WorkerDead,
+            2 => DdcHealth::WorkerHung,
+            _ => DdcHealth::Ok,
+        },
+        hotkeys_lost: bits & 0b100 != 0,
+    }
 }
 
 /// Paints an amber warning badge (filled circle in the lower-right quadrant)
@@ -419,15 +455,12 @@ fn create_warning_icon(base: HICON) -> Result<HICON> {
 /// Applies a posted status update: swaps the tray icon and tooltip to match
 /// the active warnings.
 fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
-    let warnings = HealthWarnings {
-        ddc_degraded: wparam.0 & 0b01 != 0,
-        hotkeys_lost: wparam.0 & 0b10 != 0,
-    };
+    let warnings = warnings_from_bits(wparam.0);
 
     let Some(icons) = STATUS_ICONS.with(|s| *s.borrow()) else {
         return;
     };
-    let icon = if warnings.ddc_degraded || warnings.hotkeys_lost {
+    let icon = if warnings.ddc.is_degraded() || warnings.hotkeys_lost {
         icons.warning
     } else {
         icons.normal
@@ -442,7 +475,7 @@ fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
         }
     }
     log::debug!(
-        ddc_degraded = warnings.ddc_degraded,
+        ddc:? = warnings.ddc,
         hotkeys_lost = warnings.hotkeys_lost;
         "Tray status updated"
     );
@@ -963,7 +996,7 @@ pub struct TrayStatusHandle(isize);
 impl TrayStatusHandle {
     /// Posts the current warnings to the tray thread (fire-and-forget).
     pub fn notify(self, warnings: HealthWarnings) {
-        let bits = usize::from(warnings.ddc_degraded) | (usize::from(warnings.hotkeys_lost) << 1);
+        let bits = warnings_to_bits(warnings);
         unsafe {
             if let Err(e) = PostMessageW(
                 Some(hwnd_from_isize(self.0)),
@@ -1000,13 +1033,13 @@ mod tests {
     #[test]
     fn tooltip_lists_active_warnings() {
         let ddc = HealthWarnings {
-            ddc_degraded: true,
+            ddc: DdcHealth::WorkerDead,
             hotkeys_lost: false,
         };
         assert_eq!(compose_tooltip(ddc), "Brightness Control – DDC unavailable");
 
         let keys = HealthWarnings {
-            ddc_degraded: false,
+            ddc: DdcHealth::Ok,
             hotkeys_lost: true,
         };
         assert_eq!(
@@ -1015,7 +1048,7 @@ mod tests {
         );
 
         let both = HealthWarnings {
-            ddc_degraded: true,
+            ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
         };
         assert_eq!(
@@ -1025,17 +1058,63 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_says_not_responding_for_a_hung_worker() {
+        let hung = HealthWarnings {
+            ddc: DdcHealth::WorkerHung,
+            hotkeys_lost: false,
+        };
+        assert_eq!(
+            compose_tooltip(hung),
+            "Brightness Control – monitor not responding"
+        );
+    }
+
+    #[test]
     fn menu_warning_lines_match_active_warnings() {
         assert!(warning_menu_lines(HealthWarnings::default()).is_empty());
 
         let both = HealthWarnings {
-            ddc_degraded: true,
+            ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
         };
         let lines = warning_menu_lines(both);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("DDC"));
         assert!(lines[1].contains("Hotkeys"));
+    }
+
+    #[test]
+    fn only_a_dead_worker_is_advertised_as_hotkey_recoverable() {
+        // A keypress clears the respawn backoff, so the advice is sound here…
+        let dead = HealthWarnings {
+            ddc: DdcHealth::WorkerDead,
+            hotkeys_lost: false,
+        };
+        assert!(warning_menu_lines(dead)[0].contains("hotkey"));
+
+        // …but nothing the user can press unsticks a blocked DDC call, so
+        // offering the same retry would be a false affordance.
+        let hung = HealthWarnings {
+            ddc: DdcHealth::WorkerHung,
+            hotkeys_lost: false,
+        };
+        let line = warning_menu_lines(hung)[0];
+        assert!(!line.contains("hotkey"), "must not promise a hotkey retry");
+        assert!(line.contains("restart"));
+    }
+
+    #[test]
+    fn status_bits_round_trip_every_warning_combination() {
+        for ddc in [DdcHealth::Ok, DdcHealth::WorkerDead, DdcHealth::WorkerHung] {
+            for hotkeys_lost in [false, true] {
+                let warnings = HealthWarnings { ddc, hotkeys_lost };
+                assert_eq!(
+                    warnings_from_bits(warnings_to_bits(warnings)),
+                    warnings,
+                    "lost across the window-message hop"
+                );
+            }
+        }
     }
 
     #[test]

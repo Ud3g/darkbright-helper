@@ -47,6 +47,16 @@ history lives in the git log.
 
 ### Fixed
 
+- The tray told users to "press a brightness hotkey to retry" for a DDC worker
+  that had stopped responding — advice that cannot work, since no keypress
+  unsticks a thread blocked inside a DDC call. Worse, the press cleared the
+  warning it could not fix, so the badge flickered off and returned ~24 s later,
+  indefinitely. The two degraded states are now distinguished: a dead worker
+  keeps the (correct) hotkey advice, an unresponsive one says so and suggests a
+  restart only if it persists. It usually will not: any result the worker sends
+  is proof it is no longer blocked, so the state now clears itself the moment
+  the hardware answers — as does a stuck worker that later exits, which is now
+  respawned like any other dead one.
 - A monitor that identifies itself but refuses the brightness read got no state
   at all, so every hotkey press on it failed with "monitor not found" before
   reaching the OSD — nothing moved and nothing was shown. Such monitors are now

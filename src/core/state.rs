@@ -378,11 +378,39 @@ pub(crate) struct TrayMonitorInfo {
     pub(crate) overlay_opacity: u8,
 }
 
+/// Condition of the DDC subsystem, as surfaced to the user.
+///
+/// The two degraded variants are distinguished for exactly one reason: they
+/// differ in what ends them. Telling the user to press a hotkey is sound
+/// advice for one and a false affordance for the other.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum DdcHealth {
+    /// Working, or failing in ways that heal on their own.
+    #[default]
+    Ok,
+    /// The worker thread died and was restarted too often within the backoff
+    /// window to keep trying. A brightness keypress clears the backoff, and
+    /// the next supervision pass spawns a replacement.
+    WorkerDead,
+    /// The worker is alive but stopped answering — blocked inside a DDC call
+    /// that has not returned. No keypress can change that: it ends when the
+    /// worker answers again (any result is proof) or the machine resumes.
+    WorkerHung,
+}
+
+impl DdcHealth {
+    /// Whether this condition warrants a warning in the tray.
+    #[must_use]
+    pub(crate) fn is_degraded(self) -> bool {
+        self != Self::Ok
+    }
+}
+
 /// Degraded-subsystem warnings surfaced to the user via the tray icon/menu.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct HealthWarnings {
-    /// DDC is disabled after respawn backoff or a diagnosed worker hang.
-    pub(crate) ddc_degraded: bool,
+    /// DDC condition; anything but `Ok` shows a warning.
+    pub(crate) ddc: DdcHealth,
     /// The hotkey thread died repeatedly and supervision gave up.
     pub(crate) hotkeys_lost: bool,
 }
