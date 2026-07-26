@@ -619,6 +619,37 @@ adaptive variant**.
   third-party dependencies. Writing "we considered crates and declined" would have documented a
   deliberation that never happened.
 
+**✅ RESOLVED (DEP-3, DOC-1, DOC-3, DOC-4, DOC-5, UX-1, UX-2, STR-2)** — 2026-07-26, commit
+`59e29e5`, one pass over the eight mechanical rows. fmt, clippy and 216 tests green. Four of them
+turned out to carry more than the finding described.
+
+*STR-2 is three tests, not two* — `test_ddc_worker_shutdown` asserts as little as its two named
+siblings. More usefully, the property all three were reaching for is **termination**, which no
+assertion can express: a worker that fails to stop hangs the run rather than failing it. What *is*
+assertable is how it stopped, and one `try_recv` after `run(self)` separates every outcome — a value
+means a result was emitted during shutdown, `Empty` means the sender outlived the call, `Disconnected`
+means a clean silent exit. Both worker tests now go through that check.
+
+*The third one was worth keeping, not deleting.* `get_last_error_code` reinterprets a signed OS error
+as unsigned, and Windows' HRESULT-shaped codes have the high bit set — so the plausible "safer"
+rewrite, `u32::try_from(..).unwrap_or(0)`, would turn a real failure code into *no error*. The test
+now pins that round trip, and it was verified by injecting exactly that rewrite: `left: 0, right:
+2147942405`. A test asserting nothing sat on top of a genuine trap.
+
+*DOC-4's `CLAUDE.md` half was understated.* Beyond the named `pending_brightness`, the sample was also
+missing `brightness_known` (added by row 2) and `missing_since`. The drift was three fields, not one.
+
+*DOC-5 is not just a label change.* With 216 tests the entry needed a statement of what actually
+remains, and it is not laziness: end-to-end coverage across Windows versions and monitor models is
+unavailable to a headless CI runner, which has no DDC-capable display. That is the same constraint
+that makes `tests/ddc_test.rs` an ignored manual probe and keeps a hardware checklist in the docs, so
+the three now say one consistent thing.
+
+*Verification limits.* DEP-3's removal is proven by a clean build — the feature gated bindings nothing
+imported. UX-2 cannot be exercised until a tag is pushed; the PowerShell that builds the release body
+was run locally against a stand-in file and the workflow YAML was parsed, so what remains untested is
+the `gh release create` invocation itself, which the first release will settle either way.
+
 ## Resolution plan
 
 **Progress: every Critical and Important row resolved 2026-07-26** on branch
@@ -627,8 +658,9 @@ adaptive variant**.
 green at each commit; 216 tests now (+2 for the display-change path, +7 for VCP scaling, +5 for the
 unreadable-monitor path, +9 for the split DDC health state, +4 for the file-log warning, −1 for a
 test that only exercised a deleted method; the DDC probe is ignored by default). Row 8 alone landed
-as documentation with no code change, on a measurement. Only the cosmetics remain — of which row 16
-is also done (`df1992b`).
+as documentation with no code change, on a measurement. Of the cosmetics, row 16 (`df1992b`) and the
+eight mechanical rows (`59e29e5`) are also done, leaving **four: 15, 17, 18 and 19** — the two that
+need a decision, the Dependabot config, and the one real code change among them.
 
 Five lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
 (see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
@@ -675,19 +707,19 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 7  | I6    | Demote the lib's incidental `pub` surface (`lib.rs`)                    | Important | S→M| Clear        | ✅ resolved `6acda0c` — sized S, was an M |
 | 8  | I8    | Adaptive main-loop cadence + document it (`main.rs:699`)                 | Important | XS | Mostly clear | ✅ resolved `b09ff80` — measured at 0.0017 % of a core, so accept-and-document; adaptive declined |
 | 9  | I2    | Hung-worker recovery: honest message or real abandon (`tray.rs:122`)     | Important | S–M| Needs decision | ✅ resolved `43bec28` — split the state, act on proof of life; abandon-and-respawn declined with reasons |
-| 10 | DEP-3 | Drop the dead `Win32_UI_Controls` feature                               | Cosmetic  | XS | Clear        | — |
-| 11 | DOC-1 | CHANGELOG: add the hotkey-startup-wait fix                              | Cosmetic  | XS | Clear        | — |
-| 12 | DOC-3 | Add `panic_hook.rs` to the module tree                                  | Cosmetic  | XS | Clear        | — |
-| 13 | DOC-4 | Fix `MonitorState` sample drift in architecture.md + CLAUDE.md          | Cosmetic  | XS | Clear        | architecture.md half done in `5c8a653`; CLAUDE.md half open |
-| 14 | DOC-5 | Mark "Automated testing suite" partially implemented                    | Cosmetic  | XS | Clear        | — |
+| 10 | DEP-3 | Drop the dead `Win32_UI_Controls` feature                               | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` |
+| 11 | DOC-1 | CHANGELOG: add the hotkey-startup-wait fix                              | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` |
+| 12 | DOC-3 | Add `panic_hook.rs` to the module tree                                  | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` |
+| 13 | DOC-4 | Fix `MonitorState` sample drift in architecture.md + CLAUDE.md          | Cosmetic  | XS | Clear        | ✅ resolved `5c8a653` + `59e29e5` — CLAUDE.md drifted on three fields, not one |
+| 14 | DOC-5 | Mark "Automated testing suite" partially implemented                    | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` — names what CI structurally cannot cover |
 | 15 | DOC-2 | Reconcile the `monitors` round-trip claim with `MonitorConfig`           | Cosmetic  | S  | Mostly clear | Loosen the type vs. soften the doc |
 | 16 | UX-3  | Decide and record the hand-rolled-vs-crates question; drop the scratch   | Cosmetic  | XS | Needs decision | ✅ resolved `df1992b` — file deleted, no note kept; six months of opposite-direction work were the decision |
 | 17 | DEP-2 | Confirm `winres` upstream status; swap to `winresource` or pin-note      | Cosmetic  | S  | Needs decision | Requires a crates.io check first |
 | 18 | DEP-1 | Add Dependabot (weekly, grouped, PRs only)                              | Cosmetic  | XS | Mostly clear | — |
 | 19 | STR-1 | Fold `DdcSupervisor` onto `RespawnGate`; test the real wiring            | Cosmetic  | S  | Clear        | — |
-| 20 | UX-1  | One sentence on config snapshots / no live reload                       | Cosmetic  | XS | Clear        | — |
-| 21 | UX-2  | Checksum in the release body                                            | Cosmetic  | XS | Clear        | — |
-| 22 | STR-2 | Give the two no-assert tests assertions or delete them                   | Cosmetic  | XS | Clear        | — |
+| 20 | UX-1  | One sentence on config snapshots / no live reload                       | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` |
+| 21 | UX-2  | Checksum in the release body                                            | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` — untested until the first tag |
+| 22 | STR-2 | Give the two no-assert tests assertions or delete them                   | Cosmetic  | XS | Clear        | ✅ resolved `59e29e5` — three, not two; all three kept and given assertions |
 
 ## Categories reviewed
 
