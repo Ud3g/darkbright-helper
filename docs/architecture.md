@@ -34,6 +34,7 @@ src/
 │   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc>: message-driven orchestration behind OSD/overlay/DDC/locator seams, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
 │   ├── edid.rs           # EDID → MonitorId parsing
 │   ├── logfile.rs        # Size-capped rolling file log sink
+│   ├── panic_hook.rs     # Logs panic payload/location/thread, flushes sinks before exit
 │   ├── reconcile.rs      # Refresh generations, respawn backoff, watchdog policies
 │   └── state.rs          # Application state, messages, DDC commands
 └── platform/
@@ -320,6 +321,16 @@ Location: `%APPDATA%\BrightnessControl\config.json`
 **`version` Field:** No migration logic exists yet. A value other than the current schema version logs a warning at load; the fields are interpreted as the current schema (unknown fields are dropped by the parser) and the value is reset to the current version, so later writes describe what the file actually contains.
 
 **`monitors` Field:** Reserved for future per-monitor settings (e.g., min/max limits, custom step sizes, DDC disable). Empty `{}` for MVP. Schema will be defined based on real-world user feedback after v1.0. A non-empty map logs a warning at load ("not yet implemented"); entries are preserved and round-trip through saves so hand-written settings survive until the feature exists. Note that neither the key format (how a monitor is addressed in this map) nor the value shape is a contract yet — surviving hand-written entries may not match the eventual schema and may need manual migration when the feature lands.
+
+**When changes take effect:** at the next start, not while running. The file is read once
+during startup and the resulting `Config` is then cloned into the places that need it — the
+controller keeps one, the hotkey thread keeps another, `main` keeps the original. All three
+are immutable for the process lifetime, which is why no synchronisation is needed and why
+they cannot drift apart. There is no reload path: the tray's "Settings" item opens
+`config.json` in the default editor, but saving it changes nothing until the app is
+restarted. Live reload is the first thing that has to be built if the settings GUI on the
+roadmap lands, and it is what makes the three snapshots a design decision rather than an
+accident.
 
 **Hotkey String Format:**
 

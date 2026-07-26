@@ -260,9 +260,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_last_error_returns_value() {
-        // Just verify it doesn't panic
-        let _ = get_last_error_code();
+    fn last_error_code_survives_the_signed_to_unsigned_conversion() {
+        use windows::Win32::Foundation::{SetLastError, WIN32_ERROR};
+
+        // Windows reports error codes to Rust as i32, so any code with the high
+        // bit set — the HRESULT-shaped ones an FFI failure often carries — comes
+        // back negative. Reinterpreting the bits is the only correct reading;
+        // a range-checking conversion would quietly report 0 and turn a real
+        // failure code into "no error". This pins that round trip.
+        unsafe { SetLastError(WIN32_ERROR(0x8007_0005)) };
+        assert_eq!(get_last_error_code(), 0x8007_0005);
     }
 
     #[test]

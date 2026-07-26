@@ -47,6 +47,11 @@ history lives in the git log.
 
 ### Fixed
 
+- A hotkey thread that hung during startup — inside window creation or hotkey
+  registration — froze the main loop indefinitely, because the wait for its
+  result was untimed. The wait is now bounded to 5 s; on timeout the thread is
+  abandoned and the start reported as failed, which shows the error box at
+  startup and goes through the respawn gate on a supervised restart.
 - Enabling `logging.file_enabled` and getting no log file gave no clue why. If
   the sink could not be built (unwritable `%APPDATA%`, a locked file, a full
   disk), the warning went to the log — which is exactly what had failed — and

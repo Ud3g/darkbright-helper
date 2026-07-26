@@ -44,7 +44,7 @@ Single-owner state with message passing — no async runtime. The **main thread*
 
 Message enums (`BrightnessMessage` to main, `DdcCommand` to worker) are defined in `src/core/state.rs`. Brightness is updated **optimistically**: the OSD/overlay update instantly, then the DDC result either confirms (`confirm_brightness`) or reverts (`revert_pending`) the pending value. Hardware failure does NOT fall back to overlay dimming for values > 0% (strict error handling) — the OSD shows a red error state instead.
 
-`MonitorState` holds `cached_brightness` (last confirmed), `pending_brightness` (optimistic, awaiting DDC), and `overlay_opacity`. Cache is refreshed on startup, periodically, after inactivity, and on system resume; a generation-countered `RefreshTracker` (`core/reconcile.rs`) gates concurrent refreshes and discards stale results.
+`MonitorState` holds `cached_brightness` (last confirmed), `brightness_known` (false while that value is only a seed), `pending: Option<PendingSet>` (optimistic, awaiting DDC), `overlay_opacity`, and `missing_since` (absence bookkeeping for pruning). Cache is refreshed on startup, periodically, after inactivity, and on system resume; a generation-countered `RefreshTracker` (`core/reconcile.rs`) gates concurrent refreshes and discards stale results.
 
 ### Module map
 

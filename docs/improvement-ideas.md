@@ -128,7 +128,7 @@ This document tracks potential future enhancements for the Brightness Control To
   Create detailed user guides, tutorials, and FAQ sections covering all features from basic usage to advanced configurations. This would include step-by-step instructions, troubleshooting guides, and video tutorials to help users maximize the application's capabilities.
 
 - **Automated testing suite**
-  Develop a comprehensive automated testing framework covering unit tests, integration tests, and end-to-end testing scenarios. This would ensure code quality, prevent regressions, and validate functionality across different Windows versions and hardware configurations.
+  *Largely implemented:* 216 tests run on every CI push — unit tests in-module across `core/` and the platform layer, plus integration tests in `tests/`. The controller is generic over its OSD/overlay/DDC/locator seams and is exercised against fakes, so orchestration logic is covered without hardware. Remaining ideas: end-to-end scenarios driving the real binary, and coverage across Windows versions and monitor models — neither of which a headless CI runner can provide, since it has no DDC-capable display. That gap is why `tests/ddc_test.rs` is an `#[ignore]`d manual probe and why `docs/architecture.md` keeps a hardware checklist.
 
 - **Advanced internationalization (major language translations)**
   Implement complete translations for major languages including Spanish, German, Japanese, and Chinese, covering all user interface elements and documentation. This may ideally involve working with professional translators and native speakers to ensure accuracy and cultural appropriateness.

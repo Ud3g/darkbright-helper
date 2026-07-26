@@ -40,11 +40,17 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      # The binary is unsigned, so a downloader has nothing to check it
+      # against. Publishing the hash in the release body at least makes
+      # tampering between GitHub and the disk detectable.
       - name: Create GitHub release with binary attached
         env:
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          gh release create $env:GITHUB_REF_NAME
-          target/release/darkbright-helper.exe
-          --title $env:GITHUB_REF_NAME
-          --notes "See CHANGELOG.md for the changes in this release."
+        run: |
+          $exe = "target/release/darkbright-helper.exe"
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $notes = "See CHANGELOG.md for the changes in this release.`n`n" +
+                   "SHA-256 of darkbright-helper.exe`n`n" +
+                   "    $hash`n`n" +
+                   "Verify with: Get-FileHash darkbright-helper.exe -Algorithm SHA256"
+          gh release create $env:GITHUB_REF_NAME $exe --title $env:GITHUB_REF_NAME --notes $notes

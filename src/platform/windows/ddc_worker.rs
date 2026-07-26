@@ -337,31 +337,49 @@ mod tests {
         drop(cmd_tx);
     }
 
-    #[test]
-    fn test_ddc_worker_shutdown() {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (resp_tx, _resp_rx) = mpsc::channel();
-
-        let worker = DdcWorker::new(cmd_rx, resp_tx);
-
-        // Send shutdown command
-        cmd_tx.send(DdcCommand::Shutdown).unwrap();
-
-        // Worker should exit cleanly
-        worker.run();
+    /// Asserts the worker has exited for the right reason.
+    ///
+    /// `run()` returning is the headline property — a worker that failed to
+    /// stop would hang the test rather than fail it — but on its own that
+    /// proves nothing about *how* it stopped. Exit must also be silent (no
+    /// result may be emitted for a command that is not a brightness operation)
+    /// and it must have released its end of the result channel, which only a
+    /// consumed `run(self)` does. One `try_recv` distinguishes all three: a
+    /// value means something was emitted, `Empty` means the sender outlived the
+    /// call, `Disconnected` means a clean exit with nothing sent.
+    fn assert_exited_silently(resp_rx: &mpsc::Receiver<BrightnessMessage>) {
+        match resp_rx.try_recv() {
+            Err(mpsc::TryRecvError::Disconnected) => {}
+            Ok(msg) => panic!("worker emitted a result while shutting down: {msg:?}"),
+            Err(mpsc::TryRecvError::Empty) => {
+                panic!("worker returned but its result sender is still alive");
+            }
+        }
     }
 
     #[test]
-    fn test_ddc_worker_channel_disconnect() {
+    fn shutdown_command_exits_the_worker_silently() {
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (resp_tx, _resp_rx) = mpsc::channel();
+        let (resp_tx, resp_rx) = mpsc::channel();
 
         let worker = DdcWorker::new(cmd_rx, resp_tx);
-
-        // Drop sender to disconnect channel
-        drop(cmd_tx);
-
-        // Worker should exit cleanly on disconnect
+        cmd_tx.send(DdcCommand::Shutdown).unwrap();
         worker.run();
+
+        assert_exited_silently(&resp_rx);
+    }
+
+    #[test]
+    fn a_disconnected_command_channel_exits_the_worker_silently() {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (resp_tx, resp_rx) = mpsc::channel();
+
+        let worker = DdcWorker::new(cmd_rx, resp_tx);
+        // A main thread that died without sending Shutdown must not strand the
+        // worker: dropping the command sender has to end the loop too.
+        drop(cmd_tx);
+        worker.run();
+
+        assert_exited_silently(&resp_rx);
     }
 }
