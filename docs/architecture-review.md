@@ -160,6 +160,46 @@ this finding stands unchanged and unblocked as a controller-side change on its o
 **Direction:** seed `MonitorState` from `enumerated` as well (last-known or default value plus an
 "unknown" marker), or at minimum surface the dead end on the OSD.
 
+**✅ RESOLVED** — 2026-07-26, commit `5c8a653`. **Open decision settled on all three counts.**
+
+*What value.* `UNREAD_BRIGHTNESS_SEED = 50` — not an invented number: `MonitorState`'s existing
+`Default` already used 50, so this makes a latent choice explicit. The midpoint is the right one
+because the first adjustment writes `seed ± step` and the write *succeeds* in the sharp case, so
+reality snaps to our model after one press. The only cost is that one jump, and the midpoint bounds
+it to ≤50 in either direction; seeding at either end would make one of the two hotkeys lurch the
+full range the wrong way.
+
+*What marker.* `MonitorState.brightness_known: bool`, false only while the value is a seed. Cleared
+by the first evidence either way — a successful read (`update_from_ddc`) or a write the hardware
+accepted (`apply_set_result`, both the `Confirmed` and `GroundTruth` branches). Seeding is
+**insert-only**, so a monitor that was readable before keeps its real last-known value; the
+"last-known or default" of the direction is therefore *both*, resolved by which one exists.
+
+*Whether the OSD shows "unknown".* **No — the tray does instead**, and this is a deliberate
+inversion of the direction's fallback. The OSD is the wrong surface: by the time it appears, the
+adjustment has already been written, so after the first press the value is authoritative and a
+warning styling would flash exactly once and never return. A standing condition needs a standing
+signal, so the tray menu prefixes the value with `~` until it is established. It also costs no
+`osd_render` work, which the OSD option would have.
+
+**The pre-existing docs were already right; the code was half-built.** `architecture.md:601` and
+`CHANGELOG.md`'s 0.8.0 entry both promised that unreadable monitors "stay set-capable … instead of
+failing with 'monitor not found'". The worker half shipped (it keeps the handle); the controller
+half never did, and the doc's closing clause — "the main thread retains its cached value meanwhile"
+— quietly assumes a cached value that a never-read monitor does not have. Worth noting for the other
+open rows: a documented behaviour is not evidence of an implemented one.
+
+TDD: 5 tests written first. Three went red on the real defect, all three with
+`MonitorNotFound("DEL U2722D")` — the dead keypress, reproduced exactly. Two passed against the stub
+(they guard the *new* logic rather than the old bug), so both were verified by injecting the
+regression they exist to catch: making the seed unconditional fails
+`seeding_never_overwrites_a_monitor_that_already_has_state` with `left: 50, right: 80`, and dropping
+the `brightness_known` flag from `update_from_ddc` fails `a_later_successful_read_replaces_the_seed`.
+
+**Side effect on row 13 (DOC-4):** the `MonitorState` sample in `architecture.md` gained
+`brightness_known` and lost the stale `last_refresh` line, which is half of that row. The `CLAUDE.md`
+half (`pending_brightness` vs the real `pending: Option<PendingSet>`) is untouched and still open.
+
 **I2. A hung-but-alive DDC worker has no recovery path, and the tray tells the user to try one that
 cannot work.**
 `src/core/controller.rs:427-429`, `:395-402`, `:640`, `:681-687`;
@@ -426,11 +466,12 @@ record the choice.
 
 ## Resolution plan
 
-**Progress: rows 1, 3–5 and 7 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
-(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`) — fmt, clippy (`-D warnings`,
+**Progress: rows 1–5 and 7 resolved 2026-07-26** on branch `arch-review-fixes-2026-07-26`
+(`a2a9896`, `fc9c65b`, `d194bd2`, `7a1607a`, `6acda0c`, `5c8a653`) — fmt, clippy (`-D warnings`,
 `--all-targets`) and the full suite green at each commit; 198 tests now (+2 for the display-change
-path, +7 for VCP scaling, −1 for a test that only exercised a deleted method; the DDC probe is
-ignored by default). Rows 2, 6 and 8+ remain open.
+path, +7 for VCP scaling, +5 for the unreadable-monitor path, −1 for a test that only exercised a
+deleted method; the DDC probe is ignored by default). Rows 6 and 8+ remain open — every Critical and
+all but two Important rows are done.
 
 Three lessons worth carrying. Row 5's stated direction was wrong and only the red run exposed it
 (see I3). Row 1's round-trip test *passed* on the deliberately-wrong stub, so it was checked against
@@ -458,7 +499,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | #  | ID    | Issue (anchor)                                                          | Severity  | Cx | Clarity      | Open decision |
 |----|-------|-------------------------------------------------------------------------|-----------|----|--------------|---------------|
 | 1  | C1    | Scale VCP 0x10 by reported max; stop truncating (`ddc.rs:311`)           | Critical  | M  | Mostly clear | ✅ resolved `7a1607a` — settled on scale-to-percent at the boundary |
-| 2  | I1    | Seed state for enumerable-but-unreadable monitors (`controller.rs:285`)  | Important | S  | Needs decision | What value/marker to seed; whether the OSD shows "unknown" |
+| 2  | I1    | Seed state for enumerable-but-unreadable monitors (`controller.rs:285`)  | Important | S  | Needs decision | ✅ resolved `5c8a653` — seed 50 + `brightness_known`; marker in the tray, not the OSD |
 | 3  | I5    | Delete dead `handle_cache` + both fictional comments (`ddc_worker.rs:33`)| Important | XS | Clear        | ✅ resolved `a2a9896` |
 | 4  | I7    | Mark the DDC probe manual-only (`tests/ddc_test.rs`)                    | Important | XS | Clear        | ✅ resolved `fc9c65b` |
 | 5  | I3    | `WM_DISPLAYCHANGE` → `Refresh` in the power window (`controller.rs:129`) | Important | S  | Clear        | ✅ resolved `d194bd2` — direction was wrong; window had to become top-level |
@@ -469,7 +510,7 @@ Row 2 is therefore a standalone controller-side change, not the second half of r
 | 10 | DEP-3 | Drop the dead `Win32_UI_Controls` feature                               | Cosmetic  | XS | Clear        | — |
 | 11 | DOC-1 | CHANGELOG: add the hotkey-startup-wait fix                              | Cosmetic  | XS | Clear        | — |
 | 12 | DOC-3 | Add `panic_hook.rs` to the module tree                                  | Cosmetic  | XS | Clear        | — |
-| 13 | DOC-4 | Fix `MonitorState` sample drift in architecture.md + CLAUDE.md          | Cosmetic  | XS | Clear        | — |
+| 13 | DOC-4 | Fix `MonitorState` sample drift in architecture.md + CLAUDE.md          | Cosmetic  | XS | Clear        | architecture.md half done in `5c8a653`; CLAUDE.md half open |
 | 14 | DOC-5 | Mark "Automated testing suite" partially implemented                    | Cosmetic  | XS | Clear        | — |
 | 15 | DOC-2 | Reconcile the `monitors` round-trip claim with `MonitorConfig`           | Cosmetic  | S  | Mostly clear | Loosen the type vs. soften the doc |
 | 16 | UX-3  | Decide and record the hand-rolled-vs-crates question; drop the scratch   | Cosmetic  | XS | Needs decision | Whether to pursue crate replacement at all |
