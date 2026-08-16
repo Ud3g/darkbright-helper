@@ -1,5 +1,10 @@
 # Architecture Review: darkbright-helper
 
+> **Superseded by [`architecture-review-2026-08-01.md`](architecture-review-2026-08-01.md).** This
+> document remains the record of the 2026-07-26 cycle and its resolution notes. Two rows it lists as
+> open — 18 (Dependabot) and 19 (fold `DdcSupervisor` onto `RespawnGate`) — have since landed in
+> `cb9d4b0` and `0d0a86e`; the other two (15, 17) are carried forward into the newer review.
+
 _Review date: 2026-07-26 · Reviewed at v0.8.0 + post-review polish (commit `e04ebf4`) · Independent
 pass. The prior cycle (2026-07-25, all 27 rows resolved) and the `windows` 0.52→0.62 migration that
 followed it are treated as done: resolved rows were deliberately not re-litigated. Investigation was
