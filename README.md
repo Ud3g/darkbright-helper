@@ -66,9 +66,10 @@ permits it, and I would rather you have the tool you want than wait on me.
 
 Prebuilt Windows binaries are published on
 [GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases)
-(releases after 0.8.0). They are not code-signed, so Windows will warn the first time you
-run one — see [Running an unsigned binary](#running-an-unsigned-binary) for what to expect
-and why. Alternatively, build from source as described below.
+(releases after 0.8.0), as a zip bundling the executable with its license files and
+third-party notices. The binaries are not code-signed, so Windows will warn the first time
+you run one — see [Running an unsigned binary](#running-an-unsigned-binary) for what to
+expect and why. Alternatively, build from source as described below.
 
 ### Prerequisites
 - Rust 1.88+ (2024 edition)
@@ -201,11 +202,12 @@ The release binaries are **not code-signed**. Your browser warns on download (Ed
 the first time you run each new version — proceed with **More info → Run anyway**.
 "Unrecognized" is not "malicious".
 
-You can also skip the prompt entirely by clearing the download mark once: right-click the
-`.exe` → **Properties** → tick **Unblock** → OK, or `Unblock-File .\darkbright-helper.exe`
-in PowerShell. On managed corporate machines an administrator may have removed the "Run
-anyway" option altogether; there, building from source is the way out, since locally built
-binaries carry no download mark and SmartScreen does not apply to them.
+You can also skip the prompt entirely by clearing the download mark on the `.zip` *before*
+extracting it: right-click it → **Properties** → tick **Unblock** → OK (or `Unblock-File`
+in PowerShell) — files extracted afterwards carry no mark. On managed corporate machines an
+administrator may have removed the "Run anyway" option altogether; there, building from
+source is the way out, since locally built binaries carry no download mark and SmartScreen
+does not apply to them.
 
 **Why it keeps coming back.** SmartScreen reputation attaches to the specific file, and an
 unsigned binary starts from zero with every release. Microsoft's own wording: "Unsigned
@@ -244,10 +246,16 @@ Security → App & Browser Control → Smart App Control**) or to wait for a sig
 since March 2026 it can be toggled without a clean install.
 
 **What you can verify.** Every release is built by the
-[release workflow](.github/workflows/release.yml) from a tagged commit in this repository
-and publishes a SHA-256 digest. Since you are being asked to click past a security warning,
-checking that hash is the meaningful step: `Get-FileHash .\darkbright-helper.exe`, compared
-against the release notes.
+[release workflow](.github/workflows/release.yml) from a tagged commit in this repository.
+The release notes carry the zip's SHA-256 (compare with `Get-FileHash`), and both the zip
+and the exe inside it have a signed build-provenance attestation:
+
+```powershell
+gh attestation verify .\darkbright-helper-<version>-windows-x64.zip --repo Ud3g/darkbright-helper
+```
+
+proves the artifact was built by this repository's workflow from a specific commit. Since
+you are being asked to click past a security warning, these checks are the meaningful step.
 
 ## Support and cadence
 
