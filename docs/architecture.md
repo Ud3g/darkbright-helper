@@ -80,7 +80,7 @@ Dedicated threads for I/O, main thread owns state and UI:
 ┌─────────────────────────────────────────────────────────────┐
 │                      Main Thread                            │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │           BrightnessController (owner)                │  │
+│  │        Controller (owner, in core/controller.rs)      │  │
 │  │    - processes messages from all threads              │  │
 │  │    - owns MonitorState map                            │  │
 │  │    - updates overlay/OSD (UI always responsive)       │  │
@@ -99,7 +99,7 @@ Dedicated threads for I/O, main thread owns state and UI:
 ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───┴───────────────────────────┐
 │  Hotkey   │ │  Power    │ │   Tray    │ │       DDC Worker Thread       │
 │  Thread   │ │  Thread   │ │  Thread   │ │  ┌───────────────────────┐    │
-│           │ │           │ │           │ │  │  - owns Vec<DdcMonitor>│   │
+│           │ │           │ │           │ │  │  - owns monitor HashMap│   │
 │ send()    │ │ send()    │ │ send()    │ │  │  - executes DDC I/O   │    │
 │  │        │ │  │        │ │  │        │ │  │  - sends results back │    │
 │  │        │ │  │        │ │  │        │ │  └───────────────────────┘    │
