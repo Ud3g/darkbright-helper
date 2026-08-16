@@ -1,40 +1,66 @@
 # darkbright-helper
 
-## Overview
-A hotkey-driven brightness adjustment tool for Windows.
+Brightness hotkeys for Windows monitors. Adjusts the hardware backlight over DDC/CI — and
+when 0 % is still too bright, keeps dimming with a black overlay. Multi-monitor aware: the
+hotkey hits the monitor your mouse is on. One executable, no network access, written in
+Rust.
 
-**Platform:** Windows only. The core logic in `src/core/` is deliberately kept
-platform-agnostic, so a Linux port would be structurally feasible — but it is **not planned
-and not promised**. I may look into it if there is real demand and I have the time and
-inclination; equally, it may never happen.
+<!-- Record docs/media/demo.gif before merging this branch — see the recording notes in the PR. -->
+![Pressing the hotkey lowers the on-screen brightness readout to 0 %, then keeps dimming the screen with the overlay](docs/media/demo.gif)
 
-## Language
-Rust (2024 edition) — chosen for cross-platform portability, low resource usage, and native Windows API integration (`windows` crate).
+## What it does
 
-## Features
+- **Dims below the hardware minimum.** When DDC/CI brightness reaches 0 % and the screen is
+  still too bright, a black fullscreen overlay with variable opacity takes over. *It does not
+  cover exclusive-fullscreen games or certain Windows system UI (taskbar, Start menu).*
+- **Drives the real backlight, not a filter.** For 1–100 % it talks to the monitor over
+  DDC/CI and sets VCP code `0x10` directly, so the panel actually gets darker.
+- **Multi-monitor, cursor-aware.** Per-monitor control; a hotkey affects the monitor the
+  mouse pointer is currently on. Monitors are identified by EDID, so the configuration
+  survives replugging and port changes.
+- **Stays out of the way.** An OSD overlay like the Windows volume indicator, plus a system
+  tray icon whose context menu shows live per-monitor status and offers Usage, Settings,
+  Open Log Folder and Quit — with warning entries and an icon badge while degraded (e.g.
+  DDC unavailable).
 
-### Brightness Below Hardware Minimum
-- Use a black fullscreen overlay with variable opacity
-- Allows "dimming" below what the monitor natively supports
-- *Note: Does not cover exclusive fullscreen games or certain Windows system UI (Taskbar, Start Menu).*
+## Download
 
-### Brightness Above Hardware Minimum
-- Communicate with monitor via DDC/CI protocol
-- Adjust VCP code `0x10` (brightness) directly
+Prebuilt Windows binaries are published on
+[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases)
+(releases after 0.8.0), as a zip bundling the executable with its license files and
+third-party notices.
 
-### Multi-Monitor Support
-- Per-monitor control
-- Hotkeys affect the monitor where the mouse pointer currently resides
+The binaries are not code-signed, so your browser warns on download and Windows warns the
+first time you run one. This is expected — see
+[Running an unsigned binary](#running-an-unsigned-binary) for what to expect, why it happens,
+and what you can verify. If you would rather not click past a warning, build from source
+instead (see [Build from source](#build-from-source)).
 
-### User Interface
-- OSD overlay (similar to Windows volume indicator)
-- Visual feedback on brightness changes
-- System tray icon with context menu: live per-monitor status, Usage, Settings, Open Log Folder, Quit — plus warning entries and an icon badge while degraded (e.g. DDC unavailable)
+## Quick start
+
+1. Run `darkbright-helper.exe`.
+2. `Ctrl+Shift+Up` increases the brightness of the monitor under your mouse pointer.
+3. `Ctrl+Shift+Down` decreases it.
+4. Once brightness reaches 0 %, continuing to decrease activates the dimming overlay.
+5. Right-click the tray icon for per-monitor status, Usage, Settings, the log folder, or Quit.
+
+Hotkeys:
+
+- **Primary**: `Ctrl+Shift+Up` / `Ctrl+Shift+Down` (reliable cross-keyboard default)
+- **Secondary**: dedicated brightness keys (`VK_BRIGHTNESS_UP`/`VK_BRIGHTNESS_DOWN`),
+  registered opportunistically — these do not work on every keyboard, see
+  [Brightness Key Limitations](#brightness-key-limitations)
+- Fully configurable via `config.json` (in `%APPDATA%`), see [Configuration](#configuration)
 
 ## Scope
 
 A deliberately narrow hobby project: adjust monitor brightness from the keyboard, on
 Windows, including below the hardware minimum. That is all it currently tries to do.
+
+**Platform:** Windows only. The core logic in `src/core/` is deliberately kept
+platform-agnostic, so a Linux port would be structurally feasible — but it is **not planned
+and not promised**. I may look into it if there is real demand and I have the time and
+inclination; equally, it may never happen.
 
 **Non-goals** — these are settled, not open questions:
 
@@ -54,45 +80,6 @@ None of these is promised, none has a timeline, and none is worth waiting for.
 
 If you need something this tool does not do, forking is genuinely encouraged — the licence
 permits it, and I would rather you have the tool you want than wait on me.
-
-## Hotkeys
-- **Primary**: `Ctrl+Shift+Up` / `Ctrl+Shift+Down` (reliable cross-keyboard default)
-- **Secondary**: Dedicated brightness keys (`VK_BRIGHTNESS_UP/DOWN`) registered opportunistically
-- Fully configurable via `config.json` (in `%APPDATA%`)
-
-## Installation & Build
-
-### Download
-
-Prebuilt Windows binaries are published on
-[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases)
-(releases after 0.8.0), as a zip bundling the executable with its license files and
-third-party notices. The binaries are not code-signed, so Windows will warn the first time
-you run one — see [Running an unsigned binary](#running-an-unsigned-binary) for what to
-expect and why. Alternatively, build from source as described below.
-
-### Prerequisites
-- Rust 1.88+ (2024 edition)
-- Windows 10 or 11
-
-### Build
-```bash
-git clone https://github.com/Ud3g/darkbright-helper.git
-cd darkbright-helper
-cargo build --release
-```
-The executable will be at `target/release/darkbright-helper.exe`.
-
-### Debug vs Release Builds
-
-| Build Type | Command | Console Window | Use Case |
-|------------|---------|----------------|----------|
-| **Debug** | `cargo build` | ✅ Visible | Development, viewing log output |
-| **Release** | `cargo build --release` | ❌ Hidden | End-user distribution |
-
-- **Debug builds** show a console window where log messages appear (controlled by `RUST_LOG` environment variable)
-- **Release builds** use `windows_subsystem = "windows"` to hide the console, providing a clean GUI-only experience
-- To diagnose a release build, enable the opt-in file log — see [Logging](#logging)
 
 ## Configuration
 
@@ -165,14 +152,6 @@ monitors' manufacturer and model names but no serial numbers and no file paths. 
 `logging.file_level` to `debug` or `trace` adds monitor serial numbers and absolute paths
 containing your Windows user name — fine for a diagnostic session you started deliberately,
 worth a glance before you attach the file to a bug report (see [Logging](#logging)).
-
-## Usage
-
-1. Run `darkbright-helper.exe`.
-2. Use `Ctrl+Shift+Up` to increase brightness.
-3. Use `Ctrl+Shift+Down` to decrease brightness.
-4. If brightness reaches 0%, continuing to decrease will activate the dimming overlay.
-5. Right-click the system tray icon to see per-monitor status and access Usage, Settings, the log folder, or Quit.
 
 ## Brightness Key Limitations
 
@@ -256,6 +235,34 @@ gh attestation verify .\darkbright-helper-<version>-windows-x64.zip --repo Ud3g/
 
 proves the artifact was built by this repository's workflow from a specific commit. Since
 you are being asked to click past a security warning, these checks are the meaningful step.
+
+## Build from source
+
+Written in Rust (2024 edition) — chosen for cross-platform portability, low resource usage,
+and native Windows API integration (`windows` crate).
+
+### Prerequisites
+- Rust 1.88+ (2024 edition)
+- Windows 10 or 11
+
+### Build
+```bash
+git clone https://github.com/Ud3g/darkbright-helper.git
+cd darkbright-helper
+cargo build --release
+```
+The executable will be at `target/release/darkbright-helper.exe`.
+
+### Debug vs Release Builds
+
+| Build Type | Command | Console Window | Use Case |
+|------------|---------|----------------|----------|
+| **Debug** | `cargo build` | ✅ Visible | Development, viewing log output |
+| **Release** | `cargo build --release` | ❌ Hidden | End-user distribution |
+
+- **Debug builds** show a console window where log messages appear (controlled by `RUST_LOG` environment variable)
+- **Release builds** use `windows_subsystem = "windows"` to hide the console, providing a clean GUI-only experience
+- To diagnose a release build, enable the opt-in file log — see [Logging](#logging)
 
 ## Support and cadence
 
