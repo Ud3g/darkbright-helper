@@ -60,7 +60,7 @@ Message enums (`BrightnessMessage` to main, `DdcCommand` to worker) are defined 
 - `src/error.rs` — `BrightnessError` enum + `pub type Result<T>`.
 - `src/lib.rs` — the crate is a lib + bin pair; `main.rs` consumes everything through `darkbright_helper::…`. Visibility rule: `pub` means the binary or `tests/` names it (see `docs/code-conventions.md`).
 
-Read `docs/architecture.md` for full design rationale (it is the source of truth for behavior), `docs/code-conventions.md` for FFI/style rules, and `docs/improvement-ideas.md` for the roadmap.
+Read `docs/architecture.md` for full design rationale (it is the source of truth for behavior) and `docs/code-conventions.md` for FFI/style rules. There is no roadmap doc in the repo: the README's "Scope" section states the non-goals, and deliberate technical positions live under "Maintenance Decisions" in `docs/architecture.md`.
 
 ## Project conventions (project-specific; standard Rust is assumed)
 
