@@ -274,10 +274,6 @@ happens at all. I would rather say that plainly than let you infer a promise I c
 Hardware-specific DDC/CI problems are the hardest case: monitors might misbehave in ways I
 cannot reproduce on my own hardware, and some of those I will close without a fix.
 
-## Future
-
-See [docs/improvement-ideas.md](docs/improvement-ideas.md) for planned features and potential enhancements.
-
 ## How this project was built
 
 The code in this repository is LLM-generated. I directed the work — requirements,

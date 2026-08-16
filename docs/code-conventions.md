@@ -175,8 +175,9 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
     a hand-rolled wrapper. `SafeHwnd` stays hand-rolled because its cleanup
     (`DestroyWindow`) doesn't fit the `Free` pattern — not every wrapper in the
     codebase is `Owned`-eligible yet, so absence of `Owned` isn't itself a
-    signal something's wrong; see `docs/improvement-ideas.md` for known
-    pre-`Owned` wrappers slated for opportunistic migration.
+    signal something's wrong; see "Maintenance Decisions" in
+    `docs/architecture.md` for known pre-`Owned` wrappers slated for
+    opportunistic migration.
 
 ---
 

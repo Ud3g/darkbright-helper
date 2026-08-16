@@ -1059,6 +1059,35 @@ Implementation: `src/platform/windows/single_instance.rs` (RAII `SingleInstance`
 
 ---
 
+## Maintenance Decisions
+
+Deliberate technical positions with no user-visible effect. They are recorded here so they
+do not silently drift into something nobody chose.
+
+### `windows` crate version policy
+
+The crate tracks the current minor; patch releases drift freely. Minor and major bumps are
+routine maintenance, but a **breaking** release gets its own branch and a full manual
+hardware pass — DDC, OSD, overlay, tray, hotkeys, power events — and is never folded in as a
+side effect of another change. The mechanics of why this crate sits outside the grouped
+Dependabot PR are covered under [Dependencies](#dependencies).
+
+There is no standing revisit interval: re-evaluate whenever upstream ships a breaking
+release that touches the API surface this project actually uses.
+
+### Hand-rolled handle wrappers predating `Owned<T>`
+
+`SafeHKey` and `SafeDevInfo` (`src/platform/windows/ddc.rs`) hand-roll their cleanup
+(`RegCloseKey`, `SetupDiDestroyDeviceInfoList`). Both predate the move to `windows` 0.62,
+whose `windows::core::Owned<T>` now covers exactly that pattern through its `Free` impls.
+
+They are functionally identical to an `Owned<T>` today, so this is not a defect and carries
+no deadline — fold the migration in opportunistically, the next time `ddc.rs` is touched for
+another reason. `SafeHwnd` is explicitly **not** a candidate: `DestroyWindow` does not fit
+the `Free` pattern. See `docs/code-conventions.md` § 3 for the rule this illustrates.
+
+---
+
 ## Testing
 
 ### Unit Tests
