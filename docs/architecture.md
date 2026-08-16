@@ -15,6 +15,19 @@
 | Serialization | `serde` + `serde_json` | De facto standard, config file handling |
 | Logging | `log` + `env_logger` | Standard facade pattern, runtime-configurable |
 
+Two mechanisms keep this set current, because they fail differently. CI's weekly
+`cargo audit` job answers "is anything here *known bad*"; Dependabot
+(`.github/dependabot.yml`, weekly) answers "is anything here *quietly stale*",
+which is this repo's actual failure mode — every drift so far was found by human
+review, never by tooling. Minor and patch updates arrive as one grouped PR;
+majors arrive individually so a breaking one cannot hold up the safe batch.
+
+`windows` is deliberately excluded from that group. A minor bump rewrites FFI
+signatures across `platform/windows/` and is only mergeable after the manual
+hardware pass noted in `Cargo.toml`, so it stands alone rather than blocking
+everything grouped with it. A bump that raises the minimum toolchain is caught
+by CI's separate MSRV job, not by the update PR itself.
+
 ---
 
 ## Core Architecture
@@ -34,6 +47,7 @@ src/
 │   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc>: message-driven orchestration behind OSD/overlay/DDC/locator seams, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
 │   ├── edid.rs           # EDID → MonitorId parsing
 │   ├── logfile.rs        # Size-capped rolling file log sink
+│   ├── panic_hook.rs     # Logs panic payload/location/thread, flushes sinks before exit
 │   ├── reconcile.rs      # Refresh generations, respawn backoff, watchdog policies
 │   └── state.rs          # Application state, messages, DDC commands
 └── platform/
@@ -104,6 +118,59 @@ Dedicated threads for I/O, main thread owns state and UI:
 - Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
+#### Main-Loop Cadence
+
+The main loop blocks in `rx.recv_timeout(16ms)` and pumps the Win32 message queue on
+every iteration, so it wakes ~62×/s for the life of the process. That number is chosen,
+not accreted, and this is the reasoning.
+
+**Why poll at all.** Three windows live on the main thread — OSD, dimming overlay and the
+usage window — and none has a message loop of its own; they are serviced only by
+`pump_windows_messages()`. A thread cannot block on an MPSC channel and the Win32 message
+queue at the same time, so one of the two has to be polled. The channel carries a rich
+enum and the queue does not, so the queue is the one that gets polled.
+
+**The timeout is not input latency.** Any `send()` wakes `recv_timeout` immediately, so
+hotkey presses, DDC results and the tray's menu-data request are served without waiting
+out the interval. The first OSD paint is not delayed either: after a message is handled
+the loop continues to the top and pumps before blocking again. The interval governs one
+thing only — how quickly *unsolicited* window messages are noticed.
+
+**What that leaves.** Only the OSD's auto-hide `WM_TIMER` and interaction with the usage
+window (its OK button, close box and repaints). The overlay needs no pumping at all: it is
+a layered `LWA_ALPHA` window with no `WM_PAINT` handler, composited by the DWM, and it is
+click-through like the OSD, so neither receives input.
+
+**The bounds are fixed by two other decisions.** Below, `osd.timeout_ms` may be configured
+as low as 100 ms, and an auto-hide must not visibly overshoot it. Above, Windows treats a
+top-level window whose thread has not pumped for 5 s as unresponsive and ghosts it. Any
+interval from roughly 25 ms to 1 s satisfies both; 16 ms sits at the responsive end.
+
+**Measured cost** (2026-07-26, release build, 11.9 h uptime): 0.72 s of CPU total, i.e.
+**0.0017 % of one core**, or ~60 ms per hour — and that figure includes startup, EDID
+parsing, window creation and every DDC refresh in the window. Sampled over 30 s of idle,
+the accumulated CPU time did not advance at all: ~0.27 µs of work per wake is below the
+scheduler's accounting granularity. The process does not call `timeBeginPeriod`, so it
+never raises the global timer resolution and its waits stay coalescable by the OS. Not
+covered by that measurement: the energy cost of denying the core deeper idle states, which
+is real but small next to any GUI process on the same machine.
+
+**An adaptive interval was considered and declined** — 16 ms while the OSD or usage window
+is up, ~250 ms otherwise. It works, it is about ten lines, and it would cut idle wakes 15×.
+It was not worth it: the saving is ~1.2 s of CPU per day, paid for with a predicate that
+can silently rot. A window added to the main thread later would have to be remembered in
+it, and forgetting is not something a test would catch — the symptom is a sluggish UI, not
+a failure. The overlay would also have to be deliberately *excluded* from such a predicate,
+since sub-zero dimming can be active for hours; including it out of caution would keep the
+fast path running through exactly the scenario the app exists for. A fully event-driven
+loop (`MsgWaitForMultipleObjects` plus a wake-post from every sender) was rejected further:
+`std::sync::mpsc` exposes no waitable handle, a forgotten post would delay a message
+silently, and supervision would still need a ~250 ms timer — so it lands at the same wake
+rate as the adaptive variant, for a transport rewrite.
+
+Revisit if a main-thread window ever becomes long-lived and interactive, or if battery
+profiling on a mobile machine says otherwise.
+
 ### State Management
 
 Message-passing with single ownership:
@@ -147,7 +214,15 @@ enum DdcCommand {
 The overlay is only used at 0% brightness. For all values > 0%, DDC/CI is used exclusively. This maximizes hardware control and minimizes GPU usage. Monitors with a high minimum brightness (e.g., DDC only goes down to 20%) will remain at that minimum level when set to 1-20%.
 
 **Mapping Algorithm: Linear**
-Logical brightness (0-100%) maps 1:1 to hardware values. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means exactly 50% backlight power.
+Logical brightness (0-100%) maps linearly onto whatever luminance range the monitor exposes. While human perception is logarithmic, a linear mapping is chosen for simplicity and predictability: 50% means 50% of that range.
+
+**The DDC scale is per-monitor and must not be assumed to be 0-100.**
+VCP 0x10 is a *continuous* control: the value is 16-bit on the wire and MCCS does not require the maximum to be 100. `GetVCPFeatureAndVCPFeatureReply` returns the monitor's declared maximum alongside the current value; `DdcMonitor` records it on each successful read and converts in both directions via `core::brightness::percent_from_vcp` / `vcp_from_percent`. Percentages are therefore the only currency above the platform seam, and no raw value leaves `platform/windows/ddc.rs`.
+
+Consequences worth knowing:
+- Until a read succeeds the common 0-100 scale is assumed, which makes the conversion a pass-through — an unreadable monitor is no worse off than before scaling existed.
+- On a monitor whose range is narrower than 100 steps, distinct percentages necessarily collapse onto the same raw value. Both ends stay reachable; the resolution is the hardware's.
+- The declared maximum is logged with each refresh read at `debug`, because a maximum other than 100 is the one condition that makes every brightness number in a log suspect, and it is not otherwise observable.
 
 ### 2. Monitor Identification: EDID-Based
 
@@ -259,6 +334,16 @@ Location: `%APPDATA%\BrightnessControl\config.json`
 **`version` Field:** No migration logic exists yet. A value other than the current schema version logs a warning at load; the fields are interpreted as the current schema (unknown fields are dropped by the parser) and the value is reset to the current version, so later writes describe what the file actually contains.
 
 **`monitors` Field:** Reserved for future per-monitor settings (e.g., min/max limits, custom step sizes, DDC disable). Empty `{}` for MVP. Schema will be defined based on real-world user feedback after v1.0. A non-empty map logs a warning at load ("not yet implemented"); entries are preserved and round-trip through saves so hand-written settings survive until the feature exists. Note that neither the key format (how a monitor is addressed in this map) nor the value shape is a contract yet — surviving hand-written entries may not match the eventual schema and may need manual migration when the feature lands.
+
+**When changes take effect:** at the next start, not while running. The file is read once
+during startup and the resulting `Config` is then cloned into the places that need it — the
+controller keeps one, the hotkey thread keeps another, `main` keeps the original. All three
+are immutable for the process lifetime, which is why no synchronisation is needed and why
+they cannot drift apart. There is no reload path: the tray's "Settings" item opens
+`config.json` in the default editor, but saving it changes nothing until the app is
+restarted. Live reload is the first thing that has to be built if the settings GUI on the
+roadmap lands, and it is what makes the three snapshots a design decision rather than an
+accident.
 
 **Hotkey String Format:**
 
@@ -523,6 +608,17 @@ retrievable artifact for field reports. Mechanics:
   line.
 - **Access:** the tray menu's "Open Log Folder" entry opens the directory in
   Explorer.
+- **Attach failure:** if the sink cannot be built (no `APPDATA`, an unwritable
+  directory, a locked file, a full disk), the app runs on without it — but the
+  failure is reported through the **tray**, not only the log. Announcing the
+  loss of a diagnostic channel on that same channel would reach nobody: the
+  file is by definition absent, and release builds hide the console, so a user
+  who set `file_enabled = true` to chase a problem would find an empty folder
+  and no explanation. The warning line points at the log folder because "Open
+  Log Folder" sits in the same menu, which is where that user is heading. It is
+  deliberately the one warning that does **not** raise the icon's amber badge —
+  see §13. Unlike a failed rotation, the attach is attempted exactly once, so
+  the condition is latched for the process.
 
 Formatting (timestamps, level, target, `key=value` pairs) comes from a second
 `env_logger` instance writing into the rotating file via `Target::Pipe`, so
@@ -553,6 +649,7 @@ The application maintains cached brightness values for instant OSD response. The
 | **Periodic** | 60s | `refresh.periodic_seconds` | Catches gradual drift from external changes |
 | **Inactivity** | 30s | `refresh.inactivity_seconds` | Resyncs before first adjustment after idle period |
 | **System Resume** | Always | (not configurable) | Monitors may reset brightness after sleep/hibernate |
+| **Display Change** | Always | (not configurable) | Topology changed: monitors added/removed, and handles may be reused for a different display |
 
 **Behavior:**
 
@@ -560,7 +657,11 @@ The application maintains cached brightness values for instant OSD response. The
 
 2. **Inactivity Refresh**: When user adjusts brightness after being inactive for N seconds, a refresh is triggered first. Uses non-blocking approach: refresh is initiated but adjustment proceeds optimistically. Values reconcile when DDC results arrive.
 
-3. **System Resume**: Power event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` (`WM_POWERBROADCAST`, handled in the window procedure — it is a sent message, never queued). The listener's message-only window must be explicitly subscribed via `RegisterSuspendResumeNotification`, since message-only windows are excluded from message broadcasts. Triggers immediate refresh since monitors often reset to default brightness after sleep.
+3. **System Resume**: The system event listener detects `PBT_APMRESUMEAUTOMATIC` and `PBT_APMRESUMESUSPEND` (`WM_POWERBROADCAST`, handled in the window procedure — it is a sent message, never queued). The window is explicitly subscribed via `RegisterSuspendResumeNotification`, the documented delivery guarantee for this message. Triggers immediate refresh since monitors often reset to default brightness after sleep.
+
+4. **Display Change**: The same listener handles `WM_DISPLAYCHANGE` and sends a plain `Refresh`. This is the only trigger that cannot be disabled or delayed by configuration, and it is the one that keeps handle→identity mapping honest: Windows may reuse a monitor handle for a different display across a topology change, so a stale `id_cache` entry could otherwise send an adjustment to the wrong monitor. Absence evidence is deliberately *not* reset — a monitor genuinely unplugged here should still age out and be pruned.
+
+   The listener's window is therefore a hidden **top-level** window, not a message-only one: message-only windows are excluded from broadcast messages, and `WM_DISPLAYCHANGE` is broadcast. (This is the same trap that once cost this module its resume detection; a unit test now pins the window's parent to the desktop so the property cannot silently regress.)
 
 **Overlap Protection:**
 
@@ -591,6 +692,27 @@ so a later `SetBrightness` is attempted against hardware (confirming or
 reverting through the normal optimistic protocol) instead of failing with
 "monitor not found" until the next refresh. Only the reported brightness
 value is missing — the main thread retains its cached value meanwhile.
+
+Set-capable requires *state*, so the main thread creates it for every
+enumerated monitor, not only the readable ones. A monitor that has never been
+read has no cached value to retain, so it is seeded at `UNREAD_BRIGHTNESS_SEED`
+(50, the midpoint — it bounds how far the first adjustment can jump from a value
+nobody knows) and marked `brightness_known: false`. Seeding is insert-only: a
+monitor that was readable before keeps its real last-known value, which always
+outranks a seed.
+
+The marker matters because the seed is a guess the user should not mistake for a
+measurement. It is cleared by the first evidence either way — a successful read
+or a write the hardware accepted — and until then the tray menu prefixes the
+value with `~`. The sharp case this covers is a panel that persistently NAKs the
+VCP *read* while honouring the *write*: previously permanently and silently
+uncontrollable, since every keypress returned "monitor not found" before
+reaching the OSD, so nothing moved and nothing was shown.
+
+The OSD deliberately shows the seeded value without a distinct visual state:
+after the first adjustment the value is authoritative anyway (the write
+established it), so a warning styling would flash once and never return. The
+standing signal lives in the tray, where it can persist.
 
 **Overlay Reconcile on External Change:**
 
@@ -699,9 +821,9 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
 ```rust
 struct MonitorState {
     cached_brightness: u8,          // Last confirmed DDC value
+    brightness_known: bool,         // False while the value is a seed, not an observation
     pending: Option<PendingSet>,    // Optimistic value + seq + sent-at, awaiting confirmation
     overlay_opacity: u8,            // Current overlay dimming level
-    last_refresh: Instant,
     missing_since: Option<Instant>, // First observed miss from the enumerated set; None while present
 }
 ```
@@ -740,8 +862,37 @@ permanently degrade the app. Two decoupled mechanisms:
 
 A worker that is hung (not dead) is never respawned — that would run two threads
 against the same physical-monitor handles. After `HUNG_TIMEOUT_LIMIT` consecutive
-set timeouts it is diagnosed as hung and DDC is disabled. A disabled DDC state
-recovers on user activity (a hotkey adjustment) or on system resume.
+set timeouts it is diagnosed as unresponsive.
+
+**The two degraded DDC states are distinct, because they differ in what ends
+them** (`DdcHealth` in `core/state.rs`). Conflating them is how a tray line
+comes to advertise a recovery that cannot work:
+
+| State | Cause | What ends it |
+|---|---|---|
+| `WorkerDead` | Respawn backoff exhausted; the thread is gone | A hotkey press (clears the backoff, so the next supervision pass respawns), or system resume |
+| `WorkerHung` | Thread alive but blocked inside a DDC call | **Any result the worker sends** — a result is proof it is not blocked. Also system resume, or the worker dying (below) |
+
+A keypress deliberately does **not** clear `WorkerHung`: it cannot unstick a
+blocked call, so clearing would only retract a warning that is still true and
+let it reappear seconds later when the next set times out — a flickering badge
+instead of a standing one.
+
+Proof-of-life is taken from *every* worker result, including failures and
+results the reconciler discards as stale: a worker reporting a NAK is answering,
+and answering is the whole of what the diagnosis denied. This is the only exit
+from `WorkerHung` that needs neither a resume nor a restart, and it costs
+nothing — the results already arrive.
+
+An unresponsive worker that subsequently *dies* is treated as a plain death and
+respawned. The reason not to respawn a hung worker went with the thread, and
+since no user action clears that state, leaving it standing would strand the app
+with no worker at all.
+
+Dispatch is deliberately **not** gated while degraded. A false hang diagnosis
+would otherwise turn a merely slow worker into a dead one, and the queue is
+harmless: sets are correlated by sequence id, so a backlog delivered late
+reconciles to the correct final value.
 
 | Constant | Value | Purpose |
 |---|---|---|
@@ -750,14 +901,27 @@ recovers on user activity (a hotkey adjustment) or on system resume.
 | `RESPAWN_MAX` / `RESPAWN_WINDOW` | 3 / 60 s | Respawn backoff before disabling DDC |
 | `HUNG_TIMEOUT_LIMIT` | 3 | Consecutive set timeouts before diagnosing a hang |
 
+**One restart policy, two supervised threads.** `RespawnGate`
+(`core/reconcile.rs`) holds the whole rule — deaths spaced apart restart
+indefinitely, a rapid crash loop within `RESPAWN_WINDOW` latches into a
+give-up state — and both the DDC worker and the hotkey thread run on that one
+instance of it. What differs is not the policy but the way back out:
+
+- The **DDC worker** has external recovery triggers, so `DdcSupervisor` calls
+  `RespawnGate::reset()` when one fires (a brightness keypress or a system
+  resume) and the gate reopens. The supervisor itself only translates a
+  decision into an action — spawn a replacement, or report that none was
+  spawned — because `RespawnOutcome` is what the controller needs to know.
+- The **hotkey thread** has no such trigger and never resets: once its restarts
+  are exhausted the tray says "restart the app" and means it. A failed restart
+  *attempt* latches immediately (`record_spawn_failure`) — a second attempt
+  would fail the same way.
+
 **Hotkey thread liveness.** The hotkey thread — the app's primary input — gets
 the same treatment: its message loop logs both exit paths (`WM_QUIT` and a
 `GetMessageW` error), and the main loop polls its `JoinHandle::is_finished()`.
-A dead hotkey thread is restarted (fresh message window, hotkeys re-registered)
-under a `RespawnGate` with the same `RESPAWN_MAX`/`RESPAWN_WINDOW` backoff:
-deaths spaced apart restart indefinitely, a rapid crash loop (or a failed
-restart attempt) latches into a logged give-up state until the app is
-restarted. The tray and power threads remain unsupervised by design — both are
+A dead hotkey thread is restarted with a fresh message window and hotkeys
+re-registered. The tray and power threads remain unsupervised by design — both are
 non-fatal conveniences. One release-build consequence is worth knowing: with
 the console hidden there is no Ctrl+C, so the tray menu's Quit is the only
 *graceful* shutdown path — if the tray thread dies, ending the process takes
@@ -766,7 +930,8 @@ file, brightness in the hardware, overlay windows die with the process).
 
 Both degraded states — DDC disabled and hotkeys given up — are surfaced to the
 user through the tray icon, tooltip, and menu (see §13, "Degraded-State
-Indicator"), not just the log.
+Indicator"), not just the log. A third condition rides the same channel without
+being a supervision state at all: a file log that failed to attach (§8).
 
 **Panic policy (deliberate).** Supervision covers *environmental* failures —
 hung hardware, dead threads. Panics are bugs and are handled fail-fast: a panic
@@ -819,14 +984,19 @@ The application runs as a background process with a system tray icon for user in
 
 **Degraded-State Indicator:**
 
-The two supervision give-up states (§12) — DDC disabled and hotkeys lost — are
-visible in the tray through two complementary paths:
+Three conditions are visible in the tray: the two supervision give-up states
+(§12) — DDC disabled and hotkeys lost — plus a file log that failed to attach
+(§8). They reach the user through two complementary paths:
 
 - **Pull (menu):** `TrayMenuData` carries a `HealthWarnings` snapshot; while a
-  warning is active the menu opens with grayed warning lines at the very top
-  ("⚠ DDC unavailable — press a brightness hotkey to retry", "⚠ Hotkeys
-  stopped working — restart the app"). Always current because the menu is
-  populated on open.
+  warning is active the menu opens with grayed warning lines at the very top.
+  The DDC line is chosen by cause, because each names the recovery that
+  actually applies: "⚠ DDC unavailable — press a brightness hotkey to retry"
+  for a dead worker, "⚠ Monitor not responding — restart the app if this
+  persists" for an unresponsive one (hedged, since it often frees itself).
+  Alongside them, "⚠ Hotkeys stopped working — restart the app" and "⚠ File
+  logging failed to start — check the log folder is writable". Always current
+  because the menu is populated on open.
 - **Push (icon + tooltip):** the main loop compares the controller's
   `HealthWarnings` each tick and, on a transition, posts a custom window
   message to the tray thread via `TrayStatusHandle` (`PostMessageW`, safe
@@ -834,10 +1004,19 @@ visible in the tray through two complementary paths:
   via `NIM_MODIFY`: while degraded the icon carries an amber corner badge
   (generated at startup by drawing the base icon into a DIB and painting the
   badge — no second icon asset), and the tooltip appends the active warnings
-  (e.g. "Brightness Control – DDC unavailable").
+  (e.g. "Brightness Control – DDC unavailable"). The `HealthWarnings` snapshot
+  crosses to the tray thread packed into the message's `wparam`, so the cause
+  has to survive that hop — a round-trip test pins the encoding. The badge
+  itself is raised only by the two supervision states: it means the app cannot
+  do its job, and a missing diagnostic log does not stop a single adjustment,
+  so letting it light the badge would weaken the signal for the conditions that
+  do. A failed file log therefore shows in the menu and the tooltip, never on
+  the icon.
 
-Recovery follows §12: DDC warnings clear on user activity or resume (the icon
-reverts automatically); the hotkey warning is latched until the app restarts.
+Recovery follows §12 and differs per cause: a dead worker's warning clears on
+user activity or resume, an unresponsive worker's clears when the worker answers
+again or on resume (the icon reverts automatically in both cases); the hotkey
+warning is latched until the app restarts.
 
 **Usage Window:**
 
@@ -949,12 +1128,16 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 5. **Expected**: Explorer opens the folder containing `config.json` and `darkbright.log`
 6. Set `logging.file_level` to `"verbose"` (invalid) and restart
 7. **Expected**: An error line reports the invalid value; the file logs at the default `info` level
+8. With `file_enabled` still `true`, make the sink unbuildable — e.g. deny your user write access to `%APPDATA%\BrightnessControl`, or hold `darkbright.log` open exclusively from another process — and start a **release** build (no console)
+9. **Expected**: The app runs normally and the tray menu opens with a grayed "⚠ File logging failed to start — check the log folder is writable" line; the tray icon stays unbadged (this condition does not mean brightness control is broken); the tooltip reads "Brightness Control – file logging off"
 
 #### Degraded-State Tray Indicator Test
 1. Start the application with `RUST_LOG=debug`
 2. Force a degraded DDC state (e.g. temporarily lower `HUNG_TIMEOUT_LIMIT`/`SET_TIMEOUT` in a test build and use a monitor/cable that drops DDC, or unplug all DDC-capable monitors and adjust repeatedly until "disabling DDC" is logged)
-3. **Expected**: The tray icon gains an amber corner badge; hovering shows "Brightness Control – DDC unavailable"; the menu opens with the grayed "⚠ DDC unavailable" line at the top; the menu's bottom line shows the running version
-4. Press a brightness hotkey (user activity is the recovery signal)
-5. **Expected**: Log shows "Recovering from degraded DDC state"; icon, tooltip, and menu revert to normal
+3. **Expected**: The tray icon gains an amber corner badge; the menu's bottom line shows the running version. The wording depends on which state was reached — check the log line to know which one you provoked:
+   - respawn backoff exhausted (`respawn backoff exceeded`): tooltip "Brightness Control – DDC unavailable", menu line "⚠ DDC unavailable — press a brightness hotkey to retry"
+   - unresponsive worker (`DDC worker unresponsive`): tooltip "Brightness Control – monitor not responding", menu line "⚠ Monitor not responding — restart the app if this persists"
+4. Press a brightness hotkey
+5. **Expected**: after the *backoff* state, the log shows "Recovering from degraded DDC state" and the icon, tooltip and menu revert. After the *unresponsive* state, the warning deliberately stays — a keypress cannot unstick a blocked call. It clears on its own once the worker answers again ("DDC worker answered again"), on system resume, or if the stuck thread exits ("Unresponsive DDC worker has exited")
 
 ---

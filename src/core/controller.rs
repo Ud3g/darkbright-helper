@@ -16,8 +16,8 @@ use crate::core::reconcile::{
     SET_TIMEOUT,
 };
 use crate::core::state::{
-    BrightnessMessage, DdcCommand, HealthWarnings, MonitorId, MonitorState, SetOutcome,
-    TrayMenuData, TrayMonitorInfo, generate_display_names,
+    BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, MonitorId, MonitorState, SetOutcome,
+    TrayMenuData, TrayMonitorInfo, UNREAD_BRIGHTNESS_SEED, generate_display_names,
 };
 use crate::error::{BrightnessError, Result};
 
@@ -123,9 +123,11 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     config: Config,
     /// Cache mapping platform handles to monitor ids (avoids repeated EDID reads).
     ///
-    /// The DDC worker keeps its own independent handle→id cache (thread
-    /// ownership, no shared state), each side invalidating on refresh under
-    /// its own rules. Changes to handle→identity mapping must cover both.
+    /// The only handle→identity mapping in the app: resolving one costs a
+    /// display-device enumeration plus a registry EDID read, far too slow for
+    /// the hotkey path. Invalidated wholesale when a refresh begins (handles
+    /// may be recycled across topology changes) and per-entry when a monitor
+    /// is pruned.
     id_cache: HashMap<MonitorHandle, MonitorId>,
     /// Supervised DDC worker.
     ddc: Ddc,
@@ -141,10 +143,13 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     last_health_check: Instant,
     /// Consecutive set timeouts while the worker is still alive (hang signal).
     consecutive_set_timeouts: u32,
-    /// True when DDC is disabled after respawn backoff or a diagnosed hang.
-    ddc_disabled: bool,
+    /// Condition of the DDC subsystem: healthy, or degraded with the cause
+    /// that says what can end it.
+    ddc_health: DdcHealth,
     /// True once hotkey supervision gave up; latched until app restart.
     hotkeys_lost: bool,
+    /// True once the opt-in file log failed to attach; latched until restart.
+    file_log_failed: bool,
     /// Monitor whose state the OSD is currently showing (for error restyling).
     osd_monitor: Option<MonitorId>,
 }
@@ -179,8 +184,9 @@ where
             next_seq: 0,
             last_health_check: now,
             consecutive_set_timeouts: 0,
-            ddc_disabled: false,
+            ddc_health: DdcHealth::Ok,
             hotkeys_lost: false,
+            file_log_failed: false,
             osd_monitor: None,
         }
     }
@@ -195,12 +201,24 @@ where
         self.hotkeys_lost = true;
     }
 
+    /// Records that the opt-in file log could not be attached.
+    ///
+    /// Latched, because the attach is attempted exactly once at startup: there
+    /// is no path by which the log can start appearing later, so nothing should
+    /// clear this. The report has to travel through the tray because the
+    /// failure of a diagnostic channel cannot be announced on that same
+    /// channel, and a release build hides the console.
+    pub fn set_file_log_failed(&mut self) {
+        self.file_log_failed = true;
+    }
+
     /// Returns the currently active degraded-subsystem warnings.
     #[must_use]
     pub fn health_warnings(&self) -> HealthWarnings {
         HealthWarnings {
-            ddc_degraded: self.ddc_disabled,
+            ddc: self.ddc_health,
             hotkeys_lost: self.hotkeys_lost,
+            file_log_failed: self.file_log_failed,
         }
     }
 
@@ -271,6 +289,8 @@ where
         enumerated: Vec<MonitorId>,
         now: Instant,
     ) {
+        self.note_worker_alive();
+
         let found_monitors = !monitors.is_empty();
 
         if found_monitors {
@@ -307,6 +327,24 @@ where
                 log::debug!(monitor_id:% = monitor_id.full_identity(); "New monitor identity");
                 self.states
                     .insert(monitor_id, MonitorState::new(brightness));
+            }
+        }
+
+        // A monitor that identified itself but refused the brightness read is
+        // reported as enumerated only. It still gets state: the worker kept its
+        // physical handle, so writes are attempted regardless, and a panel that
+        // NAKs reads while honouring writes would otherwise be permanently and
+        // silently uncontrollable. Insert-only — an existing state holds a real
+        // last-known value that outranks any seed.
+        for monitor_id in &enumerated {
+            if !self.states.contains_key(monitor_id) {
+                log::warn!(
+                    monitor:% = monitor_id.base_display_name(),
+                    seed = UNREAD_BRIGHTNESS_SEED;
+                    "Monitor enumerated but brightness unreadable; seeding so it stays adjustable"
+                );
+                self.states
+                    .insert(monitor_id.clone(), MonitorState::unread());
             }
         }
 
@@ -391,12 +429,28 @@ where
         }
     }
 
+    /// Records that the worker executed a command and reported back.
+    ///
+    /// Called for every result the worker sends, whatever it says. A result is
+    /// proof the thread is not blocked inside a DDC call, which is the only
+    /// thing an unresponsive diagnosis ever claimed — so this is where that
+    /// diagnosis is retracted, and the sole path out of it that needs neither
+    /// a system resume nor an app restart. Note the failure case counts too:
+    /// a worker that reports a NAK is answering, not hanging.
+    fn note_worker_alive(&mut self) {
+        self.consecutive_set_timeouts = 0;
+        if self.ddc_health == DdcHealth::WorkerHung {
+            log::info!("DDC worker answered again; clearing unresponsive state");
+            self.ddc_health = DdcHealth::Ok;
+        }
+    }
+
     /// Clears the degraded DDC state so a fresh attempt can be made.
     fn clear_degraded(&mut self) {
-        if self.ddc_disabled {
+        if self.ddc_health.is_degraded() {
             log::info!("Recovering from degraded DDC state");
         }
-        self.ddc_disabled = false;
+        self.ddc_health = DdcHealth::Ok;
         self.ddc.clear_backoff();
         self.consecutive_set_timeouts = 0;
     }
@@ -423,8 +477,13 @@ where
         // (must be checked BEFORE updating last_activity)
         self.check_inactivity_refresh(now);
 
-        // User activity is a recovery signal for a degraded DDC state.
-        if self.ddc_disabled {
+        // User activity is a recovery signal only for a worker we stopped
+        // restarting: clearing the backoff lets the next supervision pass spawn
+        // a replacement. It cannot unstick a worker blocked inside a DDC call,
+        // so that diagnosis stands until the worker itself answers — clearing
+        // it here would retract a warning that is still true, only for it to
+        // reappear seconds later when the next set times out.
+        if self.ddc_health == DdcHealth::WorkerDead {
             self.clear_degraded();
         }
 
@@ -577,6 +636,8 @@ where
         success: bool,
         error: Option<&str>,
     ) -> Result<()> {
+        self.note_worker_alive();
+
         let Some(state) = self.states.get_mut(monitor_id) else {
             log::warn!(monitor:% = monitor_id.base_display_name(); "Received DDC result for unknown monitor");
             log::debug!(monitor_id:% = monitor_id.full_identity(); "Unknown-monitor DDC result identity");
@@ -585,7 +646,6 @@ where
 
         match state.apply_set_result(seq, value, success) {
             SetOutcome::Confirmed | SetOutcome::GroundTruth => {
-                self.consecutive_set_timeouts = 0;
                 log::debug!(monitor_id:% = monitor_id, brightness = value; "DDC confirmed brightness");
                 if self.osd.is_visible() {
                     self.osd.update(state)?;
@@ -637,7 +697,20 @@ where
 
     /// Respawns the DDC worker if it has died (never merely because it is slow).
     fn supervise_worker(&mut self, now: Instant) {
-        if self.ddc_disabled || self.ddc.is_alive() {
+        if self.ddc.is_alive() {
+            return;
+        }
+        // A worker diagnosed as unresponsive that has since died is simply
+        // dead. The reason never to respawn a hung worker — two threads
+        // against the same physical-monitor handles — went with the thread,
+        // and no user action clears that diagnosis, so leaving it standing
+        // here would strand the app with no worker at all.
+        if self.ddc_health == DdcHealth::WorkerHung {
+            log::warn!("Unresponsive DDC worker has exited; treating it as a death");
+            self.ddc_health = DdcHealth::Ok;
+        }
+        // Backoff already exhausted: wait for a keypress or resume to retry.
+        if self.ddc_health.is_degraded() {
             return;
         }
         match self.ddc.respawn(now) {
@@ -651,7 +724,7 @@ where
             }
             RespawnOutcome::BackoffExceeded => {
                 log::error!("DDC worker respawn backoff exceeded; disabling DDC until recovery");
-                self.ddc_disabled = true;
+                self.ddc_health = DdcHealth::WorkerDead;
                 self.reconcile_all_pending();
                 self.reset_absence_evidence();
             }
@@ -679,11 +752,11 @@ where
             self.show_error_on_visible_osd();
 
             if self.ddc.is_alive()
-                && !self.ddc_disabled
+                && !self.ddc_health.is_degraded()
                 && self.consecutive_set_timeouts >= HUNG_TIMEOUT_LIMIT
             {
-                log::error!(count = self.consecutive_set_timeouts; "DDC worker unresponsive; disabling DDC until restart or resume");
-                self.ddc_disabled = true;
+                log::error!(count = self.consecutive_set_timeouts; "DDC worker unresponsive; disabling DDC until it answers, resume, or restart");
+                self.ddc_health = DdcHealth::WorkerHung;
             }
         }
 
@@ -791,6 +864,7 @@ where
                 TrayMonitorInfo {
                     display_name,
                     hardware_brightness: state.effective_brightness(),
+                    brightness_known: state.brightness_known,
                     overlay_opacity: state.overlay_opacity,
                 }
             })
@@ -802,8 +876,6 @@ where
 
         TrayMenuData {
             monitors,
-            hotkey_up: self.config.hotkeys.brightness_up.clone(),
-            hotkey_down: self.config.hotkeys.brightness_down.clone(),
             warnings: self.health_warnings(),
         }
     }
@@ -1033,6 +1105,104 @@ mod tests {
             before + 1,
             "gate stays open while enumerable"
         );
+    }
+
+    // ── Enumerable-but-unreadable monitors ───────────────────────────────
+
+    #[test]
+    fn an_enumerated_but_unreadable_monitor_is_seeded_so_it_stays_controllable() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        // The panel identifies (EDID readable) but NAKs the VCP read. The
+        // worker keeps its handle so writes are still attempted.
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        let state = c
+            .states
+            .get(&test_id())
+            .expect("unreadable monitor gets state");
+        assert_eq!(
+            state.cached_brightness, UNREAD_BRIGHTNESS_SEED,
+            "seeded at the documented midpoint"
+        );
+        assert!(
+            !state.brightness_known,
+            "the seed is a guess, not an observation"
+        );
+    }
+
+    #[test]
+    fn a_seeded_monitor_accepts_an_adjustment_instead_of_a_dead_keypress() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        c.handle_adjust(None, 10, base)
+            .expect("an unreadable but writable monitor must still adjust");
+
+        assert!(
+            matches!(
+                c.ddc.sent.last(),
+                Some(DdcCommand::SetBrightness { value: 60, .. })
+            ),
+            "the write reaches the hardware"
+        );
+        assert!(c.osd.visible, "and the user gets feedback");
+    }
+
+    #[test]
+    fn a_later_successful_read_replaces_the_seed() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        deliver_refresh(&mut c, vec![(test_id(), 70)], vec![test_id()], base);
+
+        let state = &c.states[&test_id()];
+        assert_eq!(state.cached_brightness, 70);
+        assert!(state.brightness_known, "an observation outranks the seed");
+    }
+
+    #[test]
+    fn a_confirmed_set_establishes_a_seeded_monitors_brightness() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+        c.handle_adjust(None, 10, base).unwrap();
+
+        c.handle_message(
+            BrightnessMessage::DdcSetResult {
+                monitor_id: test_id(),
+                value: 60,
+                seq: 0,
+                success: true,
+                error: None,
+            },
+            base,
+        )
+        .unwrap();
+
+        let state = &c.states[&test_id()];
+        assert_eq!(state.cached_brightness, 60);
+        assert!(
+            state.brightness_known,
+            "a write the hardware accepted establishes the value"
+        );
+    }
+
+    #[test]
+    fn seeding_never_overwrites_a_monitor_that_already_has_state() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 80);
+
+        // Read starts failing (standby, KVM) while the panel stays enumerable.
+        deliver_refresh(&mut c, vec![], vec![test_id()], base);
+
+        let state = &c.states[&test_id()];
+        assert_eq!(state.cached_brightness, 80, "last known value survives");
+        assert!(state.brightness_known, "and stays an observation");
     }
 
     #[test]
@@ -1467,16 +1637,36 @@ mod tests {
     }
 
     #[test]
-    fn adjust_while_degraded_clears_degraded_state() {
+    fn adjust_clears_an_exhausted_respawn_backoff() {
         let base = Instant::now();
         let mut c = test_controller(base);
         seed(&mut c, test_id(), 50);
-        c.ddc_disabled = true;
+        c.ddc_health = DdcHealth::WorkerDead;
 
         c.handle_adjust(None, 10, base).unwrap();
 
-        assert!(!c.ddc_disabled, "user activity is the recovery signal");
+        assert_eq!(
+            c.ddc_health,
+            DdcHealth::Ok,
+            "a keypress clears the backoff so the next pass can respawn"
+        );
         assert_eq!(c.ddc.backoff_clears, 1);
+    }
+
+    #[test]
+    fn adjust_does_not_retract_a_hung_worker_diagnosis() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+        c.ddc_health = DdcHealth::WorkerHung;
+
+        c.handle_adjust(None, 10, base).unwrap();
+
+        assert_eq!(
+            c.ddc_health,
+            DdcHealth::WorkerHung,
+            "a keypress cannot unstick a blocked DDC call, so the warning stands"
+        );
     }
 
     // ── Set results ──────────────────────────────────────────────────────
@@ -1582,7 +1772,7 @@ mod tests {
 
         supervise_at(&mut c, base + Duration::from_secs(1));
 
-        assert!(c.ddc_disabled);
+        assert_eq!(c.ddc_health, DdcHealth::WorkerDead);
         assert!(c.states[&id].missing_since.is_none());
     }
 
@@ -1604,10 +1794,99 @@ mod tests {
         }
 
         assert_eq!(c.consecutive_set_timeouts, HUNG_TIMEOUT_LIMIT);
-        assert!(
-            c.ddc_disabled,
-            "alive-but-hung worker diagnosed after limit"
+        assert_eq!(
+            c.ddc_health,
+            DdcHealth::WorkerHung,
+            "an alive-but-unresponsive worker is a different condition from a dead one"
         );
+    }
+
+    /// Puts the controller in the state a hung worker leaves behind: diagnosed
+    /// unresponsive, with the timeout counter at the limit that got it there.
+    fn diagnosed_hung(c: &mut TestController) {
+        c.ddc_health = DdcHealth::WorkerHung;
+        c.consecutive_set_timeouts = HUNG_TIMEOUT_LIMIT;
+    }
+
+    #[test]
+    fn a_hung_worker_that_later_dies_is_respawned_without_a_keypress() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+        diagnosed_hung(&mut c);
+
+        // The blocked thread finally unwound and exited. The reason not to
+        // respawn a hung worker — two threads against the same physical-monitor
+        // handles — died with it, and since a keypress no longer clears this
+        // state, nothing else would ever get the worker back.
+        c.ddc.alive = false;
+        supervise_at(&mut c, base + Duration::from_secs(1));
+
+        assert_eq!(c.ddc.respawns, 1, "a dead worker is dead, hung or not");
+        assert_eq!(c.ddc_health, DdcHealth::Ok);
+    }
+
+    #[test]
+    fn a_set_result_retracts_the_hung_diagnosis() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        diagnosed_hung(&mut c);
+
+        // The blocked call finally returned and the worker reported it.
+        c.handle_ddc_set_result(&id, 60, 0, true, None).unwrap();
+
+        assert_eq!(
+            c.ddc_health,
+            DdcHealth::Ok,
+            "a worker that answers is by definition not blocked"
+        );
+        assert_eq!(c.consecutive_set_timeouts, 0);
+    }
+
+    #[test]
+    fn a_failed_set_result_is_proof_of_life_too() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        diagnosed_hung(&mut c);
+
+        // The worker ran the command and reported a NAK. The set failed; the
+        // worker did not — a hang is about not answering, not about failing.
+        c.handle_ddc_set_result(&id, 60, 0, false, Some("nak"))
+            .unwrap();
+
+        assert_eq!(c.ddc_health, DdcHealth::Ok);
+        assert_eq!(c.consecutive_set_timeouts, 0);
+    }
+
+    #[test]
+    fn a_refresh_result_is_proof_of_life_too() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+        diagnosed_hung(&mut c);
+
+        deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+
+        assert_eq!(c.ddc_health, DdcHealth::Ok);
+        assert_eq!(c.consecutive_set_timeouts, 0);
+    }
+
+    #[test]
+    fn a_stale_set_result_is_still_proof_of_life() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+        c.handle_adjust(None, 10, base).unwrap(); // seq 0
+        c.handle_adjust(None, 10, base).unwrap(); // seq 1 is now pending
+        diagnosed_hung(&mut c);
+
+        // A result the reconciler discards (superseded seq) still says the
+        // worker is executing commands, which is all the diagnosis was about.
+        c.handle_ddc_set_result(&id, 60, 0, true, None).unwrap();
+
+        assert_eq!(c.ddc_health, DdcHealth::Ok);
     }
 
     #[test]
@@ -1631,7 +1910,7 @@ mod tests {
             "one pass is one hang signal regardless of monitor count"
         );
         assert!(
-            !c.ddc_disabled,
+            !c.ddc_health.is_degraded(),
             "a single pass must not reach the hang limit"
         );
     }
@@ -1668,14 +1947,16 @@ mod tests {
         let mut c = test_controller(base);
         let id = seed(&mut c, test_id(), 50);
         deliver_refresh(&mut c, vec![], vec![other_id()], base);
-        c.ddc_disabled = true;
+        // A hang is the harder case: unlike a keypress, a resume can genuinely
+        // end one — the panel that stalled the bus was likely asleep.
+        c.ddc_health = DdcHealth::WorkerHung;
 
         let cont = c
             .handle_message(BrightnessMessage::SystemResumed, base)
             .unwrap();
 
         assert!(cont);
-        assert!(!c.ddc_disabled);
+        assert_eq!(c.ddc_health, DdcHealth::Ok);
         assert!(
             c.states[&id].missing_since.is_none(),
             "evidence discarded on resume"
@@ -1725,7 +2006,6 @@ mod tests {
         assert_eq!(data.monitors[0].display_name, "DEL U2722D");
         assert_eq!(data.monitors[0].hardware_brightness, 55);
         assert_eq!(data.monitors[0].overlay_opacity, 20);
-        assert_eq!(data.hotkey_up, c.config.hotkeys.brightness_up);
     }
 
     #[test]
@@ -1754,18 +2034,46 @@ mod tests {
     }
 
     #[test]
-    fn tray_menu_data_reports_ddc_degraded() {
+    fn tray_menu_data_reports_the_ddc_condition_not_just_that_there_is_one() {
         let base = Instant::now();
         let mut c = test_controller(base);
-        c.ddc_disabled = true;
+        c.ddc_health = DdcHealth::WorkerHung;
 
         let (reply_tx, reply_rx) = mpsc::channel();
         c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
             .unwrap();
 
         let data = reply_rx.try_recv().expect("menu data sent");
-        assert!(data.warnings.ddc_degraded);
+        assert_eq!(
+            data.warnings.ddc,
+            DdcHealth::WorkerHung,
+            "the menu picks its wording from the cause, so the cause must survive"
+        );
         assert!(!data.warnings.hotkeys_lost);
+    }
+
+    #[test]
+    fn a_failed_file_log_attach_is_surfaced_and_latched() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 50);
+
+        c.set_file_log_failed();
+
+        assert!(
+            c.health_warnings().file_log_failed,
+            "the console warning is invisible in release; the tray is the channel that exists"
+        );
+
+        // The attach is attempted exactly once at startup, so nothing that
+        // happens afterwards can make the log appear.
+        c.handle_adjust(None, 10, base).unwrap();
+        c.handle_message(BrightnessMessage::SystemResumed, base)
+            .unwrap();
+        assert!(
+            c.health_warnings().file_log_failed,
+            "no recovery path exists, so the warning must not clear"
+        );
     }
 
     #[test]
@@ -1780,7 +2088,7 @@ mod tests {
 
         let data = reply_rx.try_recv().expect("menu data sent");
         assert!(data.warnings.hotkeys_lost);
-        assert!(!data.warnings.ddc_degraded);
+        assert!(!data.warnings.ddc.is_degraded());
     }
 
     #[test]
@@ -1788,7 +2096,7 @@ mod tests {
         let base = Instant::now();
         let mut c = test_controller(base);
         seed(&mut c, test_id(), 50);
-        c.ddc_disabled = true;
+        c.ddc_health = DdcHealth::WorkerDead;
         c.set_hotkeys_lost();
 
         // User activity clears the degraded DDC state, but a dead hotkey
@@ -1796,7 +2104,7 @@ mod tests {
         c.handle_adjust(None, 10, base).unwrap();
 
         let warnings = c.health_warnings();
-        assert!(!warnings.ddc_degraded, "activity recovers DDC");
+        assert!(!warnings.ddc.is_degraded(), "activity recovers DDC");
         assert!(warnings.hotkeys_lost, "hotkey give-up is latched");
     }
 

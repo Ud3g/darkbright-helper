@@ -44,10 +44,6 @@ pub enum BrightnessError {
     #[error("Failed to create tray icon: {0}")]
     TrayIconCreation(String),
 
-    /// Failed to create the tray popup menu.
-    #[error("Failed to create tray menu: {0}")]
-    TrayMenuCreation(String),
-
     // ── Configuration Errors ─────────────────────────────────────────────
     /// Failed to read the configuration file.
     #[error("Failed to read config file '{path}': {source}")]
@@ -106,7 +102,10 @@ pub enum BrightnessError {
 
 impl BrightnessError {
     /// Creates a new DDC communication error.
-    pub fn ddc_communication(monitor: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn ddc_communication(
+        monitor: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self::DdcCommunication {
             monitor: monitor.into(),
             message: message.into(),
@@ -122,7 +121,7 @@ impl BrightnessError {
     }
 
     /// Creates a new Windows API error with the given function name and error code.
-    pub fn windows_api(function: impl Into<String>, error_code: u32) -> Self {
+    pub(crate) fn windows_api(function: impl Into<String>, error_code: u32) -> Self {
         Self::WindowsApi {
             function: function.into(),
             error_code,
@@ -130,17 +129,12 @@ impl BrightnessError {
     }
 
     /// Creates a new tray icon creation error.
-    pub fn tray_icon_creation(message: impl Into<String>) -> Self {
+    pub(crate) fn tray_icon_creation(message: impl Into<String>) -> Self {
         Self::TrayIconCreation(message.into())
     }
 
-    /// Creates a new tray menu creation error.
-    pub fn tray_menu_creation(message: impl Into<String>) -> Self {
-        Self::TrayMenuCreation(message.into())
-    }
-
     /// Creates a new config read error.
-    pub fn config_read(path: impl Into<String>, source: std::io::Error) -> Self {
+    pub(crate) fn config_read(path: impl Into<String>, source: std::io::Error) -> Self {
         Self::ConfigRead {
             path: path.into(),
             source,
@@ -156,7 +150,7 @@ impl BrightnessError {
     }
 
     /// Creates a new config write error.
-    pub fn config_write(path: impl Into<String>, source: std::io::Error) -> Self {
+    pub(crate) fn config_write(path: impl Into<String>, source: std::io::Error) -> Self {
         Self::ConfigWrite {
             path: path.into(),
             source,
@@ -164,7 +158,7 @@ impl BrightnessError {
     }
 
     /// Creates a new config parse error.
-    pub fn config_parse(path: impl Into<String>, source: serde_json::Error) -> Self {
+    pub(crate) fn config_parse(path: impl Into<String>, source: serde_json::Error) -> Self {
         Self::ConfigParse {
             path: path.into(),
             source,

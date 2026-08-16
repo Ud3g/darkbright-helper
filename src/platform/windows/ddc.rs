@@ -27,6 +27,7 @@ use windows::core::PCWSTR;
 use std::thread;
 use std::time::Duration;
 
+use crate::core::brightness::{percent_from_vcp, vcp_from_percent};
 use crate::core::edid::parse_edid;
 use crate::core::state::MonitorId;
 use crate::error::{BrightnessError, Result};
@@ -110,7 +111,7 @@ impl std::fmt::Debug for PhysicalMonitor {
 impl PhysicalMonitor {
     /// Returns the raw handle to the physical monitor.
     #[must_use]
-    pub fn handle(&self) -> HANDLE {
+    pub(crate) fn handle(&self) -> HANDLE {
         self.inner.hPhysicalMonitor
     }
 }
@@ -248,7 +249,7 @@ pub fn get_vcp_feature(
 /// # Errors
 ///
 /// Returns a `WindowsApi` error if the VCP feature cannot be set.
-pub fn set_vcp_feature(
+pub(crate) fn set_vcp_feature(
     monitor: &PhysicalMonitor,
     monitor_label: &str,
     vcp_code: u8,
@@ -269,61 +270,74 @@ pub fn set_vcp_feature(
 
 /// High-level wrapper for a physical monitor with DDC/CI capabilities.
 ///
-/// Combines the physical handle, monitor ID, and brightness caching.
+/// This type is the boundary between raw DDC/CI luminance values and the
+/// percentages the rest of the crate speaks: both accessors below take and
+/// return percentages, and no raw value escapes.
 #[derive(Debug)]
-pub struct DdcMonitor {
+pub(crate) struct DdcMonitor {
     handle: PhysicalMonitor,
     id: MonitorId,
-    cached_brightness: Option<u32>,
+    /// Maximum VCP 0x10 value this monitor declares, learned from the first
+    /// successful read.
+    ///
+    /// Luminance is a *continuous* VCP control: the value is 16-bit on the wire
+    /// and MCCS does not require the maximum to be 100, so the monitor's own
+    /// declared range is the only correct divisor. `None` until a read
+    /// succeeds, which callers must treat as "assume the common 0-100 scale"
+    /// rather than "no scaling" — see `percent_from_vcp`.
+    reported_max: Option<u32>,
 }
 
 impl DdcMonitor {
     /// Creates a new `DdcMonitor` instance.
     #[must_use]
-    pub fn new(handle: PhysicalMonitor, id: MonitorId) -> Self {
+    pub(crate) fn new(handle: PhysicalMonitor, id: MonitorId) -> Self {
         Self {
             handle,
             id,
-            cached_brightness: None,
+            reported_max: None,
         }
     }
 
-    /// Returns the monitor's unique identifier.
-    #[must_use]
-    pub fn id(&self) -> &MonitorId {
-        &self.id
-    }
-
-    /// Returns the cached brightness value, if available.
-    #[must_use]
-    pub fn cached_brightness(&self) -> Option<u32> {
-        self.cached_brightness
-    }
-
-    /// Reads the current brightness from the monitor via DDC/CI.
+    /// Returns the maximum VCP 0x10 value the monitor declared, if a read has
+    /// established it.
     ///
-    /// Updates the cached brightness value on success.
+    /// Worth logging: a maximum other than 100 is the condition under which
+    /// every unscaled brightness value in a field log is wrong, and it is not
+    /// otherwise observable.
+    #[must_use]
+    pub(crate) fn reported_max(&self) -> Option<u32> {
+        self.reported_max
+    }
+
+    /// Reads the current brightness from the monitor via DDC/CI, as a
+    /// percentage of the range the monitor declares.
+    ///
+    /// Records that declared range for use by subsequent writes.
     ///
     /// # Errors
     ///
     /// Returns a `WindowsApi` error if the brightness cannot be read.
-    pub fn get_brightness(&mut self) -> Result<u32> {
-        let (current, _) = get_vcp_feature(&self.handle, &self.id.base_display_name(), 0x10)?;
-        self.cached_brightness = Some(current);
-        Ok(current)
+    pub(crate) fn get_brightness(&mut self) -> Result<u8> {
+        let (current, max) = get_vcp_feature(&self.handle, &self.id.base_display_name(), 0x10)?;
+        self.reported_max = Some(max);
+
+        Ok(percent_from_vcp(current, self.reported_max))
     }
 
-    /// Sets the brightness of the monitor via DDC/CI.
+    /// Sets the brightness of the monitor via DDC/CI, given a percentage.
     ///
-    /// Updates the cached brightness value on success.
+    /// The percentage is scaled onto the range the monitor declared on the last
+    /// successful read. Without one, the common 0-100 scale is assumed — the
+    /// same value this code sent before it scaled at all, so an unreadable
+    /// monitor is no worse off than it was.
     ///
     /// # Errors
     ///
     /// Returns a `WindowsApi` error if the brightness cannot be set.
-    pub fn set_brightness(&mut self, value: u32) -> Result<()> {
-        set_vcp_feature(&self.handle, &self.id.base_display_name(), 0x10, value)?;
-        self.cached_brightness = Some(value);
-        Ok(())
+    pub(crate) fn set_brightness(&mut self, percent: u8) -> Result<()> {
+        let raw = vcp_from_percent(percent, self.reported_max);
+        set_vcp_feature(&self.handle, &self.id.base_display_name(), 0x10, raw)
     }
 }
 

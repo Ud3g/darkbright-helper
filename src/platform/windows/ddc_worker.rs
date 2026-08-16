@@ -10,27 +10,25 @@ use std::time::Instant;
 
 use windows::Win32::Graphics::Gdi::HMONITOR;
 
-use crate::core::reconcile::{RESPAWN_MAX, RESPAWN_WINDOW, respawn_allowed};
+use crate::core::reconcile::{
+    RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate, RespawnOutcome,
+};
 use crate::core::state::{BrightnessMessage, DdcCommand, MonitorId};
 use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
 };
 
-use super::hmonitor_to_isize;
-
 /// Worker thread that handles all DDC/CI communication.
 ///
 /// The worker owns all `DdcMonitor` instances and processes commands
 /// from the main thread, sending results back via the response channel.
-pub struct DdcWorker {
+pub(crate) struct DdcWorker {
     /// DDC monitors indexed by their `MonitorId`.
-    monitors: HashMap<MonitorId, DdcMonitor>,
-    /// Maps `HMONITOR` handles to `MonitorId` for quick lookup.
     ///
-    /// The core controller keeps its own independent handle→id cache (thread
-    /// ownership, no shared state), each side invalidating on refresh under
-    /// its own rules. Changes to handle→identity mapping must cover both.
-    handle_cache: HashMap<isize, MonitorId>,
+    /// Commands address monitors by identity, never by platform handle, so the
+    /// worker needs no handle→id mapping of its own; resolving a cursor
+    /// position to an identity happens on the main thread.
+    monitors: HashMap<MonitorId, DdcMonitor>,
     /// Receiver for commands from the main thread.
     cmd_rx: Receiver<DdcCommand>,
     /// Sender for results back to the main thread.
@@ -45,10 +43,9 @@ impl DdcWorker {
     /// * `cmd_rx` - Receiver for `DdcCommand` messages from the main thread.
     /// * `resp_tx` - Sender for `BrightnessMessage` results back to the main thread.
     #[must_use]
-    pub fn new(cmd_rx: Receiver<DdcCommand>, resp_tx: Sender<BrightnessMessage>) -> Self {
+    pub(crate) fn new(cmd_rx: Receiver<DdcCommand>, resp_tx: Sender<BrightnessMessage>) -> Self {
         Self {
             monitors: HashMap::new(),
-            handle_cache: HashMap::new(),
             cmd_rx,
             resp_tx,
         }
@@ -58,7 +55,7 @@ impl DdcWorker {
     ///
     /// This method blocks until a `DdcCommand::Shutdown` is received
     /// or the command channel is disconnected.
-    pub fn run(mut self) {
+    pub(crate) fn run(mut self) {
         log::info!("DDC worker thread started");
 
         loop {
@@ -92,7 +89,7 @@ impl DdcWorker {
     /// Handles a `SetBrightness` command.
     fn handle_set_brightness(&mut self, monitor_id: &MonitorId, value: u8, seq: u64) {
         let result = if let Some(monitor) = self.monitors.get_mut(monitor_id) {
-            monitor.set_brightness(u32::from(value))
+            monitor.set_brightness(value)
         } else {
             log::warn!(monitor_id:% = monitor_id; "Monitor not found");
             Err(crate::BrightnessError::MonitorNotFound(
@@ -137,7 +134,6 @@ impl DdcWorker {
 
         // Clear existing state
         self.monitors.clear();
-        self.handle_cache.clear();
 
         let mut results: Vec<(MonitorId, u8)> = Vec::new();
         let mut enumerated: Vec<MonitorId> = Vec::new();
@@ -175,8 +171,6 @@ impl DdcWorker {
         // handle: a handle-open or brightness-read failure below must count
         // as unreadable, not as absent from the topology.
         enumerated.push(monitor_id.clone());
-        self.handle_cache
-            .insert(hmonitor_to_isize(hmonitor), monitor_id.clone());
 
         // Get physical monitors for DDC
         let physical_monitors = get_physical_monitors(hmonitor)?;
@@ -187,12 +181,13 @@ impl DdcWorker {
             // Read current brightness
             match ddc_mon.get_brightness() {
                 Ok(brightness) => {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let brightness_u8 = brightness as u8;
+                    // The monitor's declared range travels with the value: a
+                    // maximum other than 100 is the one condition that makes
+                    // every brightness number in a log suspect, and a field log
+                    // is the only place it can be observed.
+                    log::debug!(monitor_id:% = monitor_id.full_identity(), brightness = brightness, reported_max:? = ddc_mon.reported_max(); "Read monitor brightness");
 
-                    log::debug!(monitor_id:% = monitor_id.full_identity(), brightness = brightness_u8; "Read monitor brightness");
-
-                    results.push((monitor_id.clone(), brightness_u8));
+                    results.push((monitor_id.clone(), brightness));
                     self.monitors.insert(monitor_id.clone(), ddc_mon);
                 }
                 Err(e) => {
@@ -228,18 +223,22 @@ impl DdcWorker {
     }
 }
 
-pub use crate::core::reconcile::RespawnOutcome;
-
 /// Owns the DDC worker thread and can respawn it after a confirmed death.
 ///
 /// The supervisor holds the command-channel sender, the worker's join handle,
 /// and a persistent response-channel sender used to wire each new worker.
-/// Respawns are rate-limited by a sliding window (see [`respawn_allowed`]).
+///
+/// The restart *policy* is not implemented here: it is [`RespawnGate`], the
+/// same crash-loop backoff the hotkey thread uses, so there is one place to
+/// change how often a supervised thread may be restarted. This type decides
+/// only what a decision means for a worker — spawn a replacement, or report
+/// that none was spawned — and translates it into [`RespawnOutcome`], which is
+/// what the controller actually needs to know.
 pub struct DdcSupervisor {
     cmd_tx: Sender<DdcCommand>,
     handle: JoinHandle<()>,
     resp_tx: Sender<BrightnessMessage>,
-    recent_respawns: Vec<Instant>,
+    gate: RespawnGate,
 }
 
 impl DdcSupervisor {
@@ -254,7 +253,7 @@ impl DdcSupervisor {
             cmd_tx,
             handle,
             resp_tx,
-            recent_respawns: Vec::new(),
+            gate: RespawnGate::new(RESPAWN_WINDOW, RESPAWN_MAX),
         }
     }
 
@@ -272,39 +271,38 @@ impl DdcSupervisor {
     ///
     /// Returns `SendError` if the worker's receiver has been dropped (the
     /// worker has died) — callers treat this as a hard failure.
-    pub fn send(&self, cmd: DdcCommand) -> Result<(), SendError<DdcCommand>> {
+    pub(crate) fn send(&self, cmd: DdcCommand) -> Result<(), SendError<DdcCommand>> {
         self.cmd_tx.send(cmd)
     }
 
     /// Whether the worker thread is still running.
     #[must_use]
-    pub fn is_alive(&self) -> bool {
+    pub(crate) fn is_alive(&self) -> bool {
         !self.handle.is_finished()
     }
 
     /// Attempts to respawn a dead worker, honouring the backoff window.
-    pub fn respawn(&mut self, now: Instant) -> RespawnOutcome {
-        self.recent_respawns
-            .retain(|&t| now.saturating_duration_since(t) < RESPAWN_WINDOW);
-
-        if !respawn_allowed(&self.recent_respawns, now, RESPAWN_WINDOW, RESPAWN_MAX) {
-            return RespawnOutcome::BackoffExceeded;
+    pub(crate) fn respawn(&mut self, now: Instant) -> RespawnOutcome {
+        match self.gate.on_death(now) {
+            RespawnDecision::Attempt => {
+                let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
+                self.cmd_tx = cmd_tx;
+                self.handle = handle;
+                RespawnOutcome::Respawned
+            }
+            RespawnDecision::GaveUpNow | RespawnDecision::AlreadyGaveUp => {
+                RespawnOutcome::BackoffExceeded
+            }
         }
-
-        let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
-        self.cmd_tx = cmd_tx;
-        self.handle = handle;
-        self.recent_respawns.push(now);
-        RespawnOutcome::Respawned
     }
 
     /// Clears the respawn history so recovery can retry immediately.
-    pub fn clear_backoff(&mut self) {
-        self.recent_respawns.clear();
+    pub(crate) fn clear_backoff(&mut self) {
+        self.gate.reset();
     }
 
     /// Asks the worker to shut down (best-effort; does not join).
-    pub fn shutdown(&self) {
+    pub(crate) fn shutdown(&self) {
         let _ = self.cmd_tx.send(DdcCommand::Shutdown);
     }
 }
@@ -331,6 +329,117 @@ impl crate::core::controller::DdcPort for DdcSupervisor {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Spawns a supervisor whose results nobody reads.
+    ///
+    /// The receiver is returned rather than dropped: dropping it would make
+    /// every `resp_tx.send` fail, which is a different scenario than the
+    /// backoff tests intend to exercise.
+    fn supervisor() -> (DdcSupervisor, mpsc::Receiver<BrightnessMessage>) {
+        let (resp_tx, resp_rx) = mpsc::channel();
+        (DdcSupervisor::spawn(resp_tx), resp_rx)
+    }
+
+    #[test]
+    fn respawn_is_rate_limited_to_the_budget_within_the_window() {
+        let (mut sup, _resp_rx) = supervisor();
+        let base = Instant::now();
+        let budget = u64::try_from(RESPAWN_MAX).expect("respawn budget fits in u64");
+
+        // Deaths one second apart: all inside the sliding window.
+        for secs in 0..budget {
+            assert_eq!(
+                sup.respawn(base + Duration::from_secs(secs)),
+                RespawnOutcome::Respawned,
+                "respawn {secs} is within budget"
+            );
+        }
+        assert_eq!(
+            sup.respawn(base + Duration::from_secs(budget)),
+            RespawnOutcome::BackoffExceeded,
+            "one past the budget is a crash loop, not a restart"
+        );
+    }
+
+    #[test]
+    fn clear_backoff_reopens_an_exhausted_gate() {
+        // The whole recovery path depends on this. Once the backoff is
+        // exhausted the controller stops calling respawn at all, and the only
+        // way back is a keypress or a system resume clearing it. A policy that
+        // latched permanently would leave the app with no worker — and no way
+        // to get one — for the rest of the session.
+        let (mut sup, _resp_rx) = supervisor();
+        let base = Instant::now();
+        let budget = u64::try_from(RESPAWN_MAX).expect("respawn budget fits in u64");
+
+        for secs in 0..budget {
+            let _ = sup.respawn(base + Duration::from_secs(secs));
+        }
+        assert_eq!(
+            sup.respawn(base + Duration::from_secs(budget)),
+            RespawnOutcome::BackoffExceeded
+        );
+
+        sup.clear_backoff();
+
+        assert_eq!(
+            sup.respawn(base + Duration::from_secs(budget)),
+            RespawnOutcome::Respawned,
+            "clearing the backoff must reopen the gate at the same instant"
+        );
+    }
+
+    #[test]
+    fn deaths_spaced_beyond_the_window_never_exhaust_the_budget() {
+        // A worker that dies once a day is not a crash loop. Only deaths
+        // clustered inside the window count, so the history has to age out.
+        let (mut sup, _resp_rx) = supervisor();
+        let base = Instant::now();
+
+        for i in 1..=6 {
+            assert_eq!(
+                sup.respawn(base + RESPAWN_WINDOW * 2 * i),
+                RespawnOutcome::Respawned,
+                "isolated death {i} must still be recoverable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_respawned_worker_answers_on_the_result_channel() {
+        let (mut sup, resp_rx) = supervisor();
+
+        assert_eq!(sup.respawn(Instant::now()), RespawnOutcome::Respawned);
+        assert!(sup.is_alive(), "the replacement worker is running");
+
+        // A set for a monitor that does not exist needs no hardware: the worker
+        // resolves it to MonitorNotFound and answers. That answer is the proof
+        // the replacement is draining the *new* command channel and still holds
+        // a live clone of the result sender — the wiring between respawn and
+        // the main thread, which a canned RespawnOutcome cannot exercise.
+        let id = MonitorId::new("TST", "PROBE", None);
+        sup.send(DdcCommand::SetBrightness {
+            monitor_id: id.clone(),
+            value: 42,
+            seq: 7,
+        })
+        .expect("the command channel points at the replacement worker");
+
+        match resp_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(BrightnessMessage::DdcSetResult {
+                monitor_id,
+                seq,
+                success,
+                ..
+            }) => {
+                assert_eq!(monitor_id, id);
+                assert_eq!(seq, 7, "the sequence number survives the round trip");
+                assert!(!success, "no such monitor exists");
+            }
+            other => panic!("expected a set result from the respawned worker, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_ddc_worker_creation() {
@@ -341,37 +450,54 @@ mod tests {
 
         // Worker should start with empty state
         assert!(worker.monitors.is_empty());
-        assert!(worker.handle_cache.is_empty());
 
         // Clean up
         drop(cmd_tx);
     }
 
-    #[test]
-    fn test_ddc_worker_shutdown() {
-        let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (resp_tx, _resp_rx) = mpsc::channel();
-
-        let worker = DdcWorker::new(cmd_rx, resp_tx);
-
-        // Send shutdown command
-        cmd_tx.send(DdcCommand::Shutdown).unwrap();
-
-        // Worker should exit cleanly
-        worker.run();
+    /// Asserts the worker has exited for the right reason.
+    ///
+    /// `run()` returning is the headline property — a worker that failed to
+    /// stop would hang the test rather than fail it — but on its own that
+    /// proves nothing about *how* it stopped. Exit must also be silent (no
+    /// result may be emitted for a command that is not a brightness operation)
+    /// and it must have released its end of the result channel, which only a
+    /// consumed `run(self)` does. One `try_recv` distinguishes all three: a
+    /// value means something was emitted, `Empty` means the sender outlived the
+    /// call, `Disconnected` means a clean exit with nothing sent.
+    fn assert_exited_silently(resp_rx: &mpsc::Receiver<BrightnessMessage>) {
+        match resp_rx.try_recv() {
+            Err(mpsc::TryRecvError::Disconnected) => {}
+            Ok(msg) => panic!("worker emitted a result while shutting down: {msg:?}"),
+            Err(mpsc::TryRecvError::Empty) => {
+                panic!("worker returned but its result sender is still alive");
+            }
+        }
     }
 
     #[test]
-    fn test_ddc_worker_channel_disconnect() {
+    fn shutdown_command_exits_the_worker_silently() {
         let (cmd_tx, cmd_rx) = mpsc::channel();
-        let (resp_tx, _resp_rx) = mpsc::channel();
+        let (resp_tx, resp_rx) = mpsc::channel();
 
         let worker = DdcWorker::new(cmd_rx, resp_tx);
-
-        // Drop sender to disconnect channel
-        drop(cmd_tx);
-
-        // Worker should exit cleanly on disconnect
+        cmd_tx.send(DdcCommand::Shutdown).unwrap();
         worker.run();
+
+        assert_exited_silently(&resp_rx);
+    }
+
+    #[test]
+    fn a_disconnected_command_channel_exits_the_worker_silently() {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        let (resp_tx, resp_rx) = mpsc::channel();
+
+        let worker = DdcWorker::new(cmd_rx, resp_tx);
+        // A main thread that died without sending Shutdown must not strand the
+        // worker: dropping the command sender has to end the loop too.
+        drop(cmd_tx);
+        worker.run();
+
+        assert_exited_silently(&resp_rx);
     }
 }

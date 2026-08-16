@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest an improvement or new capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please check the [Scope section](../blob/main/README.md#scope) of the README
+        first — it lists what this tool deliberately will not do, and a few things that
+        are possible but not promised. And if you are thinking about implementing it
+        yourself: talk here *before* writing code
+        ([CONTRIBUTING.md](../blob/main/CONTRIBUTING.md)).
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I read the Scope section and this is not a listed non-goal
+          required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve for you?
+      description: The concrete situation, not just the feature — it helps me judge whether there is a simpler answer.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What do you have in mind? (optional)
+      description: >-
+        Rough idea of how it could work. No solution in mind? That's fine — leave this
+        empty; a well-described problem above is a complete feature request on its own.
+    validations:
+      required: false

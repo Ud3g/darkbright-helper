@@ -35,7 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::core::state::{BrightnessMessage, HealthWarnings, TrayMenuData};
+use crate::core::state::{BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData};
 use crate::error::{BrightnessError, Result};
 
 use super::{SafeHwnd, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
@@ -52,7 +52,7 @@ const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 100;
 
 /// Custom message posted by the main thread when degraded-state warnings
-/// change; wparam bit 0 = DDC degraded, bit 1 = hotkeys lost.
+/// change; the payload is packed by [`warnings_to_bits`].
 const WM_TRAY_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 101;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -101,11 +101,16 @@ const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
 /// Composes the tray tooltip text from the active warnings.
 fn compose_tooltip(warnings: HealthWarnings) -> String {
     let mut parts: Vec<&str> = Vec::new();
-    if warnings.ddc_degraded {
-        parts.push("DDC unavailable");
+    match warnings.ddc {
+        DdcHealth::Ok => {}
+        DdcHealth::WorkerDead => parts.push("DDC unavailable"),
+        DdcHealth::WorkerHung => parts.push("monitor not responding"),
     }
     if warnings.hotkeys_lost {
         parts.push("hotkeys stopped");
+    }
+    if warnings.file_log_failed {
+        parts.push("file logging off");
     }
     if parts.is_empty() {
         TRAY_TOOLTIP.to_string()
@@ -117,15 +122,66 @@ fn compose_tooltip(warnings: HealthWarnings) -> String {
 /// Grayed warning lines shown at the top of the tray menu.
 fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
     let mut lines = Vec::new();
-    if warnings.ddc_degraded {
-        // User activity is the recovery signal for a degraded DDC state.
-        lines.push("⚠ DDC unavailable — press a brightness hotkey to retry");
+    match warnings.ddc {
+        DdcHealth::Ok => {}
+        // A keypress clears the respawn backoff, so this retry is real.
+        DdcHealth::WorkerDead => {
+            lines.push("⚠ DDC unavailable — press a brightness hotkey to retry");
+        }
+        // Nothing the user can press unsticks a blocked DDC call. It often
+        // frees itself, so restarting is advice, not an instruction.
+        DdcHealth::WorkerHung => {
+            lines.push("⚠ Monitor not responding — restart the app if this persists");
+        }
     }
     if warnings.hotkeys_lost {
         // The give-up latch only clears with a fresh process.
         lines.push("⚠ Hotkeys stopped working — restart the app");
     }
+    if warnings.file_log_failed {
+        // "Open Log Folder" sits a few items below in this same menu, which is
+        // what someone hunting for a missing log clicks — so point at the
+        // folder rather than explain an I/O error nobody can act on.
+        lines.push("⚠ File logging failed to start — check the log folder is writable");
+    }
     lines
+}
+
+/// Whether the tray icon should carry the amber warning badge.
+///
+/// Deliberately excludes a failed file log. The badge says the app cannot do
+/// its job; a missing diagnostic log does not stop a single adjustment, and
+/// letting it light the badge would weaken the signal for the two conditions
+/// that genuinely mean something is broken.
+fn wants_warning_badge(warnings: HealthWarnings) -> bool {
+    warnings.ddc.is_degraded() || warnings.hotkeys_lost
+}
+
+/// Packs warnings into the `wparam` payload of a [`WM_TRAY_STATUS`] post.
+///
+/// The tray runs on its own thread, so the state has to survive a trip through
+/// a window message; low two bits carry the DDC condition, bit 2 the hotkeys.
+fn warnings_to_bits(warnings: HealthWarnings) -> usize {
+    let ddc = match warnings.ddc {
+        DdcHealth::Ok => 0,
+        DdcHealth::WorkerDead => 1,
+        DdcHealth::WorkerHung => 2,
+    };
+    ddc | (usize::from(warnings.hotkeys_lost) << 2) | (usize::from(warnings.file_log_failed) << 3)
+}
+
+/// Unpacks what [`warnings_to_bits`] wrote. Unknown bit patterns decode as
+/// healthy — a garbled post must not invent a warning.
+fn warnings_from_bits(bits: usize) -> HealthWarnings {
+    HealthWarnings {
+        ddc: match bits & 0b11 {
+            1 => DdcHealth::WorkerDead,
+            2 => DdcHealth::WorkerHung,
+            _ => DdcHealth::Ok,
+        },
+        hotkeys_lost: bits & 0b100 != 0,
+        file_log_failed: bits & 0b1000 != 0,
+    }
 }
 
 /// Paints an amber warning badge (filled circle in the lower-right quadrant)
@@ -419,15 +475,12 @@ fn create_warning_icon(base: HICON) -> Result<HICON> {
 /// Applies a posted status update: swaps the tray icon and tooltip to match
 /// the active warnings.
 fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
-    let warnings = HealthWarnings {
-        ddc_degraded: wparam.0 & 0b01 != 0,
-        hotkeys_lost: wparam.0 & 0b10 != 0,
-    };
+    let warnings = warnings_from_bits(wparam.0);
 
     let Some(icons) = STATUS_ICONS.with(|s| *s.borrow()) else {
         return;
     };
-    let icon = if warnings.ddc_degraded || warnings.hotkeys_lost {
+    let icon = if wants_warning_badge(warnings) {
         icons.warning
     } else {
         icons.normal
@@ -442,7 +495,7 @@ fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
         }
     }
     log::debug!(
-        ddc_degraded = warnings.ddc_degraded,
+        ddc:? = warnings.ddc,
         hotkeys_lost = warnings.hotkeys_lost;
         "Tray status updated"
     );
@@ -586,8 +639,12 @@ fn show_context_menu(hwnd: HWND) {
 
             // Monitor info rows (disabled/non-clickable)
             for (index, monitor) in data.monitors.iter().enumerate() {
+                // "~" marks a brightness this app seeded rather than read: the
+                // monitor answers writes but not reads, so the number is our
+                // model of it, not a measurement.
+                let approx = if monitor.brightness_known { "" } else { "~" };
                 let monitor_text = format!(
-                    "{}: 🕶{}% 🔆{}%",
+                    "{}: 🕶{}% 🔆{approx}{}%",
                     monitor.display_name, monitor.overlay_opacity, monitor.hardware_brightness
                 );
                 // Menu IDs are u32; index won't exceed monitor count (typically < 10)
@@ -820,8 +877,6 @@ fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
 pub struct TrayIcon {
     /// Message-only window that receives tray notifications.
     hwnd: SafeHwnd,
-    /// Channel sender to communicate with the main thread.
-    sender: Sender<BrightnessMessage>,
     /// Handle to the loaded icon resource.
     /// Kept alive to prevent Windows from releasing the icon while the tray is active.
     #[allow(dead_code)]
@@ -875,7 +930,7 @@ impl TrayIcon {
         log::debug!("Tray message window created");
 
         // Store sender in thread-local storage for window procedure access
-        set_tray_sender(sender.clone());
+        set_tray_sender(sender);
 
         // Load the application icon
         let icon_handle = load_tray_icon()?;
@@ -901,7 +956,6 @@ impl TrayIcon {
 
         Ok(Self {
             hwnd: unsafe { SafeHwnd::new_owned(hwnd) },
-            sender,
             icon_handle,
         })
     }
@@ -945,18 +999,6 @@ impl TrayIcon {
         Ok(())
     }
 
-    /// Returns the window handle for the tray message window.
-    #[must_use]
-    pub fn hwnd(&self) -> HWND {
-        self.hwnd.as_raw()
-    }
-
-    /// Returns a clone of the message sender.
-    #[must_use]
-    pub fn sender(&self) -> Sender<BrightnessMessage> {
-        self.sender.clone()
-    }
-
     /// Returns a cross-thread handle for posting status updates.
     #[must_use]
     pub fn status_handle(&self) -> TrayStatusHandle {
@@ -974,7 +1016,7 @@ pub struct TrayStatusHandle(isize);
 impl TrayStatusHandle {
     /// Posts the current warnings to the tray thread (fire-and-forget).
     pub fn notify(self, warnings: HealthWarnings) {
-        let bits = usize::from(warnings.ddc_degraded) | (usize::from(warnings.hotkeys_lost) << 1);
+        let bits = warnings_to_bits(warnings);
         unsafe {
             if let Err(e) = PostMessageW(
                 Some(hwnd_from_isize(self.0)),
@@ -1008,17 +1050,24 @@ mod tests {
         );
     }
 
+    /// Warnings with only the DDC condition set.
+    fn ddc_only(ddc: DdcHealth) -> HealthWarnings {
+        HealthWarnings {
+            ddc,
+            ..HealthWarnings::default()
+        }
+    }
+
     #[test]
     fn tooltip_lists_active_warnings() {
-        let ddc = HealthWarnings {
-            ddc_degraded: true,
-            hotkeys_lost: false,
-        };
-        assert_eq!(compose_tooltip(ddc), "Brightness Control – DDC unavailable");
+        assert_eq!(
+            compose_tooltip(ddc_only(DdcHealth::WorkerDead)),
+            "Brightness Control – DDC unavailable"
+        );
 
         let keys = HealthWarnings {
-            ddc_degraded: false,
             hotkeys_lost: true,
+            ..HealthWarnings::default()
         };
         assert_eq!(
             compose_tooltip(keys),
@@ -1026,8 +1075,9 @@ mod tests {
         );
 
         let both = HealthWarnings {
-            ddc_degraded: true,
+            ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
+            file_log_failed: false,
         };
         assert_eq!(
             compose_tooltip(both),
@@ -1036,17 +1086,104 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_says_not_responding_for_a_hung_worker() {
+        assert_eq!(
+            compose_tooltip(ddc_only(DdcHealth::WorkerHung)),
+            "Brightness Control – monitor not responding"
+        );
+    }
+
+    #[test]
+    fn tooltip_names_a_failed_file_log() {
+        let logging = HealthWarnings {
+            file_log_failed: true,
+            ..HealthWarnings::default()
+        };
+        assert_eq!(
+            compose_tooltip(logging),
+            "Brightness Control – file logging off"
+        );
+    }
+
+    #[test]
     fn menu_warning_lines_match_active_warnings() {
         assert!(warning_menu_lines(HealthWarnings::default()).is_empty());
 
-        let both = HealthWarnings {
-            ddc_degraded: true,
+        let all = HealthWarnings {
+            ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
+            file_log_failed: true,
         };
-        let lines = warning_menu_lines(both);
-        assert_eq!(lines.len(), 2);
+        let lines = warning_menu_lines(all);
+        assert_eq!(lines.len(), 3);
         assert!(lines[0].contains("DDC"));
         assert!(lines[1].contains("Hotkeys"));
+        assert!(lines[2].contains("logging"));
+    }
+
+    #[test]
+    fn only_a_dead_worker_is_advertised_as_hotkey_recoverable() {
+        // A keypress clears the respawn backoff, so the advice is sound here…
+        let dead = ddc_only(DdcHealth::WorkerDead);
+        assert!(warning_menu_lines(dead)[0].contains("hotkey"));
+
+        // …but nothing the user can press unsticks a blocked DDC call, so
+        // offering the same retry would be a false affordance.
+        let line = warning_menu_lines(ddc_only(DdcHealth::WorkerHung))[0];
+        assert!(!line.contains("hotkey"), "must not promise a hotkey retry");
+        assert!(line.contains("restart"));
+    }
+
+    #[test]
+    fn a_failed_file_log_is_announced_where_the_user_goes_looking() {
+        let logging = HealthWarnings {
+            file_log_failed: true,
+            ..HealthWarnings::default()
+        };
+        let lines = warning_menu_lines(logging);
+        assert_eq!(lines.len(), 1);
+        // The same menu carries "Open Log Folder" a few items down, which is
+        // what someone hunting for a missing log clicks — so the line points
+        // at the folder rather than explaining an I/O error.
+        assert!(lines[0].contains("log folder"), "got: {}", lines[0]);
+    }
+
+    #[test]
+    fn a_failed_file_log_does_not_raise_the_warning_badge() {
+        // The badge means the app cannot do its job. A missing diagnostic log
+        // does not stop a single brightness adjustment, and diluting the badge
+        // would weaken the signal for the two conditions that do.
+        let logging = HealthWarnings {
+            file_log_failed: true,
+            ..HealthWarnings::default()
+        };
+        assert!(!wants_warning_badge(logging));
+
+        assert!(wants_warning_badge(ddc_only(DdcHealth::WorkerHung)));
+        assert!(wants_warning_badge(HealthWarnings {
+            hotkeys_lost: true,
+            ..HealthWarnings::default()
+        }));
+    }
+
+    #[test]
+    fn status_bits_round_trip_every_warning_combination() {
+        for ddc in [DdcHealth::Ok, DdcHealth::WorkerDead, DdcHealth::WorkerHung] {
+            for hotkeys_lost in [false, true] {
+                for file_log_failed in [false, true] {
+                    let warnings = HealthWarnings {
+                        ddc,
+                        hotkeys_lost,
+                        file_log_failed,
+                    };
+                    assert_eq!(
+                        warnings_from_bits(warnings_to_bits(warnings)),
+                        warnings,
+                        "lost across the window-message hop"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

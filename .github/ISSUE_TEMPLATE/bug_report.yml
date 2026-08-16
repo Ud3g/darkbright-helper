@@ -1,0 +1,84 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please read [SUPPORT.md](../blob/main/SUPPORT.md) first —
+        it explains what to expect and how to produce the debug log requested below.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before we start
+      options:
+        - label: I am on the latest release
+          required: true
+        - label: I searched existing issues, including closed ones
+          required: true
+        - label: >-
+            This is not about dedicated brightness keys not working (see "Brightness Key
+            Limitations" in the README) or SmartScreen/Defender warnings (see "Running an
+            unsigned binary")
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Tool version
+      placeholder: "0.8.0"
+    validations:
+      required: true
+
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2"
+    validations:
+      required: true
+
+  - type: input
+    id: monitors
+    attributes:
+      label: Monitor model(s) and connection type
+      description: For multi-monitor setups, list all of them and mark which one misbehaves.
+      placeholder: "Dell U2722D via DisplayPort; LG 27UK850 via HDMI (problem is on the LG)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: path
+    attributes:
+      label: Which brightness path is affected?
+      options:
+        - DDC/CI (1–100%)
+        - Overlay dimming (below 0%)
+        - Both
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what did you expect?
+      description: Steps to reproduce, actual behaviour, expected behaviour.
+    validations:
+      required: true
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Debug log
+      description: >-
+        Enable it in `%APPDATA%\BrightnessControl\config.json` with
+        `"logging": { "file_enabled": true, "file_level": "debug" }`, restart the tool,
+        reproduce the problem, then drag `darkbright.log` in here.
+        **Privacy: at debug level the log contains your monitor serial numbers and paths
+        with your Windows user name — skim it and redact before attaching; attachments
+        are public.** If you genuinely think a log is not needed for this report, say why
+        instead.
+    validations:
+      required: true

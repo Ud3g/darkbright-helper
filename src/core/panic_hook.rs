@@ -14,7 +14,7 @@ use std::any::Any;
 /// `panic!("formatted {x}")`); anything else (`std::panic::panic_any`) has
 /// no portable text form and yields a fixed placeholder.
 #[must_use]
-pub fn payload_message(payload: &dyn Any) -> &str {
+pub(crate) fn payload_message(payload: &dyn Any) -> &str {
     payload
         .downcast_ref::<&str>()
         .copied()

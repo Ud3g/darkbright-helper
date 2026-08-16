@@ -14,9 +14,24 @@ history lives in the git log.
   built by a tag-triggered workflow; `RELEASING.md` documents the procedure.
 - Unknown config keys (typos, misplaced settings) are now warned about at
   load with their full path instead of being silently ignored.
+- A display change (monitor plugged, unplugged, or resolution switched) now
+  triggers an immediate refresh. Previously the new topology was picked up
+  only by the periodic refresh — up to a minute later, or never if that
+  refresh was disabled — during which an adjustment could land on the wrong
+  monitor, because Windows may reuse a monitor handle for a different display.
 
 ### Changed
 
+- Narrowed the library's public surface to what the binary and integration tests
+  actually name (116 items, down from 259). The lib exists only so `core/` is
+  host-testable and three integration tests can reach the platform layer, but
+  everything `pub` in a `pub mod` counts as externally reachable — so rustc had
+  been reporting no unused items anywhere in the crate. Restoring that check
+  found ~15 dead items, now deleted: a retired OSD error-state method, a
+  redundant tray sender and its accessors, `DdcMonitor`'s unread cache, an
+  unused hotkey unregistration path, `SafeHwnd`'s borrowed variant (leaving it
+  owning-by-construction), a superseded `Config::load`, and an unconstructed
+  error variant. No behaviour change; net 158 lines removed.
 - Upgraded the `windows` crate from 0.52 to 0.62. No intended behavior change;
   debug-log output now shows window/monitor handles as pointers instead of
   integers.
@@ -32,6 +47,41 @@ history lives in the git log.
 
 ### Fixed
 
+- A hotkey thread that hung during startup — inside window creation or hotkey
+  registration — froze the main loop indefinitely, because the wait for its
+  result was untimed. The wait is now bounded to 5 s; on timeout the thread is
+  abandoned and the start reported as failed, which shows the error box at
+  startup and goes through the respawn gate on a supervised restart.
+- Enabling `logging.file_enabled` and getting no log file gave no clue why. If
+  the sink could not be built (unwritable `%APPDATA%`, a locked file, a full
+  disk), the warning went to the log — which is exactly what had failed — and
+  to a console that release builds hide, so the feature just appeared not to
+  work. The tray menu now says so, and points at the log folder, which is where
+  "Open Log Folder" already leads. It deliberately does not badge the tray
+  icon: brightness control is unaffected.
+- The tray told users to "press a brightness hotkey to retry" for a DDC worker
+  that had stopped responding — advice that cannot work, since no keypress
+  unsticks a thread blocked inside a DDC call. Worse, the press cleared the
+  warning it could not fix, so the badge flickered off and returned ~24 s later,
+  indefinitely. The two degraded states are now distinguished: a dead worker
+  keeps the (correct) hotkey advice, an unresponsive one says so and suggests a
+  restart only if it persists. It usually will not: any result the worker sends
+  is proof it is no longer blocked, so the state now clears itself the moment
+  the hardware answers — as does a stuck worker that later exits, which is now
+  respawned like any other dead one.
+- A monitor that identifies itself but refuses the brightness read got no state
+  at all, so every hotkey press on it failed with "monitor not found" before
+  reaching the OSD — nothing moved and nothing was shown. Such monitors are now
+  seeded at 50% and stay adjustable, which is what the documented "unreadable
+  monitors stay set-capable" behaviour always intended; the seed is corrected by
+  the first successful read or write, and the tray marks it `~` until then.
+- Brightness was silently wrong on any monitor whose DDC luminance range is not
+  0-100. The maximum the monitor reports was read and discarded, so raw values
+  were treated as percentages: a monitor reporting 500 of 1000 (50%) displayed
+  as 100%, and setting "100%" on a 0-255 monitor asked for ≈39% backlight. Both
+  directions are now scaled by the reported maximum, which is also logged with
+  each refresh read at `debug`. Monitors reporting a maximum of 100 — the common
+  case, including the maintainer's — are unaffected.
 - With `intercept_brightness_keys` enabled, a failed low-level hook
   installation left the dedicated brightness keys silently dead; they now fall
   back to plain hotkey registration.

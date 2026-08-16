@@ -48,7 +48,7 @@ unsafe extern "system" fn wnd_proc(
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
-pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
+pub(crate) fn ensure_overlay_class_registered() -> Result<PCWSTR> {
     // Initialize the registration once.
     REGISTER_CLASS_ONCE
         .get_or_init(|| {
@@ -103,7 +103,7 @@ pub fn ensure_overlay_class_registered() -> Result<PCWSTR> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `CreateWindowExW` or class registration fails.
-pub fn create_overlay_window() -> Result<SafeHwnd> {
+pub(crate) fn create_overlay_window() -> Result<SafeHwnd> {
     let class_name = ensure_overlay_class_registered()?;
 
     unsafe {
@@ -145,7 +145,7 @@ pub fn create_overlay_window() -> Result<SafeHwnd> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
-pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
+pub(crate) fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> {
     let mut mi = MONITORINFO {
         cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
         ..Default::default()
@@ -179,7 +179,7 @@ pub fn position_window_fullscreen(hwnd: HWND, hmonitor: HMONITOR) -> Result<()> 
 ///
 /// The current opacity is not tracked here: `MonitorState.overlay_opacity`
 /// in core is the single source of truth; this type only drives the window.
-pub struct WindowsOverlay {
+pub(crate) struct WindowsOverlay {
     hwnd: SafeHwnd,
     visible: bool,
 }
@@ -190,7 +190,7 @@ impl WindowsOverlay {
     /// # Errors
     ///
     /// Returns an error if window creation, positioning, or opacity setting fails.
-    pub fn new(hmonitor: HMONITOR) -> Result<Self> {
+    pub(crate) fn new(hmonitor: HMONITOR) -> Result<Self> {
         let hwnd = create_overlay_window()?;
         position_window_fullscreen(hwnd.as_raw(), hmonitor)?;
 
@@ -213,25 +213,15 @@ impl WindowsOverlay {
     }
 
     /// Shows the overlay window.
-    ///
-    /// # Errors
-    ///
-    /// Currently infallible; returns `Result` for call-site consistency.
-    fn show(&mut self) -> Result<()> {
-        show_window(self.hwnd.as_raw())?;
+    fn show(&mut self) {
+        show_window(self.hwnd.as_raw());
         self.visible = true;
-        Ok(())
     }
 
     /// Hides the overlay window.
-    ///
-    /// # Errors
-    ///
-    /// Currently infallible; returns `Result` for call-site consistency.
-    fn hide(&mut self) -> Result<()> {
-        hide_window(self.hwnd.as_raw())?;
+    fn hide(&mut self) {
+        hide_window(self.hwnd.as_raw());
         self.visible = false;
-        Ok(())
     }
 
     /// Returns true if the overlay window is currently shown.
@@ -245,11 +235,10 @@ impl WindowsOverlay {
 /// # Errors
 ///
 /// This method is currently infallible but returns `Result` for consistency.
-pub fn show_window(hwnd: HWND) -> Result<()> {
+pub(crate) fn show_window(hwnd: HWND) {
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
     }
-    Ok(())
 }
 
 /// Hides the overlay window.
@@ -257,11 +246,10 @@ pub fn show_window(hwnd: HWND) -> Result<()> {
 /// # Errors
 ///
 /// This method is currently infallible but returns `Result` for consistency.
-pub fn hide_window(hwnd: HWND) -> Result<()> {
+pub(crate) fn hide_window(hwnd: HWND) {
     unsafe {
         let _ = ShowWindow(hwnd, SW_HIDE);
     }
-    Ok(())
 }
 
 /// Sets the opacity of the overlay window.
@@ -274,7 +262,7 @@ pub fn hide_window(hwnd: HWND) -> Result<()> {
 /// # Errors
 ///
 /// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
-pub fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
+pub(crate) fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     // Clamp opacity to 0.0 - 1.0
     let opacity = opacity.clamp(0.0, 1.0);
 
@@ -305,7 +293,7 @@ impl Default for OverlayManager {
 impl OverlayManager {
     /// Creates a new overlay manager.
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             overlays: HashMap::new(),
         }
@@ -326,7 +314,7 @@ impl OverlayManager {
     /// # Panics
     ///
     /// This method may panic if the internal state is inconsistent during insertion or retrieval.
-    pub fn update(
+    pub(crate) fn update(
         &mut self,
         monitor_id: &MonitorId,
         hmonitor: HMONITOR,
@@ -335,7 +323,7 @@ impl OverlayManager {
         // If opacity is 0, we just need to hide it if it exists.
         if opacity == 0 {
             if let Some(overlay) = self.overlays.get_mut(monitor_id) {
-                overlay.hide()?;
+                overlay.hide();
             }
             return Ok(());
         }
@@ -354,7 +342,7 @@ impl OverlayManager {
         // Update opacity and visibility
         overlay.set_opacity(f32::from(opacity) / 100.0)?;
         if !overlay.is_visible() {
-            overlay.show()?;
+            overlay.show();
         }
 
         Ok(())
@@ -365,7 +353,7 @@ impl OverlayManager {
     /// Dropping the overlay destroys its window via the RAII handle; used
     /// when a monitor is pruned so the orphaned fullscreen window cannot
     /// migrate onto a surviving monitor.
-    pub fn remove(&mut self, monitor_id: &MonitorId) {
+    pub(crate) fn remove(&mut self, monitor_id: &MonitorId) {
         if self.overlays.remove(monitor_id).is_some() {
             log::debug!(monitor_id:% = monitor_id; "Overlay removed");
         }

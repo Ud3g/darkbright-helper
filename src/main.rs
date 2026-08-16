@@ -548,19 +548,22 @@ fn main() {
     // Load configuration
     let config = load_config();
 
-    // Attach the opt-in rolling file log now that the config is known.
-    if config.logging.file_enabled {
-        match build_file_logger(&config) {
+    // Attach the opt-in rolling file log now that the config is known. The
+    // outcome outlives this block: a failure can only be reported once the
+    // controller exists, since the log is the one channel it cannot use.
+    let file_log_failed = config.logging.file_enabled
+        && match build_file_logger(&config) {
             Ok(file_logger) => {
                 tee.attach_file(file_logger);
                 // First line in the file: identify the build being diagnosed.
                 log::info!(version = env!("CARGO_PKG_VERSION"); "File logging enabled");
+                false
             }
             Err(e) => {
                 log::warn!(error:% = e; "Failed to enable file logging, continuing without it");
+                true
             }
-        }
-    }
+        };
 
     // Create channels
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
@@ -586,6 +589,13 @@ fn main() {
         CursorLocator,
         Instant::now(),
     );
+
+    // The warning above went to the console, which release builds hide — and
+    // to the file log, which is precisely what failed. The tray is the only
+    // channel that exists either way.
+    if file_log_failed {
+        controller.set_file_log_failed();
+    }
 
     // Request initial monitor enumeration from DDC worker
     controller.handle_refresh(Instant::now());
@@ -695,7 +705,15 @@ fn main() {
             }
         }
 
-        // Check for brightness messages with a short timeout
+        // Wait for the next message, but bounded: the OSD, overlay and usage
+        // window all live on this thread with no message loop of their own, so
+        // the Win32 queue has to be polled — a thread cannot block on both it
+        // and an MPSC channel. This interval is *not* input latency; any send
+        // wakes the recv immediately. It only bounds how late an unsolicited
+        // message is noticed, of which the OSD's auto-hide timer is the tightest
+        // (osd.timeout_ms may be configured down to 100 ms). Measured idle cost
+        // is ~0.0017% of a core; see the main-loop cadence notes in
+        // docs/architecture.md before changing it.
         match rx.recv_timeout(Duration::from_millis(16)) {
             Ok(msg) => {
                 log::debug!(message:? = msg; "Main loop received message");

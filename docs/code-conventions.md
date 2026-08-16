@@ -45,6 +45,30 @@ See `architecture.md` for the specific directory structure.
 - Default to private; use `pub` only when needed
 - Use `pub(crate)` for internal-only sharing between modules
 
+### `pub` means "the binary or `tests/` names it"
+
+This crate is a library plus a separate binary crate that consumes it, so `pub`
+has a precise meaning here: reachable from `src/main.rs`, `tests/`, or the
+`lib.rs` doc example. Nothing else earns it.
+
+This is load-bearing rather than tidiness. Every `pub` item in a `pub mod` counts
+as externally reachable, so rustc reports it as used no matter what — an
+over-wide surface silently switches off `dead_code` for the whole crate. Two
+consequences to keep in mind when adding code:
+
+- Prefer `pub(crate) mod` for a new module, and reach the binary through a
+  re-export in `platform/windows/mod.rs` if it needs one. A re-exported *type*
+  keeps all of its `pub` methods reachable, so demote the methods the binary does
+  not call.
+- Some clippy lints (`unnecessary_wraps` among them) skip `pub` functions because
+  the signature is API. Narrowing a function to `pub(crate)` is what lets them
+  fire.
+
+To verify after changing visibility: `RUSTFLAGS="-W unreachable_pub" cargo clippy
+--lib` should report nothing, and `cargo clippy --all-targets -- -D warnings`
+must stay clean. Note that `--all-targets` does **not** compile doc examples, so
+run `cargo test` too — a doc example is a consumer like any other.
+
 ---
 
 ## 3. Windows FFI Safety

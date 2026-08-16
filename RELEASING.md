@@ -25,8 +25,13 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
 
 6. The release workflow then runs on `windows-latest`: it checks that the tag
    matches the `Cargo.toml` version, runs the test suite, builds
-   `--release --locked`, and creates the GitHub release with
-   `darkbright-helper.exe` attached. Release notes point at the CHANGELOG.
+   `--release --locked`, generates `THIRD-PARTY-NOTICES.html` with cargo-about
+   (config in `about.toml` + `about.hbs`; a dependency license outside the
+   accepted list fails the release), packages
+   `darkbright-helper-X.Y.Z-windows-x64.zip` (exe + both `LICENSE-*` files +
+   notices), attests build provenance, and creates the GitHub release with the
+   zip attached. Release notes point at the CHANGELOG and carry the zip's
+   SHA-256 plus the `gh attestation verify` command.
 
 ## Notes
 

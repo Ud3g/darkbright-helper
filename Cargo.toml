@@ -3,6 +3,9 @@ name = "darkbright-helper"
 version = "0.8.0"
 edition = "2024"
 rust-version = "1.88"
+description = "Hotkey-driven monitor brightness control for Windows via DDC/CI, with an overlay fallback for dimming below the hardware minimum."
+repository = "https://github.com/Ud3g/darkbright-helper"
+license = "MIT OR Apache-2.0"
 # Internal pub surface, distributed via GitHub releases — never crates.io.
 publish = false
 
@@ -16,7 +19,6 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
-    "Win32_UI_Controls",
     "Win32_Graphics_Gdi",
     "Win32_Graphics_Dwm",
     "Win32_Devices_Display",

@@ -1,0 +1,20 @@
+# Configuration for cargo-about, which generates THIRD-PARTY-NOTICES.html in
+# the release workflow (see .github/workflows/release.yml). The accepted list
+# is priority-ordered: dual-licensed crates resolve to the first matching entry.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Unlicense",
+    "Unicode-3.0",
+]
+
+# Only what actually ships: prune the graph to the release target.
+targets = ["x86_64-pc-windows-msvc"]
+
+# winres runs at build time and ships nothing, but listing build deps costs
+# little and errs on the side of complete attribution.
+ignore-build-dependencies = false
+ignore-dev-dependencies = true
+
+# This crate itself (publish = false) is not a third party.
+private = { ignore = true }

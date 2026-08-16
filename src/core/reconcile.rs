@@ -13,11 +13,11 @@ use std::time::{Duration, Instant};
 /// in-flight refresh, and its deadline is measured from enqueue time. A dead
 /// worker is healed far faster by liveness detection, so this only ever fires
 /// for a worker that is alive but hung inside a blocking DDC call.
-pub const SET_TIMEOUT: Duration = Duration::from_secs(8);
+pub(crate) const SET_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Deadline for a full monitor refresh (enumeration plus per-monitor EDID read
 /// and DDC brightness read, each up to ~120 ms across up to three attempts).
-pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Maximum worker respawns permitted within [`RESPAWN_WINDOW`] before giving up.
 pub const RESPAWN_MAX: usize = 3;
@@ -26,20 +26,25 @@ pub const RESPAWN_MAX: usize = 3;
 pub const RESPAWN_WINDOW: Duration = Duration::from_secs(60);
 
 /// Consecutive set timeouts (worker still alive) before it is diagnosed as hung.
-pub const HUNG_TIMEOUT_LIMIT: u32 = 3;
+pub(crate) const HUNG_TIMEOUT_LIMIT: u32 = 3;
 
 /// Minimum continuously observed enumeration absence before a monitor's state
 /// is pruned. Spans at least two refresh observations, so a resume/respawn
 /// refresh burst (seconds apart, while a dock's DP link is still training)
 /// can never prune on its own.
-pub const PRUNE_ABSENCE_WINDOW: Duration = Duration::from_secs(90);
+pub(crate) const PRUNE_ABSENCE_WINDOW: Duration = Duration::from_secs(90);
 
 /// Returns whether another worker respawn is permitted right now.
 ///
 /// `true` when fewer than `max` of the `recent` respawn timestamps fall within
 /// `window` before `now`.
 #[must_use]
-pub fn respawn_allowed(recent: &[Instant], now: Instant, window: Duration, max: usize) -> bool {
+pub(crate) fn respawn_allowed(
+    recent: &[Instant],
+    now: Instant,
+    window: Duration,
+    max: usize,
+) -> bool {
     let count = recent
         .iter()
         .filter(|&&t| now.saturating_duration_since(t) < window)
@@ -107,6 +112,19 @@ impl RespawnGate {
     pub fn record_spawn_failure(&mut self) {
         self.gave_up = true;
     }
+
+    /// Reopens the gate: forgets the recorded deaths *and* releases the latch.
+    ///
+    /// For callers that have an external recovery trigger — the DDC worker is
+    /// retried on a brightness keypress and on system resume. Clearing only the
+    /// history would leave the latch set and every later death would answer
+    /// [`RespawnDecision::AlreadyGaveUp`], so the trigger would do nothing. The
+    /// hotkey thread has no such trigger and never calls this: once its
+    /// restarts are exhausted the app says so and means it.
+    pub fn reset(&mut self) {
+        self.recent.clear();
+        self.gave_up = false;
+    }
 }
 
 /// Result of a supervisor respawn attempt.
@@ -124,7 +142,7 @@ pub enum RespawnOutcome {
 /// hands out a fresh generation, and [`complete`](Self::complete) ignores any
 /// result whose generation does not match the current one.
 #[derive(Debug)]
-pub struct RefreshTracker {
+pub(crate) struct RefreshTracker {
     in_progress: bool,
     generation: u64,
     started_at: Option<Instant>,
@@ -136,7 +154,7 @@ pub struct RefreshTracker {
 impl RefreshTracker {
     /// Creates a tracker with no refresh in progress, stamped at `now`.
     #[must_use]
-    pub fn new(now: Instant) -> Self {
+    pub(crate) fn new(now: Instant) -> Self {
         Self {
             in_progress: false,
             generation: 0,
@@ -148,7 +166,7 @@ impl RefreshTracker {
     }
 
     /// Begins a refresh and returns the generation the result must echo.
-    pub fn begin(&mut self, now: Instant) -> u64 {
+    pub(crate) fn begin(&mut self, now: Instant) -> u64 {
         self.generation += 1;
         self.in_progress = true;
         self.started_at = Some(now);
@@ -161,7 +179,7 @@ impl RefreshTracker {
     /// recorded — the caller's license to treat it as absence evidence.
     /// `enumerated_any` reports whether the refresh identified any monitor at
     /// all (readable or not); it drives the periodic-refresh gate.
-    pub fn complete(
+    pub(crate) fn complete(
         &mut self,
         generation: u64,
         now: Instant,
@@ -180,7 +198,7 @@ impl RefreshTracker {
     }
 
     /// Aborts an in-flight refresh and invalidates any outstanding result.
-    pub fn abort(&mut self) {
+    pub(crate) fn abort(&mut self) {
         self.generation += 1;
         self.in_progress = false;
         self.started_at = None;
@@ -190,7 +208,7 @@ impl RefreshTracker {
 
     /// Returns whether an in-flight refresh has exceeded `timeout` since it began.
     #[must_use]
-    pub fn timed_out(&self, now: Instant, timeout: Duration) -> bool {
+    pub(crate) fn timed_out(&self, now: Instant, timeout: Duration) -> bool {
         match self.started_at {
             Some(started) => self.in_progress && now.saturating_duration_since(started) >= timeout,
             None => false,
@@ -199,25 +217,25 @@ impl RefreshTracker {
 
     /// Whether a refresh is currently in flight.
     #[must_use]
-    pub fn in_progress(&self) -> bool {
+    pub(crate) fn in_progress(&self) -> bool {
         self.in_progress
     }
 
     /// Whether the last completed refresh found any monitors.
     #[must_use]
-    pub fn last_successful(&self) -> bool {
+    pub(crate) fn last_successful(&self) -> bool {
         self.last_successful
     }
 
     /// Whether the last completed refresh enumerated any monitor (readable or not).
     #[must_use]
-    pub fn last_enumerated(&self) -> bool {
+    pub(crate) fn last_enumerated(&self) -> bool {
         self.last_enumerated
     }
 
     /// Time elapsed since the last completed refresh.
     #[must_use]
-    pub fn elapsed_since_refresh(&self, now: Instant) -> Duration {
+    pub(crate) fn elapsed_since_refresh(&self, now: Instant) -> Duration {
         now.saturating_duration_since(self.last_refresh)
     }
 }
@@ -306,6 +324,34 @@ mod tests {
         assert_eq!(
             gate.on_death(base + Duration::from_secs(1)),
             RespawnDecision::AlreadyGaveUp
+        );
+    }
+
+    #[test]
+    fn respawn_gate_reset_clears_the_latch_as_well_as_the_history() {
+        let base = Instant::now();
+        let mut gate = RespawnGate::new(Duration::from_secs(60), 3);
+
+        for i in 0..3 {
+            assert_eq!(
+                gate.on_death(base + Duration::from_secs(i)),
+                RespawnDecision::Attempt
+            );
+        }
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(3)),
+            RespawnDecision::GaveUpNow
+        );
+
+        gate.reset();
+
+        // Clearing only the history would leave the latch set, and every later
+        // death would answer AlreadyGaveUp — a caller with an external recovery
+        // trigger would have no way back.
+        assert_eq!(
+            gate.on_death(base + Duration::from_secs(3)),
+            RespawnDecision::Attempt,
+            "a reset gate starts over at the same instant"
         );
     }
 
