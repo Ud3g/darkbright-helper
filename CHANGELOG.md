@@ -5,6 +5,15 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- The `THIRD-PARTY-NOTICES.html` shipped in release archives attributed the
+  twelve `windows-*` crates to `Copyright (c) <year> <copyright holders>` — the
+  unfilled SPDX placeholder — instead of Microsoft. Those crates ship their
+  licence as `license-mit`, a name cargo-about's automatic discovery misses, so
+  it fell back to the canonical template text. `about.toml` now points it at the
+  real file. Affects 0.9.0's archive, which cannot be corrected in place.
+
 ## [0.9.0] — 2026-08-16
 
 First public release: the repository was open-sourced under `MIT OR Apache-2.0`

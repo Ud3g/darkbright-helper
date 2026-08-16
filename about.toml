@@ -18,3 +18,108 @@ ignore-dev-dependencies = true
 
 # This crate itself (publish = false) is not a third party.
 private = { ignore = true }
+
+# Microsoft ships the MIT text as `license-mit` (lowercase, no extension), which
+# cargo-about's automatic discovery does not pick up — it silently falls back to
+# the canonical SPDX template, whose "Copyright (c) <year> <copyright holders>"
+# placeholder would replace the real attribution in the generated notices. These
+# clarifications point it at the actual file. The checksum is of the file
+# content, which is byte-identical across every windows-* crate and unchanged
+# since at least the 0.52 generation, so version bumps do not invalidate it.
+# Regenerate with: cargo about clarify license-mit path <crate-source-dir>
+
+[windows.clarify]
+license = "MIT"
+
+[[windows.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-collections.clarify]
+license = "MIT"
+
+[[windows-collections.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-core.clarify]
+license = "MIT"
+
+[[windows-core.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-future.clarify]
+license = "MIT"
+
+[[windows-future.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-implement.clarify]
+license = "MIT"
+
+[[windows-implement.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-interface.clarify]
+license = "MIT"
+
+[[windows-interface.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-link.clarify]
+license = "MIT"
+
+[[windows-link.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-numerics.clarify]
+license = "MIT"
+
+[[windows-numerics.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-result.clarify]
+license = "MIT"
+
+[[windows-result.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-strings.clarify]
+license = "MIT"
+
+[[windows-strings.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-sys.clarify]
+license = "MIT"
+
+[[windows-sys.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"
+
+[windows-threading.clarify]
+license = "MIT"
+
+[[windows-threading.clarify.files]]
+path = "license-mit"
+checksum = "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+license = "MIT"

@@ -16,10 +16,12 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
    dated heading and the tag belong together — never commit a dated version
    heading without also tagging it.
 4. Commit (`chore: release X.Y.Z`), push, wait for CI to pass.
-5. Tag that commit and push the tag:
+5. Tag that commit and push the tag. Tags are signed (`tag.gpgsign` is on),
+   which makes them annotated — so a message is required and a bare
+   `git tag X.Y.Z` fails with `fatal: no tag message?`:
 
    ```bash
-   git tag X.Y.Z
+   git tag -m "X.Y.Z" X.Y.Z
    git push origin X.Y.Z
    ```
 
@@ -35,6 +37,14 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
 
 ## Notes
 
+- **The tag is the point of no return.** A repository ruleset blocks tag
+  deletion and updates with no bypass, so a pushed tag cannot be removed or
+  moved — not even by the owner. If the release workflow fails partway, that
+  version number is spent: fix the cause and release the next patch version
+  rather than retrying the same one. Anything cheap to verify beforehand is
+  worth verifying, in particular that `cargo about generate --fail` succeeds,
+  since a dependency licence outside the accepted list aborts the run after the
+  tag already exists.
 - Tags `0.7.1` and older predate this workflow and have no binaries; `0.8.0`
   was tagged retroactively (the workflow file does not exist at that commit,
   so no artifact was built for it).
