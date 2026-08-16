@@ -5,22 +5,27 @@ on:
   push:
     tags: ['[0-9]+.[0-9]+.[0-9]+']
 
-# The job creates the GitHub release and uploads the binary.
+# contents: write creates the release; id-token + attestations let the
+# provenance step sign a statement binding the artifacts to this workflow run.
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
     name: build + publish
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: stable
 
       - name: Cache cargo registry and build artifacts
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # A tag that disagrees with the manifest would publish a mislabeled
       # binary; fail fast instead.
@@ -40,17 +45,49 @@ jobs:
       - name: Build release binary
         run: cargo build --release --locked
 
+      - name: Install cargo-about
+        uses: taiki-e/install-action@288e746965032cfcc232e09af2daf5f23c14d780 # v2.86.1
+        with:
+          tool: cargo-about@0.9.1
+
+      # MIT/Apache-2.0 notices must accompany the shipped binary. --fail turns
+      # an unresolvable (or newly introduced, unaccepted) license into a
+      # release failure instead of silently incomplete attribution.
+      - name: Generate third-party license notices
+        run: cargo about generate --fail -o THIRD-PARTY-NOTICES.html about.hbs
+
+      - name: Package release zip
+        run: |
+          $zip = "darkbright-helper-$env:GITHUB_REF_NAME-windows-x64.zip"
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/darkbright-helper.exe, LICENSE-MIT, LICENSE-APACHE, THIRD-PARTY-NOTICES.html dist/
+          Compress-Archive -Path dist/* -DestinationPath $zip
+          "ZIP_NAME=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      # Signed provenance: lets anyone check that a downloaded artifact was
+      # built by this workflow from this commit (`gh attestation verify`).
+      # Covers both the zip and the exe inside it, so an extracted binary can
+      # be verified on its own.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            ${{ env.ZIP_NAME }}
+            target/release/darkbright-helper.exe
+
       # The binary is unsigned, so a downloader has nothing to check it
       # against. Publishing the hash in the release body at least makes
       # tampering between GitHub and the disk detectable.
-      - name: Create GitHub release with binary attached
+      - name: Create GitHub release with zip attached
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $exe = "target/release/darkbright-helper.exe"
-          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()
+          $zip = $env:ZIP_NAME
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           $notes = "See CHANGELOG.md for the changes in this release.`n`n" +
-                   "SHA-256 of darkbright-helper.exe`n`n" +
+                   "The zip contains the executable together with its license files and third-party notices.`n`n" +
+                   "SHA-256 of $zip`n`n" +
                    "    $hash`n`n" +
-                   "Verify with: Get-FileHash darkbright-helper.exe -Algorithm SHA256"
-          gh release create $env:GITHUB_REF_NAME $exe --title $env:GITHUB_REF_NAME --notes $notes
+                   "Verify with: Get-FileHash $zip -Algorithm SHA256`n`n" +
+                   "Build provenance: gh attestation verify $zip --repo $env:GITHUB_REPOSITORY"
+          gh release create $env:GITHUB_REF_NAME $zip --title $env:GITHUB_REF_NAME --notes $notes
