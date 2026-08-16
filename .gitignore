@@ -55,6 +55,9 @@ personal/
 # Local AI-assistant working directories (agent settings, plans, scratch diffs)
 .claude/
 .superpowers/
+# One-shot AI implementation plans stay local; the durable design record is
+# docs/superpowers/specs/ (see docs/superpowers/README.md)
+docs/superpowers/plans/
 
 
 # Added by cargo
