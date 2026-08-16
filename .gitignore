@@ -52,6 +52,10 @@ __pycache__
 personal/
 .aider*
 
+# Local AI-assistant working directories (agent settings, plans, scratch diffs)
+.claude/
+.superpowers/
+
 
 # Added by cargo
 
