@@ -1,6 +1,6 @@
 [package]
 name = "darkbright-helper"
-version = "0.8.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Hotkey-driven monitor brightness control for Windows via DDC/CI, with an overlay fallback for dimming below the hardware minimum."

@@ -5,13 +5,23 @@ history lives in the git log.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-08-16
+
+First public release: the repository was open-sourced under `MIT OR Apache-2.0`
+on this date, and this is the first version built by the packaging workflow
+described below.
+
 ### Added
 
 - Panics are now logged (payload, source location, thread) and the log sinks
   flushed before the process dies, so a crash in a release build — where the
   console is hidden — leaves a trace in the opt-in file log.
-- Releases now ship a prebuilt `darkbright-helper.exe` on GitHub Releases,
-  built by a tag-triggered workflow; `RELEASING.md` documents the procedure.
+- Releases now ship a `darkbright-helper-<version>-windows-x64.zip` on GitHub
+  Releases, built by a tag-triggered workflow: the executable together with both
+  licence files and a generated `THIRD-PARTY-NOTICES.html` covering every crate
+  compiled into it. Build provenance is attested, so `gh attestation verify`
+  ties the binary to the commit and workflow run that produced it, and the
+  release notes carry the zip's SHA-256. `RELEASING.md` documents the procedure.
 - Unknown config keys (typos, misplaced settings) are now warned about at
   load with their full path instead of being silently ignored.
 - A display change (monitor plugged, unplugged, or resolution switched) now
