@@ -5,8 +5,10 @@ when 0 % is still too bright, keeps dimming with a black overlay. Multi-monitor 
 hotkey hits the monitor your mouse is on. One executable, no network access, written in
 Rust.
 
-<!-- Record docs/media/demo.gif before merging this branch — see the recording notes in the PR. -->
-![Pressing the hotkey lowers the on-screen brightness readout to 0 %, then keeps dimming the screen with the overlay](docs/media/demo.gif)
+![Filmed off-screen: the monitor's backlight dims to 0 %, then the overlay keeps dimming past it](docs/media/demo.gif)
+
+*Filmed off-screen with the camera's exposure locked — a screen recording cannot show the
+first half, because DDC/CI dims the monitor's backlight rather than the image.*
 
 ## What it does
 
