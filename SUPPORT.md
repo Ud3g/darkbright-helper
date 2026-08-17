@@ -21,6 +21,14 @@ not the issue tracker.
    Defender warnings are expected and documented).
 3. Search existing issues, including closed ones.
 
+**If you are not sure whether it is a bug, it belongs in
+[Q&A](https://github.com/Ud3g/darkbright-helper/discussions/categories/q-a) rather than
+here.** An issue says the tool deviates from documented behaviour, and the bug report asks
+for a debug log to prove it. A question does not need either. Reports on how the tool
+behaves on your particular monitors are welcome in
+[General](https://github.com/Ud3g/darkbright-helper/discussions/categories/general) —
+DDC/CI implementations vary wildly, so that information is genuinely useful to me.
+
 ## How to report a problem so I can actually investigate it
 
 For almost anything beyond a typo, I need a **debug log** — without it, most hardware

@@ -1,1 +1,13 @@
 blank_issues_enabled: false
+contact_links:
+  - name: Not sure it is a bug? Ask in Q&A
+    url: https://github.com/Ud3g/darkbright-helper/discussions/categories/q-a
+    about: >-
+      Dedicated brightness keys not working, the overlay not covering a fullscreen game,
+      a laptop's internal panel not responding, SmartScreen or Defender warnings — these
+      are documented behaviour rather than bugs. Ask here and skip the bug report.
+  - name: Which monitors work?
+    url: https://github.com/Ud3g/darkbright-helper/discussions/categories/general
+    about: >-
+      Report how the tool behaves on your monitors, or anything that does not fit the
+      other categories. DDC/CI implementations vary wildly, so these reports are useful.
