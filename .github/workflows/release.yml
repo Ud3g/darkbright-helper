@@ -91,3 +91,27 @@ jobs:
                    "Verify with: Get-FileHash $zip -Algorithm SHA256`n`n" +
                    "Build provenance: gh attestation verify $zip --repo $env:GITHUB_REPOSITORY"
           gh release create $env:GITHUB_REF_NAME $zip --title $env:GITHUB_REF_NAME --notes $notes
+
+  # Submits the new version's manifest to the Windows Package Manager community
+  # repository as a pull request, so `winget upgrade` sees the release.
+  #
+  # This runs as a job here rather than on a `release: published` trigger,
+  # because the release above is created with the workflow's own GITHUB_TOKEN,
+  # and events raised by that token deliberately do not start new workflow runs.
+  #
+  # Requires the WINGET_TOKEN secret: a *classic* PAT with `public_repo` scope
+  # (fine-grained tokens are not supported), plus a fork of microsoft/winget-pkgs
+  # under the same account. A failure here does not affect the published release.
+  winget:
+    name: publish to winget
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: Ud3g.darkbright-helper
+          # The release asset is a zip, so the action's .exe/.msi default never matches.
+          installers-regex: '\.zip$'
+          release-tag: ${{ github.ref_name }}
+          release-notes-url: https://github.com/Ud3g/darkbright-helper/releases/tag/${{ github.ref_name }}
+          token: ${{ secrets.WINGET_TOKEN }}
