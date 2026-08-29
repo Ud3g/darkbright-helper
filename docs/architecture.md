@@ -982,6 +982,42 @@ The application runs as a background process with a system tray icon for user in
 - Show current overlay opacity (🕶) and hardware brightness (🔆) for each monitor
 - Updated each time the menu is opened via `TrayMenuOpening` request/response
 
+**Menu Theming:**
+
+The context menu is a plain `TrackPopupMenu` popup, which Windows draws light
+unless the process has opted into dark mode. `platform/windows/theme.rs` makes
+that opt-in once, before the tray window exists: `SetPreferredAppMode(AllowDark)`,
+`RefreshImmersiveColorPolicyState`, `FlushMenuThemes`, plus
+`AllowDarkModeForWindow` for the message-only window that owns the menu.
+`AllowDark` rather than `ForceDark` is the point — the system light/dark
+setting decides the colour, the app never overrides it.
+
+Keeping up with a *changed* setting deliberately ignores the notification
+Windows sends for it. The `WM_SETTINGCHANGE` broadcast carrying
+`"ImmersiveColorSet"` never reaches this app: the tray's window is
+message-only, and message-only windows are excluded from broadcasts — measured,
+not assumed, after a first attempt to handle that message logged nothing across
+half an hour of theme switching. Rather than acquire a top-level window to hear
+the news, `show_context_menu` refreshes the theme itself immediately before it
+builds the popup. The menu is rebuilt on every right-click anyway, so it always
+reflects the setting as it stands at that moment, and no delivery path is left
+that could silently fail.
+
+That refresh is `RefreshImmersiveColorPolicyState` **followed by**
+`FlushMenuThemes`, and the order matters: `FlushMenuThemes` alone leaves the
+menu in whichever colour it had at process start — the first version of this
+did exactly that and did not follow a live theme change. The same pairing
+appears in the reference implementations of this API (wxWidgets `darkmode.cpp`,
+`ysc3839/win32-darkmode`).
+
+All four switches are exported by `uxtheme.dll` by ordinal only and appear in
+no public header, so they are resolved at runtime and gated on Windows build
+17763 (see [Maintenance Decisions](#maintenance-decisions)). Every failure path
+— build too old, library absent, ordinal moved — leaves the menu precisely as
+it was before: light, fully functional, one `debug` line in the log. Nothing
+else in the app opts in. The usage window and the message boxes keep the system
+default, and the OSD and overlay paint their own colours regardless.
+
 **Degraded-State Indicator:**
 
 Three conditions are visible in the tray: the two supervision give-up states
@@ -1074,6 +1110,31 @@ Dependabot PR are covered under [Dependencies](#dependencies).
 
 There is no standing revisit interval: re-evaluate whenever upstream ships a breaking
 release that touches the API surface this project actually uses.
+
+### Dark menus through undocumented `uxtheme` ordinals
+
+`SetPreferredAppMode`, `AllowDarkModeForWindow`, `FlushMenuThemes` and
+`RefreshImmersiveColorPolicyState` are the only way to get a system-drawn Win32
+popup menu to follow the light/dark setting. Microsoft exports them from
+`uxtheme.dll` by ordinal (135, 133, 136, 104), without names, and documents
+none of them. The alternatives were weighed and
+rejected: owner-drawing the menu means several hundred lines of GDI that still
+misses the rounded corners and backdrop of a system menu, and a custom popup
+window means owning keyboard navigation, dismissal and accessibility for six
+menu rows.
+
+The exposure is bounded by construction. The ordinals are resolved once, behind
+a Windows-build gate (≥ 17763), and every failure — gate, `LoadLibraryW`, any
+one `GetProcAddress` — returns the same nothing: the menu is drawn light, as it
+was before this existed. No `Result` propagates, no `HealthWarnings` entry is
+raised, and no other code path depends on the call having worked. The worst
+realistic outcome of Microsoft moving an ordinal is therefore a light menu on a
+dark desktop, not a crash — the resolution happens before any pointer is
+called, so a moved ordinal yields a failed lookup rather than a wrong signature.
+
+Revisit when a Windows release changes the ordinals or when a documented API
+for menu theming appears. There is no interval to check on: the failure is
+visible (light menu) and harmless.
 
 ### Hand-rolled handle wrappers predating `Owned<T>`
 
