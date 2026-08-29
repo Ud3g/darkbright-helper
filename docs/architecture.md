@@ -28,6 +28,28 @@ hardware pass noted in `Cargo.toml`, so it stands alone rather than blocking
 everything grouped with it. A bump that raises the minimum toolchain is caught
 by CI's separate MSRV job, not by the update PR itself.
 
+### Build-Time Resources
+
+`build.rs` embeds two resources through `winres`, both Windows-only:
+
+- **The application icon** (`res/icon.ico`), used by the shell and by the tray.
+- **An application manifest** declaring a dependency on version 6 of the common
+  controls (`Microsoft.Windows.Common-Controls`, resource type `RT_MANIFEST`,
+  ID 1). This is what enables visual styles for system-drawn controls.
+
+Without that declaration Windows draws system controls with the pre-XP
+renderer, and a themed control cannot follow the light/dark setting at all — a
+control asked to theme itself dark would simply stay grey. The app's two
+message boxes are the only surface this reaches today: their buttons are drawn
+in the current Windows style rather than the grey 3D one. Message boxes have no
+dark rendering to follow, so they stay light either way; the manifest changes
+how they are painted, not which colours they use.
+
+The manifest declares nothing else on purpose. DPI awareness, long path support
+and the requested execution level are all things a manifest can set, and each
+changes how the app *behaves* rather than how a control is *painted* — they are
+separate changes with separate testing, not riders on this one.
+
 ---
 
 ## Core Architecture
