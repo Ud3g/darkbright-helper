@@ -81,17 +81,26 @@ the style for recursing into nested containers, which this layout avoids.
 The hotkey-capture control additionally answers `WM_GETDLGCODE` (see
 "Control decisions").
 
-**Topmost, or invisible:** the dimming overlay and the OSD are both
-`WS_EX_TOPMOST`; a normal-z settings window on a monitor dimmed to 0 %
-would sit *beneath* the click-through black overlay — receiving input the
-user cannot see. "My screen is dark, let me open Settings" is this app's
-headline scenario, so the dialog is `WS_EX_TOPMOST` too, consistent with
-how the OSD already stays visible above the overlay.
+**Topmost, or invisible — and topmost must be sticky:** the dimming
+overlay and the OSD are both `WS_EX_TOPMOST`; a normal-z settings window
+on a monitor dimmed to 0 % would sit *beneath* the click-through black
+overlay — receiving input the user cannot see. "My screen is dark, let me
+open Settings" is this app's headline scenario, so the dialog is
+`WS_EX_TOPMOST` too. But the style alone is not enough: the overlay
+re-asserts `HWND_TOPMOST` on **every** opacity update, and the OSD on
+every show — that re-assertion, not the style, is how the OSD actually
+stays visible. One dim keypress after opening Settings would bury a
+one-shot-topmost dialog again. Therefore: after any overlay update while
+the window is open, the controller has the `SettingsSink` re-assert the
+dialog's `HWND_TOPMOST` (a cheap `SetWindowPos` with
+`SWP_NOMOVE|NOSIZE|NOACTIVATE`).
 
 **Placement:** on the monitor under the cursor (the app's universal
 targeting rule), geometry computed *before* `CreateWindowExW` via
-`MonitorFromPoint` + `GetDpiForMonitor` (the `osd.rs` precedent), so the
-window is born at the right DPI instead of created-then-rescaled.
+`MonitorFromPoint` + `GetDpiForMonitor`. The *functions* have precedent in
+`osd.rs`; computing geometry before window creation does not (the OSD is
+created once with `CW_USEDEFAULT` and positioned per show) — this is new
+sequencing, stated so nobody hunts for a pattern that isn't there.
 
 ### Message flow (single-owner model preserved)
 
@@ -158,9 +167,11 @@ Three follow-on consequences the rebind path must handle:
 - **The crash-respawn path must use live bindings.** Today
   `start_hotkey_thread(&config, …)` in the respawn arm re-registers the
   *startup* config; after a live rebind, one thread death would silently
-  restore the old combinations. The respawn path reads the current
-  bindings (a `main.rs`-side mirror the rebind path updates), and the
-  manual checklist covers "rebind, kill the hotkey thread, verify the new
+  restore the old combinations. The respawn arm queries the controller
+  for the current bindings and intercept flag (it already calls
+  controller methods every tick) — no `main.rs`-side mirror: the
+  controller stays the sole owner of the runtime config. The manual
+  checklist covers "rebind, kill the hotkey thread, verify the new
   binding comes back".
 - **The tray menu's hotkey rows unfreeze.** The usage rows are currently
   composed once at spawn under the code-documented invariant "the hotkeys
@@ -168,22 +179,50 @@ Three follow-on consequences the rebind path must handle:
   move into the existing `TrayMenuOpening { reply_tx }` request/response,
   so the menu always shows the current bindings; the stale comment in
   `tray.rs` is corrected.
-- **Failure has a deadline and a floor.** If re-registering the *previous*
-  combination also fails (another app grabbed it meanwhile), or no
-  `HotkeyRebindResult` arrives within a wall-clock deadline (`REBIND_TIMEOUT`
-  in `core/reconcile.rs`, alongside `SET_TIMEOUT`/`REFRESH_TIMEOUT`), the
-  controller calls `set_hotkeys_lost()` so the degraded state reaches the
-  tray, and the dialog says so — never a silently hotkey-less app behind a
-  healthy-looking icon.
+- **Failure has a deadline and a *clearable* floor.** If re-registering
+  the *previous* combination also fails (another app grabbed it
+  meanwhile), or no `HotkeyRebindResult` arrives within a wall-clock ack
+  deadline (`REBIND_TIMEOUT` in `core/reconcile.rs`, alongside
+  `SET_TIMEOUT`/`REFRESH_TIMEOUT`), the tray must warn — but **not** via
+  `set_hotkeys_lost()`: that latch is deliberately permanent ("hotkeys
+  unavailable until app restart", supervision gave up and means it),
+  while a failed rebind is fixable by trying another combination in the
+  still-open dialog. Per the codebase's own degraded-state doctrine
+  (variants "differ in what ends them"), this is a new, *clearable*
+  hotkeys-degraded warning, cleared by any subsequent successful
+  rebind/resume ack. `hotkeys_lost` stays reserved for supervision
+  give-up. Never a silently hotkey-less app behind a healthy-looking
+  icon — and never a healthy app behind a permanently alarmed one.
 
 **Capture must suspend interception.** While a combination is registered,
 `RegisterHotKey` delivers it as `WM_HOTKEY` to the hotkey thread instead
 of as keystrokes to the focused window — so with the defaults, pressing
 `Ctrl+Shift+Up` inside the capture field would *adjust the brightness*
 rather than be captured. Entering capture mode therefore posts a
-"suspend" to the hotkey thread (unregister all combinations); leaving it
-(capture, Esc, or focus loss) posts resume-with-current-bindings or the
-rebind. Suspension is bounded by the same `REBIND_TIMEOUT` fallback.
+"suspend" to the hotkey thread; leaving it (capture completed, Esc, focus
+loss, window destroyed, `SettingsClosed`) posts
+resume-with-current-bindings or the rebind — resume is guaranteed on
+*every* exit path.
+
+Suspension covers everything that intercepts keys: the primary
+combinations, the **secondary plain registrations of
+`VK_BRIGHTNESS_UP/DOWN`** (registered whenever the low-level hook is off
+or failed), and the hook itself. The same completeness applies to rebind
+and to toggling the intercept flag: off→on tries the hook and falls back
+to the secondaries on failure (mirroring startup), on→off uninstalls the
+hook and registers the secondaries; `HotkeyRebindResult` reports a
+partial outcome (hook failed, fallback active) distinctly.
+
+Lifecycle rules — `REBIND_TIMEOUT` is an **ack deadline per posted
+round-trip** (suspend, resume, rebind each get acknowledged), never a
+bound on capture itself, which is user-paced and unbounded: a user may
+sit in "Press a key combination…" for a minute, and neither silently
+re-registering hotkeys under the field nor declaring hotkeys degraded is
+acceptable for thinking too long. The controller owns a "capture active"
+flag and reconciles the races: hotkey thread respawned while suspended →
+immediately post suspend to the new thread; settings window gone while
+suspended (`SettingsClosed`, or a failed post to its HWND) → post resume;
+a missed ack → the clearable hotkeys-degraded warning above.
 
 **Rebind stays optimistic with revert**, mirroring the brightness
 pipeline's `apply_set_result`/`force_revert` philosophy: the controller
@@ -231,7 +270,12 @@ preference; silently removing autostart would surprise).
 Edge cases (the app ships as a portable zip, so the exe moves): the
 checkbox shows checked iff the `Run` value exists; toggling it on always
 (re)writes the value with the *current* exe path, which self-heals a stale
-entry. A failed registry write reverts the checkbox and shows an inline
+entry, and also deletes any `StartupApproved\Run` veto (Task Manager's
+Startup tab disables entries there while leaving the `Run` value in
+place). Accepted read-side limitation, documented here: an entry disabled
+via Task Manager still shows as checked — reflecting that state would
+mean parsing an undocumented binary format; toggling off and on heals
+it. A failed registry write reverts the checkbox and shows an inline
 notice — the checkbox never lies about what was actually written.
 
 ## UI layout
@@ -294,18 +338,27 @@ notice — the checkbox never lies about what was actually written.
   over every entry. Keys outside the set are rejected with an inline
   message; the config *file* stays as permissive as today. Assigning the
   same combination to both actions is rejected before any registration
-  attempt — the check is a pure `core` function (host-testable), called
-  from the dialog.
+  attempt — and the check compares the *parsed canonical form*, not
+  strings: `parse_hotkey` is case/order/alias-insensitive
+  (`shift+ctrl+up` ≡ `Control+Shift+Up`), and a dialog opened on a
+  hand-edited spelling must still detect the duplicate. The predicate is
+  a helper in `hotkey.rs` with in-module tests.
+  Keyboard path: capture also starts via Space/Enter on the focused
+  field (not click-only); while capturing, modifier keydowns update a
+  preview and only a non-modifier keydown completes the capture. Dialog
+  keys: Esc closes the window (safe under instant apply), Enter
+  activates the default button (Close) — the custom wndproc answers
+  `DM_GETDEFID` so `IsDialogMessage` finds it.
 - **"0 = disabled" becomes a checkbox.** The refresh interval fields never
   show a magic zero: checkbox unchecked = field disabled = `0` in the
   config. The config schema is unchanged. The dialog remembers the last
   non-zero value for the session, so uncheck-then-recheck restores it; if
   the dialog opened at 0, rechecking shows the default.
 - **Log level** is a dropdown: error / warn / info / debug / trace — with
-  a grayed explainer carrying the caveat the config file documents today:
-  at debug and below, monitor serial numbers and absolute paths are
-  logged. The warning must not get lost on the way from hand-editors to a
-  novice-facing dropdown.
+  a grayed explainer carrying the caveat that today lives only in the
+  config source docs: at debug and below, monitor serial numbers and
+  absolute paths are logged. The warning must not get lost on the way
+  from source-comment readers to a novice-facing dropdown.
 - The intercept checkbox carries a grayed explainer line (hardware caveat +
   antivirus note); the label says "Try to intercept" because the low-level
   hook genuinely cannot see brightness keys routed through vendor
@@ -330,8 +383,10 @@ today: **nothing in the repo can ask which mode the system is in.** The
 existing code never needs the boolean (the theme engine decides for the
 menu), but `DwmSetWindowAttribute` takes one and the `WM_CTLCOLOR*`
 handlers must pick a brush. A new `theme::system_prefers_dark()` reads the
-documented `AppsUseLightTheme` registry value (no new ordinal, registry
-feature already enabled). And the palette is gated on the *same*
+`AppsUseLightTheme` registry value — well-established convention, though
+not formally documented by Microsoft, a status worth stating plainly in a
+module that keeps careful score of documented-vs-ordinal-hack (no new
+ordinal either way; the registry feature is already enabled). And the palette is gated on the *same*
 condition as `theme.rs::api()`: where the uxtheme opt-in is unavailable
 (pre-18362, or missing ordinals), the dialog paints **light, full stop** —
 dark brushes under un-themed light controls would be dark-on-dark and
@@ -343,9 +398,12 @@ unreadable.
    18362 — so try 20, fall back to 19.
 2. **Controls:** `SetWindowTheme(hwnd, "DarkMode_Explorer")` for
    buttons/checkboxes/scrollbars, `"DarkMode_CFD"` for the combo box, plus
-   `WM_CTLCOLORDLG`/`WM_CTLCOLORSTATIC`/`WM_CTLCOLOREDIT`/`WM_CTLCOLORBTN`
-   and `WM_CTLCOLORLISTBOX` (the combo's popped-open dropdown list)
-   handlers returning dark brushes. The control palette avoids the worst
+   `WM_CTLCOLORSTATIC`/`WM_CTLCOLOREDIT`/`WM_CTLCOLORBTN` and
+   `WM_CTLCOLORLISTBOX` (the combo's popped-open dropdown list) handlers
+   returning dark brushes. The window's *own* background is painted via
+   the class brush (swapped on re-theme) or `WM_ERASEBKGND` — not
+   `WM_CTLCOLORDLG`, which only the dialog manager sends and a
+   `CreateWindowExW` window with a custom wndproc never receives. The control palette avoids the worst
    offender (trackbars). **The first implementation step is a dark-mode
    spike over exactly this control set**, before any layout work — and its
    first question is the *group boxes*: in the reference implementations
@@ -409,8 +467,11 @@ creation and DPI changes call.
   field, revert to the previous binding (see optimistic-with-revert flow
   above).
 - **Persistence** goes through the `ConfigStore` seam wrapping
-  `Config::save_to` unchanged (atomic `config.json.tmp` + rename, `.bak`
-  refresh) — debounced ~500 ms after the last change. Debounce timing is
+  `Config::save_to` unchanged (atomic `config.json.tmp` + rename) —
+  debounced ~500 ms after the last change. Deliberately **no** `.bak`
+  refresh on save: the backup is refreshed only on successful *load*
+  (that is the existing contract — `.bak` = the last config that
+  *parsed*), so a bad save can never be mirrored into the backup. Debounce timing is
   driven by the controller's existing injected-`now` tick, so it is
   host-testable. Known, accepted narrowing of the "a hard kill loses
   nothing" property (`architecture.md` §12): a live-applied change can be
@@ -423,16 +484,24 @@ creation and DPI changes call.
   and dropped on load, and an unconditional quit-save would therefore
   strip a hand-editor's unknown keys, ordering and formatting on every
   single run.
-- **External edits are never clobbered where the dialog didn't change
-  them.** The dialog's own footer link invites hand-edits while the
-  window is open, so "next save wins" is not good enough: the store
-  remembers the file's identity at last read/write, and when a
-  dialog-originated save finds the file changed on disk, it re-reads it,
-  overlays only the fields changed through the dialog this session (the
-  controller knows them from its `SettingChanged` history), and writes
-  the merge. External edits to untouched fields survive on disk and take
-  effect at next start — exactly the deferred-reload semantics. Still no
-  watcher, no live reload.
+- **External edits: known-field values survive where the dialog didn't
+  change them.** The dialog's own footer link invites hand-edits while
+  the window is open, so "next save wins" is not good enough: the store
+  remembers the file's identity (size + mtime — adequate, no hashing) at
+  last read/write, and when a dialog-originated save finds the file
+  changed on disk, it re-reads it, overlays only the fields changed
+  through the dialog this session (the controller knows them from its
+  `SettingChanged` history), and writes the merge. External edits to
+  untouched *known* fields survive on disk and take effect at next start
+  — exactly the deferred-reload semantics. Honest limits: any save still
+  normalizes the file (unknown keys, ordering, formatting do not
+  survive), and if the changed on-disk content does not *parse*, the
+  save is deferred (config stays dirty, inline notice in the dialog,
+  retried on the next change) — except at close/quit, where the merge
+  base falls back to the last-good in-memory config rather than losing
+  the user's dialog changes (an unparseable file would be
+  default-substituted at next start anyway, and `.bak` recovery exists).
+  Still no watcher, no live reload.
 
 ## Testing
 
@@ -442,12 +511,17 @@ manually:
 - Controller unit tests with fake `SettingsSink`/`HotkeyPort`/`ConfigStore`:
   every `SettingChanged` variant (config mutation + side effect + save
   scheduling), debounced save timing via injected `now`, hotkey rebind
-  success / failure / revert / double-failure / `REBIND_TIMEOUT` (must end
-  in `set_hotkeys_lost`), restore-defaults field-wise (fake store observes
-  `monitors` survives), the merge-on-external-change save path, opacity
-  percent↔float mapping.
-- Pure-`core` tests: the duplicate-binding predicate; the
-  `VK_TO_NAME`↔`KEY_MAP` round-trip property over every accepted key.
+  success / failure / revert / double-failure / missed ack (must raise
+  the clearable hotkeys-degraded warning) *and the recovery transition*
+  (a later successful rebind clears it), the capture-suspension
+  reconciliation rules (respawn-while-suspended re-suspends;
+  dialog-gone-while-suspended resumes), restore-defaults field-wise (fake
+  store observes `monitors` survives), the merge-on-external-change save
+  path including the unparseable-file deferral, opacity percent↔float
+  mapping.
+- In-module `hotkey.rs` tests (Windows-hosted like the rest of the
+  suite, not `core/`): the canonical-form duplicate-binding predicate;
+  the `VK_TO_NAME`↔`KEY_MAP` round-trip property over every accepted key.
 - Manual checklist added to the "Integration Testing" section of
   `docs/architecture.md`: live light/dark switch with the dialog open,
   dragging across monitors with different DPI, hotkey capture incl. a
@@ -455,7 +529,11 @@ manually:
   crash-loop gate must stay untouched), rebinding one action while the
   other keeps its combination, rebind → kill the hotkey thread → verify
   the *new* binding survives the respawn, open Settings on a monitor at
-  0 % with the full black overlay (window must be visible above it),
+  0 % with the full black overlay (window must be visible above it) and
+  then dim *further* (window must stay on top — the overlay re-asserts
+  `HWND_TOPMOST` on every update), leave capture mode by every path
+  (complete, Esc, click elsewhere, close the window) and verify hotkeys
+  work again each time,
   dragging the settings title bar during a refresh (main loop must be
   unaffected — own thread), autostart registry entry appears/disappears,
   logging restart hint, both footer links.
@@ -468,7 +546,8 @@ manually:
   `platform/windows/mod.rs`; dark-mode helpers and
   `system_prefers_dark()` extend `src/platform/windows/theme.rs`.
 - Extended: `core/state.rs` (`SettingChange`, `HotkeyRebindResult`,
-  `SettingsClosed`, the direction-only adjust variant),
+  `SettingsClosed`, the direction-only adjust variant, the clearable
+  hotkeys-degraded health warning),
   `core/controller.rs` (the three seams, handling, debounced save),
   `core/reconcile.rs` (`REBIND_TIMEOUT`), `core/config.rs`
   (restore-defaults helper), `platform/windows/hotkey.rs` (thread-id
