@@ -1012,11 +1012,18 @@ appears in the reference implementations of this API (wxWidgets `darkmode.cpp`,
 
 All four switches are exported by `uxtheme.dll` by ordinal only and appear in
 no public header, so they are resolved at runtime and gated on Windows build
-17763 (see [Maintenance Decisions](#maintenance-decisions)). Every failure path
-— build too old, library absent, ordinal moved — leaves the menu precisely as
-it was before: light, fully functional, one `debug` line in the log. Nothing
-else in the app opts in. The usage window and the message boxes keep the system
-default, and the OSD and overlay paint their own colours regardless.
+18362 (see [Maintenance Decisions](#maintenance-decisions)). Every failure path
+— build too old, library absent, export gone — leaves the menu precisely as it
+was before: light, fully functional, and named in the log (`debug` for the
+build gate, `warn` for a library or export that should have been there).
+
+`AllowDarkModeForWindow` is called for the tray's window and for no other, so
+the app's own windows are unaffected: the usage window was checked and still
+renders light on a dark system, and the OSD and overlay paint their own colours
+regardless. `SetPreferredAppMode` is process-wide, however, so system-drawn
+surfaces other than the tray menu may follow the setting too — the usage
+window's `WS_SYSMENU` popup is the one candidate, unverified either way and
+harmless if it does.
 
 **Degraded-State Indicator:**
 
@@ -1123,18 +1130,27 @@ misses the rounded corners and backdrop of a system menu, and a custom popup
 window means owning keyboard navigation, dismissal and accessibility for six
 menu rows.
 
-The exposure is bounded by construction. The ordinals are resolved once, behind
-a Windows-build gate (≥ 17763), and every failure — gate, `LoadLibraryW`, any
-one `GetProcAddress` — returns the same nothing: the menu is drawn light, as it
-was before this existed. No `Result` propagates, no `HealthWarnings` entry is
-raised, and no other code path depends on the call having worked. The worst
-realistic outcome of Microsoft moving an ordinal is therefore a light menu on a
-dark desktop, not a crash — the resolution happens before any pointer is
-called, so a moved ordinal yields a failed lookup rather than a wrong signature.
+The exposure is bounded but not eliminated. The ordinals are resolved once,
+behind a Windows-build gate (≥ 18362), and every failure — gate,
+`LoadLibraryW`, any one `GetProcAddress` — returns the same nothing: the menu
+is drawn light, as it was before this existed. No `Result` propagates, no
+`HealthWarnings` entry is raised, and no other code path depends on the call
+having worked, so an ordinal that is *removed* costs a light menu and a `warn`
+line, nothing more.
+
+The residual risk is an ordinal that is *reassigned* rather than removed. The
+lookup then succeeds and the process calls a function with the wrong signature,
+and no gate can see that coming — the build check has a floor, not a ceiling.
+This is not hypothetical: ordinal 135 was `AllowDarkModeForApp(bool)` on
+builds 17763–18361 and became `SetPreferredAppMode(PreferredAppMode)` at 18362,
+which is why the gate sits at 18362 rather than at the ordinals' first
+appearance. That risk is accepted, not engineered away: it is bounded to a
+menu that no longer themes correctly in the likely case, and it is the price of
+the only mechanism Windows offers.
 
 Revisit when a Windows release changes the ordinals or when a documented API
-for menu theming appears. There is no interval to check on: the failure is
-visible (light menu) and harmless.
+for menu theming appears. There is no interval to check on — a removed export
+now announces itself in the log, and a wrong theme is visible on sight.
 
 ### Hand-rolled handle wrappers predating `Owned<T>`
 

@@ -17,9 +17,17 @@ use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGet
 use windows::core::{BOOL, PCSTR, PCWSTR, w};
 
 /// First Windows build whose `uxtheme.dll` carries the dark-mode ordinals in
-/// the shape used here (Windows 10 1809). Earlier builds either lack them or
-/// export a differently-shaped function under the same ordinal.
-const MIN_DARK_MENU_BUILD: u32 = 17763;
+/// the shape used here (Windows 10 1903).
+///
+/// Not 1809 (17763), where the ordinals first appeared: on 17763–18361 ordinal
+/// 135 is `AllowDarkModeForApp(bool) -> bool`, and only from 18362 is it
+/// `SetPreferredAppMode(PreferredAppMode) -> PreferredAppMode`. Calling the
+/// former through the latter's signature would happen to work — `AllowDark` is
+/// 1, which is also `true`, and both travel in the same register — but "happens
+/// to work" is not a safety argument, and the coincidence would break the
+/// moment anyone passed `ForceDark`. Those builds are long out of support, so
+/// they get the light menu rather than a version-branching second signature.
+const MIN_DARK_MENU_BUILD: u32 = 18362;
 
 /// Parses the `CurrentBuildNumber` registry string into a build number.
 ///
@@ -90,10 +98,18 @@ fn api() -> Option<&'static DarkModeApi> {
 unsafe fn resolve(module: HMODULE, ordinal: usize) -> Option<RawProc> {
     // An ordinal is passed where a name pointer goes, as MAKEINTRESOURCE does;
     // it is a sentinel value, never dereferenced, hence `without_provenance`.
-    unsafe { GetProcAddress(module, PCSTR(std::ptr::without_provenance(ordinal))) }
+    let entry = unsafe { GetProcAddress(module, PCSTR(std::ptr::without_provenance(ordinal))) };
+    if entry.is_none() {
+        // The one failure this whole mechanism is braced for: a Windows release
+        // that drops an export nobody promised to keep. Worth a line, because
+        // otherwise "the menu stopped being dark after an update" arrives with
+        // nothing in the log to explain it.
+        log::warn!(ordinal = ordinal; "uxtheme export missing; tray menu stays light");
+    }
+    entry
 }
 
-/// Loads the dark-mode entry points, or gives up quietly.
+/// Loads the dark-mode entry points, or gives up.
 fn load_dark_mode_api() -> Option<DarkModeApi> {
     match current_build_number() {
         Some(build) if supports_dark_menus(build) => {}
@@ -124,8 +140,13 @@ fn load_dark_mode_api() -> Option<DarkModeApi> {
         let refresh = resolve(module, ORD_REFRESH_IMMERSIVE_COLOR_POLICY_STATE)?;
 
         Some(DarkModeApi {
-            // SAFETY: the ordinals identify these signatures on every build at
-            // or above `MIN_DARK_MENU_BUILD`, which the gate above enforced.
+            // SAFETY: on every supported build these ordinals carry exactly
+            // these signatures — see `MIN_DARK_MENU_BUILD` for why the gate
+            // sits where it does. The residual risk is a future release that
+            // reassigns an ordinal instead of removing it: the lookup would
+            // then succeed and hand back the wrong function. Nothing here can
+            // detect that, which is why it is written down as an accepted risk
+            // in the architecture notes rather than claimed away.
             set_preferred_app_mode: std::mem::transmute::<RawProc, SetPreferredAppModeFn>(set),
             allow_dark_mode_for_window: std::mem::transmute::<RawProc, AllowDarkModeForWindowFn>(
                 allow,
@@ -207,7 +228,8 @@ pub(crate) fn allow_dark_mode_for_window(hwnd: HWND) {
 /// change with a `WM_SETTINGCHANGE` broadcast, but the tray's window is
 /// message-only and message-only windows are excluded from broadcasts — so the
 /// menu is refreshed where it is built rather than where the news would have
-/// arrived. At one call per right-click the cost is irrelevant.
+/// arrived: on the tray thread, which is the thread that owns the menu. At one
+/// call per right-click the cost is irrelevant.
 ///
 /// Both calls are needed: `FlushMenuThemes` on its own leaves the menu in the
 /// colour it had when the process started, which is why the refresh comes
@@ -248,6 +270,9 @@ mod tests {
     #[test]
     fn gates_on_the_first_build_with_dark_menus() {
         assert!(!supports_dark_menus(17134));
+        // 17763 carries the ordinals but gives 135 a different signature, so
+        // it must fall on the light side of the gate.
+        assert!(!supports_dark_menus(17763));
         assert!(supports_dark_menus(MIN_DARK_MENU_BUILD));
         assert!(supports_dark_menus(22621));
     }
