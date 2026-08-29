@@ -38,6 +38,7 @@ use windows::core::{PCWSTR, w};
 use crate::core::state::{BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData};
 use crate::error::{BrightnessError, Result};
 
+use super::theme;
 use super::{SafeHwnd, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -614,6 +615,9 @@ fn append_separator(hmenu: HMENU) {
 ///
 /// * `hwnd` - Window handle for menu ownership and message routing.
 fn show_context_menu(hwnd: HWND) {
+    // The system light/dark setting may have changed since the last menu.
+    theme::refresh_menu_theme();
+
     unsafe {
         // Create popup menu
         let Ok(hmenu) = CreatePopupMenu() else {
@@ -899,6 +903,10 @@ impl TrayIcon {
     pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
         let class_name = ensure_tray_class_registered()?;
 
+        // Before the first menu exists: without this the context menu is drawn
+        // light even when the system asks for dark.
+        theme::init_dark_menus();
+
         // Create message-only window (HWND_MESSAGE parent = no visible window)
         let hwnd = unsafe {
             let hinstance = GetModuleHandleW(None).map_err(|e| {
@@ -928,6 +936,10 @@ impl TrayIcon {
         };
 
         log::debug!("Tray message window created");
+
+        // The menu belongs to this window, so the window has to be dark-mode
+        // aware as well for the popup to pick the dark theme up.
+        theme::allow_dark_mode_for_window(hwnd);
 
         // Store sender in thread-local storage for window procedure access
         set_tray_sender(sender);

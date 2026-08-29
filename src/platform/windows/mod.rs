@@ -28,6 +28,7 @@ mod osd_render;
 pub mod overlay;
 pub(crate) mod power;
 pub mod single_instance;
+mod theme;
 pub(crate) mod tray;
 pub(crate) mod usage;
 

@@ -56,7 +56,7 @@ Message enums (`BrightnessMessage` to main, `DdcCommand` to worker) are defined 
 
 - `src/core/` — platform-agnostic: `brightness.rs` (adjustment math), `config.rs` (JSON config + validation), `controller.rs` (message-driven orchestration behind the platform seams), `edid.rs` (EDID → `MonitorId` parsing), `logfile.rs` (rolling file sink), `panic_hook.rs` (panic logging), `reconcile.rs` (refresh/respawn tracking), `state.rs` (state, messages, `MonitorId`, display-name generation).
 - `src/platform/mod.rs` — gates the platform submodule; the portability seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`) live in `core/controller.rs`.
-- `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `osd_render.rs` (private), `overlay.rs`, `power.rs`, `single_instance.rs`, `tray.rs`, `usage.rs`; plus `mod.rs`, which is not a bare gate — it holds `CursorLocator` (the `MonitorLocator` impl), the message-box helpers, and the public re-exports the binary imports.
+- `src/platform/windows/` — all Win32 FFI: `ddc.rs`, `ddc_worker.rs`, `hotkey.rs`, `osd.rs`, `osd_render.rs` (private), `overlay.rs`, `power.rs`, `single_instance.rs`, `theme.rs` (dark-mode opt-in for the tray menu), `tray.rs`, `usage.rs`; plus `mod.rs`, which is not a bare gate — it holds `CursorLocator` (the `MonitorLocator` impl), the message-box helpers, and the public re-exports the binary imports.
 - `src/error.rs` — `BrightnessError` enum + `pub type Result<T>`.
 - `src/lib.rs` — the crate is a lib + bin pair; `main.rs` consumes everything through `darkbright_helper::…`. Visibility rule: `pub` means the binary or `tests/` names it (see `docs/code-conventions.md`).
 

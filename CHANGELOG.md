@@ -5,6 +5,13 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- The tray context menu now follows the Windows light/dark setting instead of
+  always being drawn light, and picks up a changed setting the next time it is
+  opened. Requires Windows 10 1903 or newer; on anything older, or if the
+  theming entry points are unavailable, the menu stays light exactly as before.
+
 ### Fixed
 
 - The `THIRD-PARTY-NOTICES.html` shipped in release archives attributed the
