@@ -12,6 +12,15 @@ history lives in the git log.
   opened. Requires Windows 10 1903 or newer; on anything older, or if the
   theming entry points are unavailable, the menu stays light exactly as before.
 
+### Changed
+
+- The executable now carries an application manifest declaring version 6 of the
+  common controls, so system-drawn controls use the current Windows renderer
+  instead of the pre-XP one. Visible only in the app's two message boxes (the
+  single-instance notice and the hotkey-registration error), whose buttons are
+  drawn in the modern style; they stay light, as message boxes have no dark
+  rendering to follow.
+
 ### Fixed
 
 - The `THIRD-PARTY-NOTICES.html` shipped in release archives attributed the
