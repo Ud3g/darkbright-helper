@@ -60,9 +60,6 @@ const WM_TRAY_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 10
 // Menu Item IDs
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Menu item ID for the "Usage" option (shows hotkey instructions).
-const MENU_ID_USAGE: u32 = 1000;
-
 /// Menu item ID for the "Settings" option.
 const MENU_ID_SETTINGS: u32 = 1001;
 
@@ -81,6 +78,9 @@ const MENU_ID_MONITOR_BASE: u32 = 2000;
 
 /// Base ID for degraded-subsystem warning rows (non-clickable).
 const MENU_ID_WARNING_BASE: u32 = 3000;
+
+/// Base ID for the usage instruction rows (non-clickable).
+const MENU_ID_USAGE_BASE: u32 = 4000;
 
 /// Tooltip text shown when hovering over the tray icon.
 const TRAY_TOOLTIP: &str = "Brightness Control";
@@ -148,6 +148,27 @@ fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
     lines
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Usage Presentation (pure helper)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Composes the grayed rows that teach the core interaction.
+///
+/// The block reads as one sentence finished by two key bindings. Everything
+/// after a `\t` is drawn right-aligned in the menu's shortcut column — the
+/// place a reader already scans for a key combination, and the reason the rows
+/// stay narrower than they would as prose.
+///
+/// The bindings come from the running configuration, so a user who rebound
+/// them is taught the keys that actually work.
+fn usage_menu_lines(hotkey_up: &str, hotkey_down: &str) -> [String; 3] {
+    [
+        "Point mouse at a monitor, then:".to_string(),
+        format!("Brighter\t{hotkey_up}"),
+        format!("Dimmer\t{hotkey_down}"),
+    ]
+}
+
 /// Whether the tray icon should carry the amber warning badge.
 ///
 /// Deliberately excludes a failed file log. The badge says the app cannot do
@@ -212,6 +233,11 @@ thread_local! {
     /// Thread-local storage for the message sender.
     /// This allows the window procedure to send messages to the main thread.
     static TRAY_SENDER: RefCell<Option<Sender<BrightnessMessage>>> = const { RefCell::new(None) };
+
+    /// Usage rows for the menu; set once by `TrayIcon::new` (tray thread).
+    /// Composed up front because the hotkeys cannot change while the app runs
+    /// — the configuration is read once at startup.
+    static USAGE_LINES: RefCell<Option<[String; 3]>> = const { RefCell::new(None) };
 }
 
 /// Sets the thread-local sender for the tray icon callbacks.
@@ -661,7 +687,23 @@ fn show_context_menu(hwnd: HWND) {
             }
         }
 
-        append_menu_item(hmenu, MF_STRING, MENU_ID_USAGE, "Usage");
+        // How to use the app, stated rather than hidden behind a click: this
+        // is the only place a first-time user is told what to press. Drawn
+        // from the configuration, so it survives a rebind — and it appears
+        // even when the main thread failed to answer above, because it does
+        // not depend on that data.
+        USAGE_LINES.with(|lines| {
+            if let Some(lines) = lines.borrow().as_ref() {
+                for (index, line) in lines.iter().enumerate() {
+                    // Menu IDs are u32; this block is exactly three rows.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let menu_id = MENU_ID_USAGE_BASE + (index as u32);
+                    append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, line);
+                }
+                append_separator(hmenu);
+            }
+        });
+
         append_menu_item(hmenu, MF_STRING, MENU_ID_SETTINGS, "Settings");
         append_menu_item(hmenu, MF_STRING, MENU_ID_OPEN_LOGS, "Open Log Folder");
         append_menu_item(hmenu, MF_STRING, MENU_ID_QUIT, &format!("Quit {APP_NAME}"));
@@ -717,14 +759,6 @@ fn handle_menu_selection(cmd: u32) {
         0 => {
             // Menu was dismissed without selection
             log::debug!("Tray menu dismissed");
-        }
-        MENU_ID_USAGE => {
-            log::debug!("Usage menu item clicked");
-            with_tray_sender(|sender| {
-                if let Err(e) = sender.send(BrightnessMessage::TrayOpenUsage) {
-                    log::error!(error:% = e; "Failed to send TrayOpenUsage");
-                }
-            });
         }
         MENU_ID_SETTINGS => {
             log::debug!("Settings menu item clicked");
@@ -893,6 +927,9 @@ impl TrayIcon {
     /// # Arguments
     ///
     /// * `sender` - Channel to send messages to the main thread.
+    /// * `hotkey_up` - Configured hotkey for increasing brightness, shown in
+    ///   the menu's usage rows.
+    /// * `hotkey_down` - Configured hotkey for decreasing brightness.
     ///
     /// # Errors
     ///
@@ -900,7 +937,11 @@ impl TrayIcon {
     /// - The message window cannot be created
     /// - The icon resource cannot be loaded
     /// - The tray icon cannot be registered with the shell
-    pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
+    pub fn new(
+        sender: Sender<BrightnessMessage>,
+        hotkey_up: &str,
+        hotkey_down: &str,
+    ) -> Result<Self> {
         let class_name = ensure_tray_class_registered()?;
 
         // Before the first menu exists: without this the context menu is drawn
@@ -943,6 +984,12 @@ impl TrayIcon {
 
         // Store sender in thread-local storage for window procedure access
         set_tray_sender(sender);
+
+        // Same reason: the menu is built in the window procedure, which has no
+        // path back to this struct.
+        USAGE_LINES.with(|lines| {
+            *lines.borrow_mut() = Some(usage_menu_lines(hotkey_up, hotkey_down));
+        });
 
         // Load the application icon
         let icon_handle = load_tray_icon()?;
@@ -1196,6 +1243,19 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn usage_lines_show_the_configured_hotkeys_in_the_shortcut_column() {
+        let lines = usage_menu_lines("Alt+F1", "Alt+F2");
+
+        // The header names the mouse step; the hotkeys never appear in it.
+        assert!(lines[0].contains("monitor"));
+        assert!(!lines[0].contains('\t'));
+
+        // Everything after the tab lands in the menu's shortcut column.
+        assert_eq!(lines[1], "Brighter\tAlt+F1");
+        assert_eq!(lines[2], "Dimmer\tAlt+F2");
     }
 
     #[test]

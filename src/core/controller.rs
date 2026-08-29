@@ -800,9 +800,7 @@ where
                 self.handle_refresh(now);
             }
             // ── Tray Icon Messages ───────────────────────────────────────
-            BrightnessMessage::TrayOpenUsage
-            | BrightnessMessage::TrayOpenSettings
-            | BrightnessMessage::TrayOpenLogFolder => {
+            BrightnessMessage::TrayOpenSettings | BrightnessMessage::TrayOpenLogFolder => {
                 // Shell side effects; the binary's loop handles them before
                 // forwarding. Reaching this arm means the binary failed to
                 // intercept the message, silently no-op'ing the tray item.
@@ -1980,11 +1978,11 @@ mod tests {
         let base = Instant::now();
         let mut c = test_controller(base);
         assert!(
-            c.handle_message(BrightnessMessage::TrayOpenUsage, base)
+            c.handle_message(BrightnessMessage::TrayOpenSettings, base)
                 .unwrap()
         );
         assert!(
-            c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            c.handle_message(BrightnessMessage::TrayOpenLogFolder, base)
                 .unwrap()
         );
         assert!(c.ddc.sent.is_empty());
