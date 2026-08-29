@@ -48,3 +48,10 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
 - Tags `0.7.1` and older predate this workflow and have no binaries; `0.8.0`
   was tagged retroactively (the workflow file does not exist at that commit,
   so no artifact was built for it).
+- After the release is published, a second job opens a pull request against
+  `microsoft/winget-pkgs` with the manifest for the new version. It needs the
+  `WINGET_TOKEN` repository secret — a **classic** personal access token with
+  `public_repo` scope; fine-grained tokens do not work — and a fork of
+  `microsoft/winget-pkgs` under this account, which the action pushes its branch
+  to. If that job fails, the GitHub release itself is unaffected: only the
+  WinGet listing lags behind, and the manifest can still be submitted by hand.
