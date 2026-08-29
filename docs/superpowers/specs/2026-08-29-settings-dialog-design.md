@@ -1,7 +1,8 @@
 # Settings Dialog — Design
 
 Date: 2026-08-29
-Status: design approved in brainstorming; implementation plan pending.
+Status: design approved in brainstorming, hardened by two cold adversarial
+review rounds (2026-08-29/30); implementation plan pending.
 
 ## Motivation
 
@@ -50,26 +51,47 @@ theme like the tray menu already does (hard requirement).
 
 ### Window ownership
 
-The settings window is a modeless top-level window owned by the **main
-thread** — the thread that already owns the OSD and overlay. It is created
-lazily on first open; a second "Settings" activation brings the existing
-window to the foreground instead of duplicating it. Closing destroys the
-window (recreation is cheap). While the window exists, the main
-`PeekMessageW` loop routes messages through `IsDialogMessage`, providing
-Tab/Shift+Tab keyboard navigation. Two prerequisites `IsDialogMessage`
-does not provide by itself: the window is a plain `CreateWindowExW`
-product, so it must carry `WS_EX_CONTROLPARENT` explicitly (dialog-manager
-windows get it for free; without it, Tab does nothing) — group boxes are
-purely visual frames with all controls direct children of the top level,
-so no nested container needs the style; and the hotkey-capture control
-must answer `WM_GETDLGCODE` (see "Control decisions").
+The settings window lives on its **own dedicated thread** with its own
+`GetMessageW` loop — the same pattern the tray and power threads use, and
+for the same reason: ordinary interactions with a titled window (dragging
+by the title bar, an Edit control's built-in right-click menu) enter
+OS-internal **modal message loops** that do not return until the
+interaction ends. On the main thread that would freeze controller ticks,
+watchdogs and the channel drain for the duration — verified consequence: a
+block longer than `REFRESH_TIMEOUT` (5 s) during an in-flight refresh
+triggers the watchdog abort, which clears `last_enumerated` and silently
+freezes periodic resync until a hotkey press or resume revives it. On its
+own thread, a modal loop blocks only the dialog itself. The main loop is
+untouched (no `IsDialogMessage` there; the settings thread runs
+`IsDialogMessage` in its own loop).
 
-Main-loop cadence: `architecture.md` says to revisit the 16 ms poll "if a
-main-thread window ever becomes long-lived and interactive" — this dialog
-is that case. The poll adds at most ~16 ms of input latency (one 60 Hz
-frame), which is adequate for keyboard-driven controls; caret blink and
-spinner auto-repeat are timer-driven and unaffected. No cadence change;
-input feel is on the manual checklist.
+The thread is spawned per open and exits when the window closes — no
+long-lived idle thread, no supervision needed (if it dies, the user
+reopens). A second "Settings" activation while the window exists focuses
+it instead of duplicating (the thread publishes its HWND as an `isize`,
+per the existing handle-carrying convention).
+
+Keyboard navigation truths for a programmatic (non-template) window:
+every focusable control carries `WS_TABSTOP` (+ `WS_GROUP` at group
+boundaries), and **tab order follows creation order** (z-order), so
+controls are created in visual order and group-box frames are created
+before the controls they surround. `WS_EX_CONTROLPARENT` is *not*
+required on a flat window whose controls are all direct children — it is
+the style for recursing into nested containers, which this layout avoids.
+The hotkey-capture control additionally answers `WM_GETDLGCODE` (see
+"Control decisions").
+
+**Topmost, or invisible:** the dimming overlay and the OSD are both
+`WS_EX_TOPMOST`; a normal-z settings window on a monitor dimmed to 0 %
+would sit *beneath* the click-through black overlay — receiving input the
+user cannot see. "My screen is dark, let me open Settings" is this app's
+headline scenario, so the dialog is `WS_EX_TOPMOST` too, consistent with
+how the OSD already stays visible above the overlay.
+
+**Placement:** on the monitor under the cursor (the app's universal
+targeting rule), geometry computed *before* `CreateWindowExW` via
+`MonitorFromPoint` + `GetDpiForMonitor` (the `osd.rs` precedent), so the
+window is born at the right DPI instead of created-then-rescaled.
 
 ### Message flow (single-owner model preserved)
 
@@ -87,8 +109,11 @@ input feel is on the manual checklist.
   integer percent, converted in core). Exception: the autostart toggle
   never enters the channel — it is a pure registry operation handled in
   the platform layer (see "Autostart").
+- The dialog additionally posts `BrightnessMessage::SettingsClosed` when
+  the window is destroyed, so the controller can flush a pending save.
 - The controller remains the sole owner of the runtime `Config`: it mutates
-  its field, applies side effects, and schedules a debounced save.
+  its field, applies side effects through seams, and schedules a debounced
+  save through the `ConfigStore` seam (see "New seams").
 
 ### Side-effect routing per setting
 
@@ -97,7 +122,7 @@ input feel is on the manual checklist.
 | `step_percent` | hotkey events become direction-only; the controller multiplies by its live config value (see below) | controller |
 | `osd.timeout_ms`, `osd.opacity` | `OsdSink` gains an appearance-update method | controller → seam |
 | `refresh.*` | controller timers already read the config field each tick | controller |
-| hotkeys (both bindings + intercept flag) | in-place re-registration on the live hotkey thread via a posted thread message (see below) | `main.rs` posts, result reported back |
+| hotkeys (both bindings + intercept flag) | in-place re-registration on the live hotkey thread via a posted thread message (see below) | controller → `HotkeyPort` seam, result reported back |
 | autostart | registry write | dialog/platform layer directly (not config) |
 | `logging.*` | none — save only; `SettingsSink` shows the restart hint | controller → seam |
 
@@ -128,6 +153,38 @@ and routing deliberate rebinds through it would let four quick edits within
 60 s falsely latch "hotkeys lost until restart" — the opposite of a
 poweruser-friendly dialog.
 
+Three follow-on consequences the rebind path must handle:
+
+- **The crash-respawn path must use live bindings.** Today
+  `start_hotkey_thread(&config, …)` in the respawn arm re-registers the
+  *startup* config; after a live rebind, one thread death would silently
+  restore the old combinations. The respawn path reads the current
+  bindings (a `main.rs`-side mirror the rebind path updates), and the
+  manual checklist covers "rebind, kill the hotkey thread, verify the new
+  binding comes back".
+- **The tray menu's hotkey rows unfreeze.** The usage rows are currently
+  composed once at spawn under the code-documented invariant "the hotkeys
+  cannot change while the app runs" — which this feature breaks. The rows
+  move into the existing `TrayMenuOpening { reply_tx }` request/response,
+  so the menu always shows the current bindings; the stale comment in
+  `tray.rs` is corrected.
+- **Failure has a deadline and a floor.** If re-registering the *previous*
+  combination also fails (another app grabbed it meanwhile), or no
+  `HotkeyRebindResult` arrives within a wall-clock deadline (`REBIND_TIMEOUT`
+  in `core/reconcile.rs`, alongside `SET_TIMEOUT`/`REFRESH_TIMEOUT`), the
+  controller calls `set_hotkeys_lost()` so the degraded state reaches the
+  tray, and the dialog says so — never a silently hotkey-less app behind a
+  healthy-looking icon.
+
+**Capture must suspend interception.** While a combination is registered,
+`RegisterHotKey` delivers it as `WM_HOTKEY` to the hotkey thread instead
+of as keystrokes to the focused window — so with the defaults, pressing
+`Ctrl+Shift+Up` inside the capture field would *adjust the brightness*
+rather than be captured. Entering capture mode therefore posts a
+"suspend" to the hotkey thread (unregister all combinations); leaving it
+(capture, Esc, or focus loss) posts resume-with-current-bindings or the
+rebind. Suspension is bounded by the same `REBIND_TIMEOUT` fallback.
+
 **Rebind stays optimistic with revert**, mirroring the brightness
 pipeline's `apply_set_result`/`force_revert` philosophy: the controller
 applies the new binding to its config immediately; on a failed
@@ -135,14 +192,31 @@ applies the new binding to its config immediately; on a failed
 which shows an inline error and restores the previous binding in the
 capture field.
 
-### `SettingsSink` seam
+### New seams
 
-New host-fakeable trait alongside `OsdSink`/`OverlaySink` in
-`core/controller.rs`. Responsibilities: open/focus the window with a config
-snapshot, refresh displayed values (restore defaults, reverts), show inline
-errors (hotkey registration failure), show the restart hint for logging
-changes. The Win32 implementation lives in
-`src/platform/windows/settings.rs`; controller tests use a fake.
+Three new host-fakeable traits alongside `OsdSink`/`OverlaySink` in
+`core/controller.rs`; controller tests use fakes for all of them.
+
+- **`SettingsSink`** — open/focus the window with a config snapshot,
+  refresh displayed values (restore defaults, reverts), show inline errors
+  (hotkey registration failure), show the restart hint for logging
+  changes. The Win32 implementation (`src/platform/windows/settings.rs`)
+  spawns/focuses the settings thread and forwards updates to it via
+  `PostMessage` (handles crossing threads as `isize`, per convention).
+- **`HotkeyPort`** — `rebind(up, down, intercept)`, `suspend()`,
+  `resume()`; the Win32 implementation posts to the live hotkey thread.
+  Routing this through the controller (not `main.rs` interception) is what
+  makes "controller unit tests cover rebind success/failure/revert" true —
+  there is a seam to fake.
+- **`ConfigStore`** — `save(&Config) -> Result<()>`; the Win32
+  implementation wraps `Config::save_to(default_path())`. Without this
+  seam the controller would do real file I/O in tests — and CI runs the
+  test suite on `windows-latest`, so every test run would write the
+  runner's actual `%APPDATA%\BrightnessControl\config.json`.
+
+`Controller` thus grows three type parameters. If the signature becomes
+unwieldy, the implementation plan may group the three settings-related
+seams into one trait — a mechanical choice, not a design one.
 
 ### Autostart
 
@@ -153,6 +227,12 @@ registry state when the dialog opens and writes it directly on toggle.
 Nothing is mirrored into `config.json` — no second store, no drift.
 "Restore defaults" leaves autostart untouched (system integration, not a
 preference; silently removing autostart would surprise).
+
+Edge cases (the app ships as a portable zip, so the exe moves): the
+checkbox shows checked iff the `Run` value exists; toggling it on always
+(re)writes the value with the *current* exe path, which self-heals a stale
+entry. A failed registry write reverts the checkbox and shows an inline
+notice — the checkbox never lies about what was actually written.
 
 ## UI layout
 
@@ -179,7 +259,8 @@ preference; silently removing autostart would surprise).
 │ │ ☐ Write log file   Level: [ info      ▾ ]    │ │
 │ │   (logging changes take effect after restart)│ │
 │ └──────────────────────────────────────────────┘ │
-│ Open config file      [Restore defaults] [Close] │
+│ Open config file · Open log folder               │
+│                       [Restore defaults] [Close] │
 └──────────────────────────────────────────────────┘
 ```
 
@@ -200,36 +281,82 @@ preference; silently removing autostart would surprise).
   `IsDialogMessage` consumes Tab/arrows/Enter/Esc as dialog navigation
   before the control ever sees them, and arrows are in the default
   bindings, so this is the control's core function, not an edge case.
-  Assigning the same combination to both actions is rejected in the dialog
-  before any registration attempt.
+  Capture suspends global hotkey interception for its duration (see
+  "Capture must suspend interception" above) — without that, the app's
+  own registered combinations never reach the field.
+  Capture rules: a binding requires at least one of Ctrl/Alt/Win (Shift
+  alone is not enough — a bare captured letter would register a
+  system-wide single-key hotkey and effectively steal that key from every
+  app); only keys in the parser's `KEY_MAP` are accepted, and `VK_TO_NAME`
+  is extended to cover everything `KEY_MAP` accepts (today it lacks A–Z
+  and 0–9, so capturing `Ctrl+B` would serialize as `Ctrl+Unknown` and be
+  reset to defaults at next startup) — with a round-trip property test
+  over every entry. Keys outside the set are rejected with an inline
+  message; the config *file* stays as permissive as today. Assigning the
+  same combination to both actions is rejected before any registration
+  attempt — the check is a pure `core` function (host-testable), called
+  from the dialog.
 - **"0 = disabled" becomes a checkbox.** The refresh interval fields never
   show a magic zero: checkbox unchecked = field disabled = `0` in the
-  config. The config schema is unchanged.
-- **Log level** is a dropdown: error / warn / info / debug / trace.
+  config. The config schema is unchanged. The dialog remembers the last
+  non-zero value for the session, so uncheck-then-recheck restores it; if
+  the dialog opened at 0, rechecking shows the default.
+- **Log level** is a dropdown: error / warn / info / debug / trace — with
+  a grayed explainer carrying the caveat the config file documents today:
+  at debug and below, monitor serial numbers and absolute paths are
+  logged. The warning must not get lost on the way from hand-editors to a
+  novice-facing dropdown.
 - The intercept checkbox carries a grayed explainer line (hardware caveat +
   antivirus note); the label says "Try to intercept" because the low-level
   hook genuinely cannot see brightness keys routed through vendor
   firmware, and the code falls back to plain registration on hook failure.
-- Footer: "Open config file" as a link-style control on the left;
-  "Restore defaults" and "Close" buttons on the right.
+- **Opacity as integer percent** rounds an existing float on display
+  (`0.335` → `34 %`); since changes only fire on commit, opening and
+  closing the dialog never rewrites an untouched value.
+- **"Restore defaults" confirms first** (a small message box): under
+  instant apply it resets ten settings including both hotkeys in one
+  click with no undo — novice-friendliness cuts both ways.
+- Footer: "Open config file" and "Open log folder" as link-style controls
+  on the left (the log link sits one group below the checkbox that says
+  logging needs a restart — the user who enables it shouldn't have to
+  hunt through the tray menu); "Restore defaults" and "Close" buttons on
+  the right.
 
 ## Dark mode & DPI
 
 Dark mode extends `theme.rs` (which already does the uxtheme opt-in for the
-tray menu) in three layers:
+tray menu) in three layers — plus a prerequisite `theme.rs` cannot answer
+today: **nothing in the repo can ask which mode the system is in.** The
+existing code never needs the boolean (the theme engine decides for the
+menu), but `DwmSetWindowAttribute` takes one and the `WM_CTLCOLOR*`
+handlers must pick a brush. A new `theme::system_prefers_dark()` reads the
+documented `AppsUseLightTheme` registry value (no new ordinal, registry
+feature already enabled). And the palette is gated on the *same*
+condition as `theme.rs::api()`: where the uxtheme opt-in is unavailable
+(pre-18362, or missing ordinals), the dialog paints **light, full stop** —
+dark brushes under un-themed light controls would be dark-on-dark and
+unreadable.
 
 1. **Title bar:** `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` —
-   the one documented API.
+   the one documented API. Version note: the attribute value is 20 from
+   build 18985 on but 19 on 17763–18984, and `theme.rs` supports from
+   18362 — so try 20, fall back to 19.
 2. **Controls:** `SetWindowTheme(hwnd, "DarkMode_Explorer")` for
    buttons/checkboxes/scrollbars, `"DarkMode_CFD"` for the combo box, plus
-   `WM_CTLCOLORDLG`/`WM_CTLCOLORSTATIC`/`WM_CTLCOLOREDIT` and
-   `WM_CTLCOLORLISTBOX` (the combo's popped-open dropdown list) handlers
-   returning dark brushes. The control palette avoids the worst offender
-   (trackbars), but the two footer push buttons may still need
-   `NM_CUSTOMDRAW`/owner-draw depending on OS build — **the first
-   implementation step is a dark-mode spike over exactly this control
-   set** to settle empirically what `SetWindowTheme` alone covers, before
-   any layout work.
+   `WM_CTLCOLORDLG`/`WM_CTLCOLORSTATIC`/`WM_CTLCOLOREDIT`/`WM_CTLCOLORBTN`
+   and `WM_CTLCOLORLISTBOX` (the combo's popped-open dropdown list)
+   handlers returning dark brushes. The control palette avoids the worst
+   offender (trackbars). **The first implementation step is a dark-mode
+   spike over exactly this control set**, before any layout work — and its
+   first question is the *group boxes*: in the reference implementations
+   `theme.rs` itself cites, `BS_GROUPBOX` is the control that needs
+   custom-drawing (frame and caption stay light), while push buttons are
+   largely covered by `DarkMode_Explorer`. Pre-planned fallback if group
+   boxes resist: bold label + separator line instead — which also
+   simplifies tab-order/z-order (no frames to create behind controls).
+   Mechanical prerequisite either way: the `Win32_UI_Controls` cargo
+   feature (not currently enabled) and `InitCommonControlsEx` with
+   `ICC_UPDOWN_CLASS` before creating the spinners.
 3. **Live switching:** the window handles `WM_SETTINGCHANGE`
    ("ImmersiveColorSet") and re-themes immediately. This is a *different*
    mechanism from the tray menu, not the same one: the tray's window is
@@ -255,8 +382,15 @@ creation and DPI changes call.
 
 ## Validation, errors, persistence
 
-- **Never fatal, mirroring the config contract.** Numeric fields clamp to
-  their valid range on focus loss; no error dialogs for numeric input.
+- **Never fatal.** Numeric fields clamp to their valid range on focus
+  loss; no error dialogs for numeric input. Deliberate divergence from the
+  loader: `validate_and_fix` *substitutes the default* for out-of-range
+  values (a repair policy for unattended startup), while the dialog clamps
+  to the nearest bound (a guidance policy for a user mid-edit) — same
+  never-fatal spirit, different mechanism, stated here so nobody "fixes"
+  one to match the other. The ranges, for the record: step 1–50 %, OSD
+  timeout 100–10 000 ms, opacity 10–100 % (0.1–1.0), periodic resync
+  0–3600 s, inactivity resync 0–600 s.
 - **When a numeric change fires:** a live `SettingChanged` is sent on
   spinner clicks and on commit (focus loss / Enter) — never on raw
   `EN_CHANGE` while typing, so retyping "5" as "30" cannot transiently
@@ -264,56 +398,92 @@ creation and DPI changes call.
   a write-coalescing measure, not a substitute for this.
 - **"Restore defaults" resets exactly the enumerated fields, field by
   field** — never by swapping in `Config::default()`: hand-written
-  `monitors` entries round-trip through saves by documented contract
-  (`architecture.md` §4) and must survive, as does `version`. Autostart is
-  untouched (see "Autostart").
+  `monitors` entries round-trip through saves by documented contract (the
+  code comment in `core/config.rs`; `architecture.md` §4 documents the
+  reservation itself) and must survive. Autostart is untouched (see
+  "Autostart"). While the sink refreshes control values programmatically
+  (defaults, reverts), change notifications are suppressed and any
+  focused edit's uncommitted text is discarded first — refresh order must
+  not commit a half-typed value.
 - **Hotkey errors are inline**: registration failure → red message under the
   field, revert to the previous binding (see optimistic-with-revert flow
   above).
-- **Persistence** reuses `Config::save_to` unchanged (atomic
-  `config.json.tmp` + rename, `.bak` refresh) — debounced ~500 ms after the
-  last change, plus an unconditional flush when the dialog closes and on
-  app quit. Debounce timing is driven by the controller's existing
-  injected-`now` tick, so it is host-testable. Known, accepted narrowing
-  of the "a hard kill loses nothing" property (`architecture.md` §12): a
-  live-applied change can be up to ~500 ms newer than the file, so a hard
-  kill inside that window loses that one change; all graceful paths flush.
-- **External edits while running**: not reloaded; the next dialog-triggered
-  save wins. Documented in `architecture.md`.
+- **Persistence** goes through the `ConfigStore` seam wrapping
+  `Config::save_to` unchanged (atomic `config.json.tmp` + rename, `.bak`
+  refresh) — debounced ~500 ms after the last change. Debounce timing is
+  driven by the controller's existing injected-`now` tick, so it is
+  host-testable. Known, accepted narrowing of the "a hard kill loses
+  nothing" property (`architecture.md` §12): a live-applied change can be
+  up to ~500 ms newer than the file; all graceful paths flush.
+- **Saves are dirty-gated — the file is never rewritten for nothing.**
+  Only dialog-originated changes mark the config dirty; dialog close and
+  app quit flush *only if a debounced save is pending*. An app run that
+  never touches the dialog never writes `config.json` — today the primary
+  is written only when missing, unrecognized JSON keys are warned about
+  and dropped on load, and an unconditional quit-save would therefore
+  strip a hand-editor's unknown keys, ordering and formatting on every
+  single run.
+- **External edits are never clobbered where the dialog didn't change
+  them.** The dialog's own footer link invites hand-edits while the
+  window is open, so "next save wins" is not good enough: the store
+  remembers the file's identity at last read/write, and when a
+  dialog-originated save finds the file changed on disk, it re-reads it,
+  overlays only the fields changed through the dialog this session (the
+  controller knows them from its `SettingChanged` history), and writes
+  the merge. External edits to untouched fields survive on disk and take
+  effect at next start — exactly the deferred-reload semantics. Still no
+  watcher, no live reload.
 
 ## Testing
 
 Follows the project pattern — logic host-testable in `core/`, FFI verified
 manually:
 
-- Controller unit tests with a fake `SettingsSink`: every `SettingChanged`
-  variant (config mutation + side effect + save scheduling), debounced save
-  timing via injected `now`, hotkey rebind success/failure/revert,
-  restore-defaults, opacity percent↔float mapping, duplicate-binding
-  rejection.
+- Controller unit tests with fake `SettingsSink`/`HotkeyPort`/`ConfigStore`:
+  every `SettingChanged` variant (config mutation + side effect + save
+  scheduling), debounced save timing via injected `now`, hotkey rebind
+  success / failure / revert / double-failure / `REBIND_TIMEOUT` (must end
+  in `set_hotkeys_lost`), restore-defaults field-wise (fake store observes
+  `monitors` survives), the merge-on-external-change save path, opacity
+  percent↔float mapping.
+- Pure-`core` tests: the duplicate-binding predicate; the
+  `VK_TO_NAME`↔`KEY_MAP` round-trip property over every accepted key.
 - Manual checklist added to the "Integration Testing" section of
   `docs/architecture.md`: live light/dark switch with the dialog open,
   dragging across monitors with different DPI, hotkey capture incl. a
   conflicting global hotkey, rebinding repeatedly within a minute (the
   crash-loop gate must stay untouched), rebinding one action while the
-  other keeps its combination, autostart registry entry
-  appears/disappears, logging restart hint, escape-hatch link, typing
-  responsiveness in the edit fields (16 ms main-loop poll).
+  other keeps its combination, rebind → kill the hotkey thread → verify
+  the *new* binding survives the respawn, open Settings on a monitor at
+  0 % with the full black overlay (window must be visible above it),
+  dragging the settings title bar during a refresh (main loop must be
+  unaffected — own thread), autostart registry entry appears/disappears,
+  logging restart hint, both footer links.
 
 ## Module placement & docs
 
-- New: `src/platform/windows/settings.rs` (window, controls, capture
-  subclassing, layout/DPI); dark-mode helpers extend
-  `src/platform/windows/theme.rs`.
-- Extended: `core/state.rs` (`SettingChange`, `HotkeyRebindResult`, the
-  direction-only adjust variant), `core/controller.rs` (`SettingsSink`,
-  handling, debounced save), `core/config.rs` (restore-defaults helper),
-  `platform/windows/hotkey.rs` (thread-id handshake, in-place rebind
-  message). Known mechanical cost: adding the `SettingsSink` type
-  parameter to `Controller<…>` touches the `TestController` alias and
+- New: `src/platform/windows/settings.rs` (settings thread, window,
+  controls, capture subclassing, layout/DPI), wired per convention as
+  `pub(crate) mod settings;` plus a `pub use` re-export in
+  `platform/windows/mod.rs`; dark-mode helpers and
+  `system_prefers_dark()` extend `src/platform/windows/theme.rs`.
+- Extended: `core/state.rs` (`SettingChange`, `HotkeyRebindResult`,
+  `SettingsClosed`, the direction-only adjust variant),
+  `core/controller.rs` (the three seams, handling, debounced save),
+  `core/reconcile.rs` (`REBIND_TIMEOUT`), `core/config.rs`
+  (restore-defaults helper), `platform/windows/hotkey.rs` (thread-id
+  handshake, suspend/resume/rebind messages — `HotkeyManager` currently
+  has no unregister API at all, `registered_ids` only ever grows, and
+  `run_message_loop(&self)` needs `&mut self` for rebinding: real API
+  surgery, not just a new message), `platform/windows/tray.rs` (usage
+  rows move into the `TrayMenuOpening` response; stale
+  frozen-at-startup comment corrected). Known mechanical cost: three new
+  `Controller<…>` type parameters touch the `TestController` alias and
   every existing test constructor call — wide but shallow.
 - Docs: new settings-window section + §4 note in `docs/architecture.md`,
-  README feature list, CLAUDE.md module map.
+  and the stale main-loop-cadence sentence there that still justifies the
+  16 ms poll with the removed usage window gets corrected in the same
+  pass; README feature list; CLAUDE.md module map.
 
 ## Future extensions (doors deliberately left open)
 
