@@ -30,14 +30,12 @@ pub(crate) mod power;
 pub mod single_instance;
 mod theme;
 pub(crate) mod tray;
-pub(crate) mod usage;
 
 // Re-export commonly used types
 pub use ddc_worker::DdcSupervisor;
 pub use power::PowerEventListener;
 pub use single_instance::{InstanceLock, SingleInstance};
 pub use tray::{TrayIcon, TrayStatusHandle};
-pub use usage::UsageWindow;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Helpers
@@ -95,8 +93,8 @@ impl crate::core::controller::MonitorLocator for CursorLocator {
 // `TrayStatusHandle`) to stay platform-free and `Send`. Win32 handles are
 // pointers, so every crossing of that seam converts here — keeping the
 // seam's int↔pointer casts in one place. (Other int↔pointer casts exist
-// elsewhere for unrelated reasons — LPARAM callback plumbing in ddc.rs, the
-// control-ID construction in usage.rs — and aren't part of this seam.)
+// elsewhere for unrelated reasons — LPARAM callback plumbing in ddc.rs —
+// and aren't part of this seam.)
 
 /// Rebuilds an `HMONITOR` from the `isize` form that crosses the `core` seam.
 #[must_use]

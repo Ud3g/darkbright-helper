@@ -84,8 +84,7 @@ src/
         ├── overlay.rs    # Dimming overlay windows (implements the OverlaySink seam)
         ├── power.rs      # Power event listener (sleep/resume)
         ├── single_instance.rs # Per-session named-mutex single-instance guard
-        ├── tray.rs       # System tray icon and menu
-        └── usage.rs      # Modeless usage-instructions window
+        └── tray.rs       # System tray icon and menu
 ```
 
 The portability boundary is the set of controller seams in `core/controller.rs`
@@ -146,8 +145,8 @@ The main loop blocks in `rx.recv_timeout(16ms)` and pumps the Win32 message queu
 every iteration, so it wakes ~62×/s for the life of the process. That number is chosen,
 not accreted, and this is the reasoning.
 
-**Why poll at all.** Three windows live on the main thread — OSD, dimming overlay and the
-usage window — and none has a message loop of its own; they are serviced only by
+**Why poll at all.** Two windows live on the main thread — the OSD and the dimming
+overlay — and neither has a message loop of its own; they are serviced only by
 `pump_windows_messages()`. A thread cannot block on an MPSC channel and the Win32 message
 queue at the same time, so one of the two has to be polled. The channel carries a rich
 enum and the queue does not, so the queue is the one that gets polled.
@@ -177,7 +176,7 @@ never raises the global timer resolution and its waits stay coalescable by the O
 covered by that measurement: the energy cost of denying the core deeper idle states, which
 is real but small next to any GUI process on the same machine.
 
-**An adaptive interval was considered and declined** — 16 ms while the OSD or usage window
+**An adaptive interval was considered and declined** — 16 ms while the OSD or overlay
 is up, ~250 ms otherwise. It works, it is about ten lines, and it would cut idle wakes 15×.
 It was not worth it: the saving is ~1.2 s of CPU per day, paid for with a predicate that
 can silently rot. A window added to the main thread later would have to be remembered in
@@ -205,7 +204,6 @@ enum BrightnessMessage {
     DdcRefreshResult { generation, monitors, enumerated },   // DDC worker → main
     Refresh,
     SystemResumed,                                            // Power thread → main
-    TrayOpenUsage,                                            // Tray thread → main
     TrayOpenSettings,                                         // Tray thread → main
     TrayOpenLogFolder,                                        // Tray thread → main
     TrayRequestQuit,                                          // Tray thread → main
@@ -990,7 +988,10 @@ The application runs as a background process with a system tray icon for user in
 │ DEL U2722D: 🕶 0% 🔆 50%                        │  ← Monitor status (disabled/info only)
 │ LG 27UK850: 🕶 0% 🔆 75%                        │
 │─────────────────────────────────────────────────│
-│ Usage                                           │  → Opens usage instructions window
+│ Point mouse at a monitor, then:                 │  ← Usage rows (disabled/info only)
+│ Brighter                        Ctrl+Shift+Up   │
+│ Dimmer                        Ctrl+Shift+Down   │
+│─────────────────────────────────────────────────│
 │ Settings                                        │  → Opens config.json in default editor
 │ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
 │ Quit Brightness Control                         │  → Graceful shutdown
@@ -1039,13 +1040,12 @@ no public header, so they are resolved at runtime and gated on Windows build
 was before: light, fully functional, and named in the log (`debug` for the
 build gate, `warn` for a library or export that should have been there).
 
-`AllowDarkModeForWindow` is called for the tray's window and for no other, so
-the app's own windows are unaffected: the usage window was checked and still
-renders light on a dark system, and the OSD and overlay paint their own colours
-regardless. `SetPreferredAppMode` is process-wide, however, so system-drawn
-surfaces other than the tray menu may follow the setting too — the usage
-window's `WS_SYSMENU` popup is the one candidate, unverified either way and
-harmless if it does.
+`AllowDarkModeForWindow` is called for the tray's window and for no other; the
+OSD and overlay paint their own colours regardless. `SetPreferredAppMode` is
+process-wide, so other system-drawn surfaces follow the setting as well, but
+the only ones this app raises are its two message boxes (the single-instance
+notice and the hotkey-registration error) — and a message box has no dark
+rendering to follow. Both were checked and stay light on a dark system.
 
 **Degraded-State Indicator:**
 
@@ -1083,22 +1083,36 @@ user activity or resume, an unresponsive worker's clears when the worker answers
 again or on resume (the icon reverts automatically in both cases); the hotkey
 warning is latched until the app restarts.
 
-**Usage Window:**
+**Usage Rows:**
 
-Clicking "Usage" opens a modeless window displaying usage instructions:
+The menu states the core interaction instead of hiding it behind a click, so a
+first-time user meets the instructions while looking for them rather than after
+finding the right item:
 
 ```
-1. Move mouse to desired monitor
-2. Press Ctrl+Shift+Up (brighter) or Ctrl+Shift+Down (dimmer)
+Point mouse at a monitor, then:
+Brighter                           Ctrl+Shift+Up
+Dimmer                           Ctrl+Shift+Down
 ```
 
-The window displays the user's configured hotkeys (not hardcoded defaults). This helps new users discover how to use the application without consulting documentation.
+Three disabled rows, composed once at tray startup from the running
+configuration — a user who rebound the hotkeys is taught the keys that actually
+work, not the defaults. Everything after a `	` is drawn right-aligned in the
+menu's shortcut column, which is where a reader already scans for a key
+combination and what keeps the rows no wider than the monitor status lines
+above them.
 
 **Implementation Notes:**
-- The usage window is modeless (does not block the application)
-- Only one instance can exist at a time; clicking "Usage" again brings the existing window to front
-- The window is centered on the primary monitor
-- The window can be closed via the close button (X) or Alt+F4
+- The rows carry no dark-mode handling of their own: they are part of the menu, which already follows the system setting (see Menu Theming above)
+- They do not come from `TrayMenuOpening`, so they still appear when the main thread misses the reply timeout
+- Disabled (`MF_GRAYED`) throughout — informational, never clickable
+
+A modeless window held these two lines before, opened from a "Usage" menu item.
+It was removed with the move: a window class, centring, focus handling and a
+theming path of its own — dark mode included — is a large apparatus for one
+sentence the menu can simply hold. The rows cost none of that and cannot fall
+out of step with the menu around them. What went with the window is the option
+to leave the instructions on screen while trying the keys.
 
 ### 14. Single-Instance Guard
 

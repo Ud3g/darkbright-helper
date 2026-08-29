@@ -31,7 +31,7 @@ use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::single_instance::{self, InstanceLock, SingleInstance};
 use darkbright_helper::platform::windows::{
-    DdcSupervisor, PowerEventListener, TrayIcon, TrayStatusHandle, UsageWindow,
+    DdcSupervisor, PowerEventListener, TrayIcon, TrayStatusHandle,
 };
 use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 use darkbright_helper::{BrightnessError, Result};
@@ -112,29 +112,6 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
         }
     }
     BOOL::from(false)
-}
-
-/// Opens or focuses the usage instructions window (shell side effect).
-fn open_usage(window: &mut Option<UsageWindow>, config: &Config) {
-    if let Some(w) = window
-        && w.is_valid()
-    {
-        log::debug!("Usage window already open, bringing to front");
-        w.bring_to_front();
-        return;
-    }
-    match UsageWindow::new(
-        &config.hotkeys.brightness_up,
-        &config.hotkeys.brightness_down,
-    ) {
-        Ok(w) => {
-            log::info!("Usage window opened");
-            *window = Some(w);
-        }
-        Err(e) => {
-            log::error!(error:% = e; "Failed to create usage window");
-        }
-    }
 }
 
 /// Opens the config file in the system default editor (shell side effect).
@@ -362,12 +339,16 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// * `tx` - Channel sender to notify the main thread of tray events.
 /// * `status_tx` - Hands the tray's status handle back to the main thread so
 ///   it can push degraded-state icon/tooltip updates.
+/// * `hotkey_up`, `hotkey_down` - Configured hotkeys, shown in the menu's
+///   usage rows. Owned, because they outlive this call on the tray thread.
 fn spawn_tray_thread(
     tx: mpsc::Sender<BrightnessMessage>,
     status_tx: mpsc::Sender<TrayStatusHandle>,
+    hotkey_up: String,
+    hotkey_down: String,
 ) {
     std::thread::spawn(move || {
-        match TrayIcon::new(tx) {
+        match TrayIcon::new(tx, &hotkey_up, &hotkey_down) {
             Ok(tray) => {
                 log::info!("System tray icon created");
                 let _ = status_tx.send(tray.status_handle());
@@ -606,7 +587,12 @@ fn main() {
     // Spawn system tray icon thread; it hands back a status handle for
     // pushing degraded-state icon/tooltip updates.
     let (tray_status_tx, tray_status_rx) = mpsc::channel();
-    spawn_tray_thread(tx.clone(), tray_status_tx);
+    spawn_tray_thread(
+        tx.clone(),
+        tray_status_tx,
+        config.hotkeys.brightness_up.clone(),
+        config.hotkeys.brightness_down.clone(),
+    );
     let mut tray_status: Option<TrayStatusHandle> = None;
     let mut last_warnings = HealthWarnings::default();
 
@@ -648,7 +634,6 @@ fn main() {
 
     // Main Loop
     log::info!("Entering main event loop");
-    let mut usage_window: Option<UsageWindow> = None;
     loop {
         // Pump Windows messages (for OSD WM_PAINT, WM_TIMER, etc.)
         pump_windows_messages();
@@ -705,10 +690,10 @@ fn main() {
             }
         }
 
-        // Wait for the next message, but bounded: the OSD, overlay and usage
-        // window all live on this thread with no message loop of their own, so
-        // the Win32 queue has to be polled — a thread cannot block on both it
-        // and an MPSC channel. This interval is *not* input latency; any send
+        // Wait for the next message, but bounded: the OSD and overlay both
+        // live on this thread with no message loop of their own, so the Win32
+        // queue has to be polled — a thread cannot block on both it and an
+        // MPSC channel. This interval is *not* input latency; any send
         // wakes the recv immediately. It only bounds how late an unsolicited
         // message is noticed, of which the OSD's auto-hide timer is the tightest
         // (osd.timeout_ms may be configured down to 100 ms). Measured idle cost
@@ -719,7 +704,6 @@ fn main() {
                 log::debug!(message:? = msg; "Main loop received message");
                 match msg {
                     // Shell side effects stay out of the core controller.
-                    BrightnessMessage::TrayOpenUsage => open_usage(&mut usage_window, &config),
                     BrightnessMessage::TrayOpenSettings => open_settings(),
                     BrightnessMessage::TrayOpenLogFolder => open_log_folder(),
                     other => match controller.handle_message(other, Instant::now()) {

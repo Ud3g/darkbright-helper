@@ -14,6 +14,12 @@ history lives in the git log.
 
 ### Changed
 
+- The hotkey instructions are now stated directly in the tray context menu, as
+  three non-clickable rows showing the configured keys, and the "Usage" menu
+  item and the window it opened are gone. The instructions are one click
+  earlier than before and follow the light/dark setting like the rest of the
+  menu; what is no longer possible is leaving them on screen while trying the
+  keys.
 - The executable now carries an application manifest declaring version 6 of the
   common controls, so system-drawn controls use the current Windows renderer
   instead of the pre-XP one. Visible only in the app's two message boxes (the

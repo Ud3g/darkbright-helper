@@ -21,9 +21,9 @@ first half, because DDC/CI dims the monitor's backlight rather than the image.*
   mouse pointer is currently on. Monitors are identified by EDID, so the configuration
   survives replugging and port changes.
 - **Stays out of the way.** An OSD overlay like the Windows volume indicator, plus a system
-  tray icon whose context menu shows live per-monitor status and offers Usage, Settings,
-  Open Log Folder and Quit — with warning entries and an icon badge while degraded (e.g.
-  DDC unavailable).
+  tray icon whose context menu shows live per-monitor status and your hotkeys, and offers
+  Settings, Open Log Folder and Quit — with warning entries and an icon badge while
+  degraded (e.g. DDC unavailable).
 
 ## Download
 
@@ -44,7 +44,8 @@ instead (see [Build from source](#build-from-source)).
 2. `Ctrl+Shift+Up` increases the brightness of the monitor under your mouse pointer.
 3. `Ctrl+Shift+Down` decreases it.
 4. Once brightness reaches 0 %, continuing to decrease activates the dimming overlay.
-5. Right-click the tray icon for per-monitor status, Usage, Settings, the log folder, or Quit.
+5. Right-click the tray icon for per-monitor status, a reminder of your hotkeys, Settings,
+   the log folder, or Quit.
 
 Hotkeys:
 
