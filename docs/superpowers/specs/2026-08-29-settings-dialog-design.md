@@ -1,8 +1,8 @@
 # Settings Dialog — Design
 
 Date: 2026-08-29
-Status: design approved in brainstorming, hardened by two cold adversarial
-review rounds (2026-08-29/30); implementation plan pending.
+Status: design approved in brainstorming, hardened by three cold
+adversarial review rounds (2026-08-29/30); implementation plan pending.
 
 ## Motivation
 
