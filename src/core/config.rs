@@ -43,6 +43,63 @@ const REFRESH_PERIODIC_MAX: u32 = 3600;
 const REFRESH_INACTIVITY_MAX: u32 = 600;
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Settings Dialog Support
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tracks which of the ten user-facing settings a settings-dialog session has
+/// changed.
+///
+/// Used to gate saves (nothing to write when [`SettingsDirty::any`] is
+/// `false`) and to merge a session's edits onto a `config.json` that may have
+/// been hand-edited while the dialog was open, via [`Config::overlay_dirty`]:
+/// only the flagged fields overwrite the on-disk value, everything else is
+/// left as found on disk.
+// Each flag maps 1:1 to one of the ten independently toggleable settings
+// fields below; a state machine or paired enums would not fit a set of
+// independent booleans that are OR'd and copied field-by-field.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SettingsDirty {
+    /// `brightness.step_percent` was changed.
+    pub step_percent: bool,
+    /// `osd.timeout_ms` was changed.
+    pub osd_timeout_ms: bool,
+    /// `osd.opacity` was changed.
+    pub osd_opacity: bool,
+    /// `refresh.periodic_seconds` was changed.
+    pub refresh_periodic: bool,
+    /// `refresh.inactivity_seconds` was changed.
+    pub refresh_inactivity: bool,
+    /// `hotkeys.brightness_up` was changed.
+    pub hotkey_up: bool,
+    /// `hotkeys.brightness_down` was changed.
+    pub hotkey_down: bool,
+    /// `hotkeys.intercept_brightness_keys` was changed.
+    pub intercept: bool,
+    /// `logging.file_enabled` was changed.
+    pub log_enabled: bool,
+    /// `logging.file_level` was changed.
+    pub log_level: bool,
+}
+
+impl SettingsDirty {
+    /// Returns `true` if any tracked field was changed.
+    #[must_use]
+    pub fn any(&self) -> bool {
+        self.step_percent
+            || self.osd_timeout_ms
+            || self.osd_opacity
+            || self.refresh_periodic
+            || self.refresh_inactivity
+            || self.hotkey_up
+            || self.hotkey_down
+            || self.intercept
+            || self.log_enabled
+            || self.log_level
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Configuration Structures
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -641,6 +698,68 @@ impl Config {
             self.hotkeys.brightness_down = DEFAULT_HOTKEY_DOWN.to_string();
         }
     }
+
+    /// Resets the ten user-facing settings to their defaults, field by field.
+    ///
+    /// Never swaps in [`Config::default()`] wholesale: `monitors` entries are
+    /// a user-visible, hand-editable part of `config.json` and must survive a
+    /// restore, and `version` is preserved rather than reset.
+    pub fn restore_defaults(&mut self) {
+        self.hotkeys.brightness_up = default_hotkey_up();
+        self.hotkeys.brightness_down = default_hotkey_down();
+        self.hotkeys.intercept_brightness_keys = false;
+        self.osd.timeout_ms = default_osd_timeout();
+        self.osd.opacity = default_osd_opacity();
+        self.brightness.step_percent = default_step_percent();
+        self.refresh.periodic_seconds = default_refresh_periodic();
+        self.refresh.inactivity_seconds = default_refresh_inactivity();
+        self.logging.file_enabled = false;
+        self.logging.file_level = default_file_log_level();
+    }
+
+    /// Copies exactly the dirty-flagged fields from `self` onto `disk`,
+    /// leaving every other field of `disk` untouched.
+    ///
+    /// Lets a settings-dialog session apply only the fields it actually
+    /// changed onto whatever is currently on disk (which may have been
+    /// hand-edited concurrently), instead of overwriting the whole file with
+    /// a possibly stale in-memory snapshot.
+    pub fn overlay_dirty(&self, disk: &mut Config, dirty: &SettingsDirty) {
+        if dirty.step_percent {
+            disk.brightness.step_percent = self.brightness.step_percent;
+        }
+        if dirty.osd_timeout_ms {
+            disk.osd.timeout_ms = self.osd.timeout_ms;
+        }
+        if dirty.osd_opacity {
+            disk.osd.opacity = self.osd.opacity;
+        }
+        if dirty.refresh_periodic {
+            disk.refresh.periodic_seconds = self.refresh.periodic_seconds;
+        }
+        if dirty.refresh_inactivity {
+            disk.refresh.inactivity_seconds = self.refresh.inactivity_seconds;
+        }
+        if dirty.hotkey_up {
+            disk.hotkeys
+                .brightness_up
+                .clone_from(&self.hotkeys.brightness_up);
+        }
+        if dirty.hotkey_down {
+            disk.hotkeys
+                .brightness_down
+                .clone_from(&self.hotkeys.brightness_down);
+        }
+        if dirty.intercept {
+            disk.hotkeys.intercept_brightness_keys = self.hotkeys.intercept_brightness_keys;
+        }
+        if dirty.log_enabled {
+            disk.logging.file_enabled = self.logging.file_enabled;
+        }
+        if dirty.log_level {
+            disk.logging.file_level.clone_from(&self.logging.file_level);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1096,5 +1215,47 @@ mod tests {
         assert_eq!(backup.brightness.step_percent, 9);
 
         let _ = fs::remove_dir_all(test_dir);
+    }
+
+    #[test]
+    fn restore_defaults_preserves_monitors_and_version() {
+        let mut cfg = Config::default();
+        cfg.brightness.step_percent = 20;
+        cfg.hotkeys.brightness_up = "Ctrl+F1".to_string();
+        cfg.monitors.insert(
+            "M1".to_string(),
+            MonitorConfig {
+                min_brightness: Some(10),
+                max_brightness: None,
+                ddc_disabled: None,
+            },
+        );
+
+        cfg.restore_defaults();
+
+        assert_eq!(cfg.brightness.step_percent, DEFAULT_STEP_PERCENT);
+        assert_eq!(cfg.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
+        assert_eq!(cfg.monitors.len(), 1);
+        assert_eq!(cfg.version, CONFIG_VERSION);
+    }
+
+    #[test]
+    fn overlay_dirty_copies_only_flagged_fields() {
+        let mut ours = Config::default();
+        ours.brightness.step_percent = 9;
+        ours.osd.timeout_ms = 3000;
+        let mut disk = Config::default();
+        disk.osd.timeout_ms = 7000; // external edit, NOT dirty
+        disk.refresh.periodic_seconds = 300; // external edit, NOT dirty
+
+        let dirty = SettingsDirty {
+            step_percent: true,
+            ..Default::default()
+        };
+        ours.overlay_dirty(&mut disk, &dirty);
+
+        assert_eq!(disk.brightness.step_percent, 9); // ours won (dirty)
+        assert_eq!(disk.osd.timeout_ms, 7000); // external edit survived
+        assert_eq!(disk.refresh.periodic_seconds, 300);
     }
 }
