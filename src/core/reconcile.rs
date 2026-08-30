@@ -39,10 +39,6 @@ pub(crate) const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// Ack deadline for one posted hotkey-thread operation (suspend/resume/
 /// rebind). Never a bound on user-paced capture itself.
-///
-/// Consumed by the settings-dialog save-scheduling logic added alongside the
-/// window itself; unused until then.
-#[allow(dead_code)]
 pub(crate) const REBIND_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Returns whether another worker respawn is permitted right now.
