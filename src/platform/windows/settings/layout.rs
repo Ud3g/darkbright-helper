@@ -539,22 +539,21 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         h: 20,
         text: "Write log file",
     },
-    // y is 3px below ID_LOG_CHECK's: a BUTTON checkbox vertically centers
-    // its label inside its box while an SS_LEFT static top-aligns, so at
-    // matching y/h the two would render with different text baselines.
-    // Measured for Segoe UI 9pt at 96 DPI (GetTextMetricsW): tmHeight=15,
-    // tmAscent=12, tmInternalLeading=3, against the checkbox's 20px-tall
-    // box. DT_VCENTER centers as rectHeight/2 - lineHeight/2 with each half
-    // truncated separately (10 - 7 = 3), not (rectHeight-lineHeight)/2
-    // (which would truncate to 2) — so the checkbox's line box starts 3px
-    // below its own box top, and the static needs the same 3px offset to
-    // land its (top-aligned) line box on the same baseline.
+    // Same y as ID_LOG_CHECK's, not offset for its checkbox's own
+    // vertical centering: a BUTTON checkbox centering its label per the
+    // textbook DT_VCENTER arithmetic would put "Level:" a few pixels below
+    // "Write log file", but that model does not match what actually
+    // renders. Measured on hardware at 125% DPI (comparing capital-letter
+    // tops, since both strings start with one): at y:482 the two already
+    // read as aligned (647 vs 648 physical px, 1px); an earlier attempt to
+    // "correct" this to y:485 using the centering model instead put them
+    // 5px apart (647 vs 652). Left at the measured-aligned value.
     ControlSpec {
         id: ID_LABEL_LOG_LEVEL,
         class: "STATIC",
         style: STYLE_LABEL,
         x: 170,
-        y: 485,
+        y: 482,
         w: 74,
         h: 20,
         text: "Level:",
@@ -797,6 +796,17 @@ pub(super) fn configure_updowns(hwnd: HWND) {
 /// Call once after [`layout`] has positioned both controls (creation, and
 /// again after `WM_DPICHANGED` rebuilds the fonts) so the reference edit's
 /// rect already reflects the current DPI.
+///
+/// A themed combo box can refuse a request that goes below its own
+/// visual-styles-driven minimum for the current font — `CB_SETITEMHEIGHT`
+/// then either fails outright or silently clamps back up — so this reads
+/// the result back (`CB_GETITEMHEIGHT` plus a second `GetWindowRect`) and
+/// logs the outcome at debug rather than trusting the request took effect.
+/// On the one DPI/font combination measured on hardware so far, the
+/// requested height was one pixel below the system default and the closed
+/// face did not move, consistent with that floor being hit; the mechanism
+/// is kept regardless — it still narrows or removes the seam at other
+/// DPI/font combinations, and does no harm where it clamps.
 pub(super) fn configure_combo_height(hwnd: HWND) {
     let (Ok(combo), Ok(edit)) = (
         unsafe { GetDlgItem(Some(hwnd), i32::from(ID_LOG_LEVEL)) },
@@ -827,14 +837,42 @@ pub(super) fn configure_combo_height(hwnd: HWND) {
     // CB_SETITEMHEIGHT rejects it outright.
     let item_height = (target_height - chrome).max(1);
 
-    unsafe {
+    let set_result = unsafe {
         SendMessageW(
             combo,
             CB_SETITEMHEIGHT,
             Some(WPARAM(usize::MAX)),
             Some(LPARAM(isize::try_from(item_height).unwrap_or(0))),
-        );
+        )
     }
+    .0;
+
+    // CB_ERR (-1): the combo rejected the request outright (bad index or
+    // height) rather than clamping it — worth its own line, distinct from
+    // a silent clamp, which the readback below catches instead.
+    if set_result == -1 {
+        log::debug!(
+            requested_item_height = item_height;
+            "CB_SETITEMHEIGHT rejected the log-level combo's closed-face height request"
+        );
+        return;
+    }
+
+    let applied_item_height =
+        unsafe { SendMessageW(combo, CB_GETITEMHEIGHT, Some(WPARAM(usize::MAX)), None) }.0;
+    let mut after_rect = RECT::default();
+    let applied_closed_height = unsafe { GetWindowRect(combo, &raw mut after_rect) }
+        .is_ok()
+        .then(|| after_rect.bottom - after_rect.top);
+    log::debug!(
+        default_item_height,
+        default_closed_height,
+        target_height,
+        requested_item_height = item_height,
+        applied_item_height,
+        applied_closed_height:? = applied_closed_height;
+        "Log-level combo closed-face height applied"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
