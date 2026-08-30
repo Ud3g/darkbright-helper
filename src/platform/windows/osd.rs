@@ -615,6 +615,18 @@ impl OsdWindow {
             IsWindowVisible(self.hwnd.as_raw()).as_bool()
         }
     }
+
+    /// Applies a live opacity/timeout preview from the settings dialog.
+    ///
+    /// The auto-hide timer picks up the new `timeout_ms` on its next reset;
+    /// a failure to set the window's alpha channel is logged and otherwise
+    /// ignored, since this is a preview rather than adjustment feedback.
+    pub(crate) fn set_appearance(&mut self, opacity: f32, timeout_ms: u32) {
+        self.timeout_ms = timeout_ms;
+        if let Err(e) = set_osd_opacity(self.hwnd.as_raw(), opacity) {
+            log::warn!(error:% = e; "Failed to apply OSD opacity from settings dialog");
+        }
+    }
 }
 
 impl crate::core::controller::OsdSink for OsdWindow {
@@ -633,5 +645,8 @@ impl crate::core::controller::OsdSink for OsdWindow {
     }
     fn is_visible(&self) -> bool {
         OsdWindow::is_visible(self)
+    }
+    fn set_appearance(&mut self, opacity: f32, timeout_ms: u32) {
+        OsdWindow::set_appearance(self, opacity, timeout_ms);
     }
 }
