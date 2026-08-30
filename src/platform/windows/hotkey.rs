@@ -63,8 +63,6 @@ pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
 struct HookContext {
     /// Channel sender to transmit brightness adjustment events.
     sender: Sender<BrightnessMessage>,
-    /// Brightness step percentage (signed for directional adjustment).
-    step_percent: i8,
 }
 
 thread_local! {
@@ -79,12 +77,9 @@ thread_local! {
 ///
 /// Must be called on the same thread where the hook will be installed,
 /// before calling `SetWindowsHookExW`.
-fn set_hook_context(sender: Sender<BrightnessMessage>, step_percent: i8) {
+fn set_hook_context(sender: Sender<BrightnessMessage>) {
     HOOK_CONTEXT.with(|ctx| {
-        *ctx.borrow_mut() = Some(HookContext {
-            sender,
-            step_percent,
-        });
+        *ctx.borrow_mut() = Some(HookContext { sender });
     });
 }
 
@@ -162,32 +157,23 @@ unsafe extern "system" fn low_level_keyboard_proc(
             let vk_code = VIRTUAL_KEY(kb_struct.vkCode as u16);
 
             // Check if this is a brightness key we want to intercept
-            let delta = if vk_code == VK_BRIGHTNESS_UP {
-                Some(true) // Increase brightness
+            let direction = if vk_code == VK_BRIGHTNESS_UP {
+                Some(1)
             } else if vk_code == VK_BRIGHTNESS_DOWN {
-                Some(false) // Decrease brightness
+                Some(-1)
             } else {
                 None
             };
 
-            if let Some(is_increase) = delta {
+            if let Some(direction) = direction {
                 // Try to send brightness adjustment via thread-local context
                 let sent = with_hook_context(|ctx| {
-                    let adjustment = if is_increase {
-                        ctx.step_percent
-                    } else {
-                        -ctx.step_percent
-                    };
-
                     // No routine logging here: with file logging at debug, a
                     // log call does mutex-guarded disk I/O, and a slow write
                     // inside an LL hook risks Windows silently removing the
                     // hook on timeout. The keypress is still logged at debug
                     // when the main loop receives the message.
-                    if let Err(e) = ctx.sender.send(BrightnessMessage::Adjust {
-                        monitor_id: None,
-                        delta: adjustment,
-                    }) {
+                    if let Err(e) = ctx.sender.send(BrightnessMessage::AdjustStep { direction }) {
                         log::error!(error:% = e; "Failed to send brightness adjustment from hook");
                     }
                 });
@@ -227,8 +213,6 @@ pub struct HotkeyManager {
     registered_ids: Vec<i32>,
     /// Channel sender to transmit brightness adjustment events to the main thread.
     sender: Sender<BrightnessMessage>,
-    /// Brightness step percentage (1-50).
-    step_percent: i8,
     /// Low-level keyboard hook for intercepting brightness keys (optional).
     keyboard_hook: Option<SafeHook>,
 }
@@ -243,7 +227,7 @@ impl HotkeyManager {
     /// # Panics
     ///
     /// Panics if the current process module handle cannot be retrieved.
-    pub fn new(sender: Sender<BrightnessMessage>, step_percent: u8) -> Result<Self> {
+    pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
         let hinstance = unsafe {
             GetModuleHandleW(None).map_err(|e| {
                 BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
@@ -284,7 +268,6 @@ impl HotkeyManager {
             hwnd,
             registered_ids: Vec::new(),
             sender,
-            step_percent: step_percent.cast_signed(),
             keyboard_hook: None,
         })
     }
@@ -329,7 +312,7 @@ impl HotkeyManager {
     /// Returns `BrightnessError::WindowsApi` if `SetWindowsHookExW` fails.
     pub fn install_brightness_hook(&mut self) -> Result<()> {
         // Initialize thread-local context for the hook callback
-        set_hook_context(self.sender.clone(), self.step_percent);
+        set_hook_context(self.sender.clone());
 
         // Install the low-level keyboard hook
         // SAFETY: We pass a valid callback function. The hook handle will be
@@ -382,18 +365,17 @@ impl HotkeyManager {
                     let id = msg.wParam.0 as i32;
                     log::debug!(hotkey_id = id; "Received WM_HOTKEY");
 
-                    let delta = match id {
-                        BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => self.step_percent,
-                        BRIGHTNESS_DOWN_ID | BRIGHTNESS_DOWN_ALT_ID => -self.step_percent,
+                    let direction = match id {
+                        BRIGHTNESS_UP_ID | BRIGHTNESS_UP_ALT_ID => 1,
+                        BRIGHTNESS_DOWN_ID | BRIGHTNESS_DOWN_ALT_ID => -1,
                         _ => 0,
                     };
 
-                    if delta != 0 {
-                        log::debug!(delta = delta; "Sending brightness adjustment");
-                        let _ = self.sender.send(BrightnessMessage::Adjust {
-                            monitor_id: None, // None = monitor under cursor
-                            delta,
-                        });
+                    if direction != 0 {
+                        log::debug!(direction = direction; "Sending brightness adjustment");
+                        let _ = self
+                            .sender
+                            .send(BrightnessMessage::AdjustStep { direction });
                     }
                 }
 
