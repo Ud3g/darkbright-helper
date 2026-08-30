@@ -1256,6 +1256,12 @@ fn handle_destroy() {
                 let _ = DeleteObject(state.font_regular.into());
                 let _ = DeleteObject(state.font_bold.into());
             }
+            // Puts the window class's background brush back on the system
+            // default before freeing the brushes it might currently point
+            // at — GCLP_HBRBACKGROUND is class-wide state that survives
+            // this window, so a later window of the same class must never
+            // find it pointed at a handle this call is about to delete.
+            dark::set_class_background(state.hwnd, false, &state.palette);
             state.palette.destroy();
         }
     });

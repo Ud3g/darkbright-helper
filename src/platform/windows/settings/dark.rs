@@ -44,8 +44,8 @@ use windows::Win32::UI::Controls::{
     CBS_UNCHECKEDPRESSED, CBXSR_NORMAL, CDDS_PREPAINT, CDIS_DISABLED, CDIS_HOT, CDIS_SELECTED,
     CDRF_DODEFAULT, CDRF_SKIPDEFAULT, CHECKBOXSTATES, COMBOBOXINFO, CP_DROPDOWNBUTTONRIGHT,
     CP_DROPDOWNITEM, CloseThemeData, DTT_TEXTCOLOR, DTTOPTS, DrawThemeBackground, DrawThemeTextEx,
-    GetComboBoxInfo, GetThemePartSize, NMCUSTOMDRAW, NMCUSTOMDRAW_DRAW_STATE_FLAGS, OpenThemeData,
-    SetWindowTheme, TS_DRAW,
+    GetComboBoxInfo, GetThemePartSize, HTHEME, NMCUSTOMDRAW, NMCUSTOMDRAW_DRAW_STATE_FLAGS,
+    OpenThemeData, SetWindowTheme, TS_DRAW,
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -230,7 +230,15 @@ fn apply_combo_theme(hwnd: HWND, dark: bool) {
 /// Swaps the settings window class's own background brush — what
 /// `WM_ERASEBKGND` paints before any child control does, and the only
 /// source of colour for the small margins between controls.
-fn set_class_background(hwnd: HWND, dark: bool, palette: &Palette) {
+///
+/// Also called directly from `handle_destroy`, with `dark: false`, to put
+/// the class back on `GetSysColorBrush(COLOR_BTNFACE)` before the palette's
+/// brushes are freed — `GCLP_HBRBACKGROUND` is process-global class state
+/// that outlives this one window, so leaving it pointed at a brush this
+/// window is about to delete would hand the next-created window of this
+/// class a dangling handle (GDI recycles freed handle values) until that
+/// window's own `apply_theme` ran and overwrote it.
+pub(super) fn set_class_background(hwnd: HWND, dark: bool, palette: &Palette) {
     let brush = if dark {
         palette.window_bg
     } else {
@@ -466,7 +474,11 @@ pub(super) fn is_checkbox_id(id: u16) -> bool {
 /// paint is already correct in light mode).
 pub(super) fn checkbox_custom_draw(cd: &NMCUSTOMDRAW) -> u32 {
     let mut dark = false;
-    with_window_state(|state| dark = state.dark.get());
+    let mut font_regular = None;
+    with_window_state(|state| {
+        dark = state.dark.get();
+        font_regular = Some(state.font_regular);
+    });
     if !dark || cd.dwDrawStage != CDDS_PREPAINT {
         return CDRF_DODEFAULT;
     }
@@ -474,6 +486,19 @@ pub(super) fn checkbox_custom_draw(cd: &NMCUSTOMDRAW) -> u32 {
     let hwnd = cd.hdr.hwndFrom;
     let hdc = cd.hdc;
     let rect = cd.rc;
+
+    // CDRF_SKIPDEFAULT below tells the button to skip its own paint
+    // entirely, background fill included — this control never gets the
+    // parent's WM_ERASEBKGND clear a plain repaint (e.g. hot/pressed state
+    // changing, or a check/uncheck) relies on, so the old glyph and text
+    // have to be erased by hand before anything new is drawn over them.
+    let clear_brush = unsafe { CreateSolidBrush(COLORREF(DARK_WINDOW_BG)) };
+    if !clear_brush.is_invalid() {
+        unsafe {
+            FillRect(hdc, &raw const rect, clear_brush);
+            let _ = DeleteObject(clear_brush.into());
+        }
+    }
 
     let htheme = unsafe { OpenThemeData(Some(hwnd), w!("BUTTON")) };
     if htheme.is_invalid() {
@@ -523,6 +548,12 @@ pub(super) fn checkbox_custom_draw(cd: &NMCUSTOMDRAW) -> u32 {
         };
         let mut wide_text = wide_for_theme_draw(&text);
         unsafe {
+            // The paint DC's starting font is whatever comctl32 happened to
+            // leave selected for this custom-draw callback — not guaranteed
+            // to be this control's own font — so it is selected explicitly,
+            // matching the label font every other control in this window
+            // uses, and restored once the text is drawn.
+            let old_font = font_regular.map(|f| SelectObject(hdc, f.into()));
             SetBkMode(hdc, TRANSPARENT);
             SetTextColor(hdc, COLORREF(color));
             DrawTextW(
@@ -531,6 +562,9 @@ pub(super) fn checkbox_custom_draw(cd: &NMCUSTOMDRAW) -> u32 {
                 &raw mut text_rect,
                 DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
             );
+            if let Some(old_font) = old_font {
+                SelectObject(hdc, old_font);
+            }
         }
     }
 
@@ -603,10 +637,15 @@ unsafe extern "system" fn edit_border_subclass_proc(
 }
 
 /// Hand-paints a 1px frame around `hwnd`'s whole window rect (client +
-/// border) directly onto its non-client device context — the sunken look
-/// visual styles would have drawn, if this edit were themed (it deliberately
-/// is not — see the module doc comment).
-fn paint_edit_border(hwnd: HWND) {
+/// border) directly onto its non-client device context. Shared by the
+/// numeric edits' `WM_NCPAINT` subclass below and the hotkey capture
+/// control's own `WM_NCPAINT` handling (`capture.rs`) — both classes carry
+/// plain `WS_BORDER`, which `DefWindowProcW`/`DefSubclassProc` paints in
+/// `COLOR_WINDOWFRAME` (black in both themes and invisible on this
+/// window's dark background), and neither is themed (see the module doc
+/// comment for why the edits are not; the capture control has no
+/// visual-style association to begin with, being a custom window class).
+pub(super) fn paint_edit_border(hwnd: HWND) {
     let mut wrect = RECT::default();
     if unsafe { GetWindowRect(hwnd, &raw mut wrect) }.is_err() {
         return;
@@ -737,7 +776,7 @@ fn paint_combo(hwnd: HWND) {
             .is_ok()
             .then_some(cbi.rcButton);
 
-        let htheme = unsafe { OpenThemeData(Some(hwnd), w!("CFD::COMBOBOX")) };
+        let htheme = open_combo_arrow_theme(hwnd);
         if !htheme.is_invalid() {
             if let Some(button_rect) = button_rect {
                 unsafe {
@@ -767,7 +806,13 @@ fn paint_combo(hwnd: HWND) {
                 crText: COLORREF(DARK_TEXT),
                 ..Default::default()
             };
+            let mut font_regular = None;
+            with_window_state(|state| font_regular = Some(state.font_regular));
             unsafe {
+                // BeginPaint's DC starts with the stock system font, not
+                // this control's own — select it before drawing text, same
+                // as every other control's paint path in this window.
+                let old_font = font_regular.map(|f| SelectObject(hdc, f.into()));
                 let _ = DrawThemeTextEx(
                     htheme,
                     hdc,
@@ -778,6 +823,9 @@ fn paint_combo(hwnd: HWND) {
                     &raw mut text_rect,
                     Some(&raw const opts),
                 );
+                if let Some(old_font) = old_font {
+                    SelectObject(hdc, old_font);
+                }
                 let _ = CloseThemeData(htheme);
             }
         }
@@ -786,6 +834,22 @@ fn paint_combo(hwnd: HWND) {
     unsafe {
         let _ = EndPaint(hwnd, &raw const ps);
     }
+}
+
+/// Opens the theme handle the combo's dark arrow glyph actually paints
+/// from: `"DarkMode_CFD::COMBOBOX"`, the dark sub-application variant of
+/// the same `"CFD"` combo-box parts [`apply_combo_theme`] associates with
+/// the window for metrics only. An explicit `App::Class` list here
+/// overrides whatever the window is associated with, so opening plain
+/// `"CFD::COMBOBOX"` would hand back the light arrow glyph regardless of
+/// dark mode — falls back to it only if the dark variant fails to open
+/// (an older Windows release without it), rather than drawing nothing.
+fn open_combo_arrow_theme(hwnd: HWND) -> HTHEME {
+    let dark_theme = unsafe { OpenThemeData(Some(hwnd), w!("DarkMode_CFD::COMBOBOX")) };
+    if !dark_theme.is_invalid() {
+        return dark_theme;
+    }
+    unsafe { OpenThemeData(Some(hwnd), w!("CFD::COMBOBOX")) }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
