@@ -12,8 +12,13 @@
 use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{ERROR_SUCCESS, HMODULE, HWND, TRUE};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::System::Registry::{HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ, RegGetValueW};
+use windows::Win32::System::Registry::{
+    HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RRF_RT_REG_SZ, RegGetValueW,
+};
 use windows::core::{BOOL, PCSTR, PCWSTR, w};
 
 /// First Windows build whose `uxtheme.dll` carries the dark-mode ordinals in
@@ -244,6 +249,141 @@ pub(crate) fn refresh_menu_theme() {
     }
 }
 
+/// Whether the undocumented dark-mode opt-in resolved on this system.
+///
+/// The tray menu above never needs this as a boolean — the theme engine
+/// decides the menu's colour on its own once the opt-in is granted. A
+/// custom-drawn window has to ask first: painting dark brushes under
+/// controls that were never granted the `DarkMode_Explorer`/`DarkMode_CFD`
+/// visual style would be dark-on-dark and unreadable, so a caller gates its
+/// own dark palette on this before touching a single brush.
+// A custom-drawn dark palette is only safe to paint once this is
+// true (see the doc comment above); no such window exists in this
+// crate yet, so nothing calls this today.
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn dark_ui_available() -> bool {
+    api().is_some()
+}
+
+/// Interprets the raw `AppsUseLightTheme` registry value.
+///
+/// `0` means dark; anything else — including a value a future Windows
+/// release might add — reads as light, the same default a value that was
+/// never set at all falls back to.
+// The pure half of `system_prefers_dark`'s registry read, split out so
+// the interpretation is testable without a live registry; reachable
+// only from that function, which nothing outside this module calls yet.
+#[allow(dead_code)]
+#[must_use]
+fn prefers_dark(apps_use_light_theme: u32) -> bool {
+    apps_use_light_theme == 0
+}
+
+/// Reads the system's light/dark app-theme preference.
+///
+/// `AppsUseLightTheme` under
+/// `HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize` is a
+/// well-established convention — every dark-mode-aware Win32 app reads it —
+/// but, like the ordinal surface above, Microsoft has never published it as
+/// a supported API. A missing value (a profile that has never touched the
+/// personalization setting) or any read failure reads as light, the same
+/// default a fresh Windows install actually renders.
+// Answers "does the user want dark UI" independently of whether the
+// uxtheme opt-in resolved — a custom-drawn window needs both before it
+// paints a single brush. No such window exists in this crate yet.
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn system_prefers_dark() -> bool {
+    const SUBKEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    const VALUE: PCWSTR = w!("AppsUseLightTheme");
+
+    let mut apps_use_light_theme: u32 = 0;
+    let mut size_bytes = u32::try_from(std::mem::size_of_val(&apps_use_light_theme)).unwrap_or(4);
+
+    // SAFETY: the buffer and its byte size are handed over together, and the
+    // key/value names are static NUL-terminated literals.
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            SUBKEY,
+            VALUE,
+            RRF_RT_REG_DWORD,
+            None,
+            Some((&raw mut apps_use_light_theme).cast()),
+            Some(&raw mut size_bytes),
+        )
+    };
+
+    if status != ERROR_SUCCESS {
+        log::debug!(error_code = status.0; "Reading AppsUseLightTheme failed; assuming light");
+        return false;
+    }
+
+    prefers_dark(apps_use_light_theme)
+}
+
+/// Attribute number on builds that predate `DWMWA_USE_IMMERSIVE_DARK_MODE`
+/// (20): the same 17763-18984 range `MIN_DARK_MENU_BUILD` already draws a
+/// line through used this value for the identical feature.
+// Only read from `enable_dark_title_bar`'s fallback path, which nothing
+// calls yet.
+#[allow(dead_code)]
+const DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(19);
+
+/// Toggles the immersive dark title bar via `DwmSetWindowAttribute`.
+///
+/// `DWMWA_USE_IMMERSIVE_DARK_MODE` is the one *documented* API in this
+/// module — Microsoft ships it in the public SDK headers, unlike the
+/// ordinal surface above. Its attribute number changed once: builds from
+/// 18985 on use `20`, while the earlier builds that first shipped the
+/// feature use `19` instead. Trying the current value first and falling
+/// back to the older one on failure covers both without a separate
+/// build-number check.
+///
+/// Best-effort: nothing here is worth returning to a caller. A title bar
+/// that stays whatever colour it already had is not a condition a caller
+/// could act on, so a failure is logged at `debug` and otherwise swallowed.
+// Darkens a window's title bar via the one documented API in this
+// module; no top-level window in this crate asks for that yet.
+#[allow(dead_code)]
+pub(crate) fn enable_dark_title_bar(hwnd: HWND, dark: bool) {
+    let value = BOOL::from(dark);
+    let size = u32::try_from(std::mem::size_of_val(&value)).unwrap_or(4);
+
+    // SAFETY: `hwnd` is a live window handle owned by the caller; `value` is
+    // sized and typed to match what this attribute expects.
+    let result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE,
+            (&raw const value).cast(),
+            size,
+        )
+    };
+
+    if result.is_ok() {
+        return;
+    }
+
+    // SAFETY: as above.
+    let legacy_result = unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY,
+            (&raw const value).cast(),
+            size,
+        )
+    };
+
+    if let Err(e) = legacy_result {
+        log::debug!(
+            error_code = e.code().0;
+            "DwmSetWindowAttribute failed for both immersive dark mode attribute numbers; title bar stays light"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -275,5 +415,18 @@ mod tests {
         assert!(!supports_dark_menus(17763));
         assert!(supports_dark_menus(MIN_DARK_MENU_BUILD));
         assert!(supports_dark_menus(22621));
+    }
+
+    #[test]
+    fn zero_reads_as_dark() {
+        assert!(prefers_dark(0));
+    }
+
+    #[test]
+    fn any_nonzero_value_reads_as_light() {
+        // Includes values Microsoft has never documented using, in case a
+        // future Windows release adds one — anything but exactly 0 is light.
+        assert!(!prefers_dark(1));
+        assert!(!prefers_dark(42));
     }
 }
