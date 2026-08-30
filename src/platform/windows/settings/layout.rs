@@ -18,8 +18,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::error::{BrightnessError, Result};
 
-use super::window::NUMERIC_FIELDS;
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Control IDs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -670,6 +668,56 @@ pub(super) fn layout(hwnd: HWND, dpi: u32) {
     }
 }
 
+/// One spinner's valid range and the id of the up-down control it belongs
+/// to. `window::NumericField` references one of these by pointer instead of
+/// carrying its own copy, so the range lives in exactly one place — this
+/// table — for both `configure_updowns` and the instant-apply clamping
+/// `window.rs` does on every commit.
+#[derive(Debug)]
+pub(super) struct RangeSpec {
+    pub(super) updown_id: u16,
+    pub(super) min: u32,
+    pub(super) max: u32,
+}
+
+/// Valid range for every spinner, in [`CONTROLS`] order; these also mirror
+/// what `core/config.rs`'s validator accepts for the matching config field.
+pub(super) const RANGE_SPECS: &[RangeSpec] = &[
+    // Brightness step per keypress.
+    RangeSpec {
+        updown_id: ID_STEP_UPDOWN,
+        min: 1,
+        max: 50,
+    },
+    // OSD auto-hide timeout, in milliseconds.
+    RangeSpec {
+        updown_id: ID_OSD_TIMEOUT_UPDOWN,
+        min: 100,
+        max: 10_000,
+    },
+    // OSD opacity percentage.
+    RangeSpec {
+        updown_id: ID_OSD_OPACITY_UPDOWN,
+        min: 10,
+        max: 100,
+    },
+    // Periodic-resync edit while its checkbox is checked (0, meaning
+    // disabled, only ever arrives through the checkbox itself — see
+    // `window::NumericField::checkbox_id`).
+    RangeSpec {
+        updown_id: ID_RESYNC_UPDOWN,
+        min: 1,
+        max: 3600,
+    },
+    // Inactivity-resync edit while its checkbox is checked; same
+    // 0-is-checkbox-only rule as the periodic-resync entry above.
+    RangeSpec {
+        updown_id: ID_INACT_UPDOWN,
+        min: 1,
+        max: 600,
+    },
+];
+
 /// Sets an up-down spinner's `UDM_SETRANGE32` range. No-op if `id` was never
 /// created (best-effort, matching `create_controls`).
 fn set_updown_range(hwnd: HWND, id: u16, min: i32, max: i32) {
@@ -701,18 +749,17 @@ fn set_updown_accel(hwnd: HWND, id: u16, accel: &[UDACCEL]) {
     }
 }
 
-/// Applies every spinner's range straight from `NUMERIC_FIELDS` — the
-/// single source of truth for those five ranges, which also mirror what
-/// `core/config.rs`'s validator accepts — plus, for the OSD timeout, its
-/// acceleration table; that one entry has no home in the table itself,
-/// since none of the other four spinners need one.
+/// Applies every spinner's range straight from [`RANGE_SPECS`] — the
+/// single source of truth for those five ranges — plus, for the OSD
+/// timeout, its acceleration table; that one entry has no home in the table
+/// itself, since none of the other four spinners need one.
 pub(super) fn configure_updowns(hwnd: HWND) {
-    for field in NUMERIC_FIELDS {
+    for spec in RANGE_SPECS {
         set_updown_range(
             hwnd,
-            field.updown_id,
-            i32::try_from(field.min).unwrap_or(0),
-            i32::try_from(field.max).unwrap_or(i32::MAX),
+            spec.updown_id,
+            i32::try_from(spec.min).unwrap_or(0),
+            i32::try_from(spec.max).unwrap_or(i32::MAX),
         );
     }
     set_updown_accel(
@@ -1011,6 +1058,23 @@ mod tests {
             assert!(
                 spec.y >= 0 && spec.y + spec.h <= BASE_WINDOW_HEIGHT,
                 "{spec:?} exceeds window height"
+            );
+        }
+    }
+
+    #[test]
+    fn every_range_spec_updown_id_is_a_real_control_with_a_sane_range() {
+        let ids: std::collections::HashSet<u16> = CONTROLS.iter().map(|c| c.id).collect();
+        for spec in RANGE_SPECS {
+            assert!(
+                ids.contains(&spec.updown_id),
+                "RangeSpec.updown_id {} has no CONTROLS entry",
+                spec.updown_id
+            );
+            assert!(
+                spec.min <= spec.max,
+                "RangeSpec for updown {} has min > max",
+                spec.updown_id
             );
         }
     }

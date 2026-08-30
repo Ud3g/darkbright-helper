@@ -44,10 +44,9 @@ use super::capture::capture_wnd_proc;
 use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_INACT_CHECK,
     ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LINK_LOGS, ID_LOG_CHECK,
-    ID_LOG_LEVEL, ID_OSD_OPACITY_EDIT, ID_OSD_OPACITY_UPDOWN, ID_OSD_TIMEOUT_EDIT,
-    ID_OSD_TIMEOUT_UPDOWN, ID_RESTORE, ID_RESYNC_CHECK, ID_RESYNC_EDIT, ID_RESYNC_UPDOWN,
-    ID_STEP_EDIT, ID_STEP_UPDOWN, compute_placement, configure_updowns, font_height_for_dpi,
-    is_section_header, layout,
+    ID_LOG_LEVEL, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK,
+    ID_RESYNC_EDIT, ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement,
+    configure_updowns, font_height_for_dpi, is_section_header, layout,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -591,34 +590,17 @@ fn handle_hotkey_message_text(lparam: LPARAM) {
 // dark mode) is later work too — the two explainer statics below are
 // created with their text and left at the system's default colour.
 
-/// Valid range for the brightness-step edit, mirroring the range
-/// [`configure_updowns`] gave `ID_STEP_UPDOWN` and the validator in
-/// `core/config.rs`.
-const STEP_RANGE: (u32, u32) = (1, 50);
-/// Valid range for the OSD auto-hide timeout, in milliseconds.
-const OSD_TIMEOUT_RANGE: (u32, u32) = (100, 10_000);
-/// Valid range for the OSD opacity percentage.
-const OSD_OPACITY_RANGE: (u32, u32) = (10, 100);
-/// Valid range for the periodic-resync edit while its checkbox is checked
-/// (0, meaning disabled, only ever arrives through the checkbox itself —
-/// see [`NumericField::checkbox_id`]).
-const RESYNC_RANGE: (u32, u32) = (1, 3600);
-/// Valid range for the inactivity-resync edit while its checkbox is
-/// checked; same 0-is-checkbox-only rule as [`RESYNC_RANGE`].
-const INACTIVITY_RANGE: (u32, u32) = (1, 600);
-
-/// One spinner+edit control pair wired to instant apply: its ids, valid
-/// range, the checkbox that must be checked before it applies (`None` for
-/// the three unconditional fields), how a clamped value becomes the change
-/// to post, and — for the two checkbox-gated fields — where to remember it
-/// for the session. Both the `EN_KILLFOCUS` and `UDN_DELTAPOS` commit paths
-/// dispatch through this one table instead of five hand-written near-copies
-/// of the same five steps.
+/// One spinner+edit control pair wired to instant apply: its edit id, valid
+/// range (a [`RangeSpec`] from the layout table, keyed by the matching
+/// up-down control's id), the checkbox that must be checked before it
+/// applies (`None` for the three unconditional fields), how a clamped value
+/// becomes the change to post, and — for the two checkbox-gated fields —
+/// where to remember it for the session. Both the `EN_KILLFOCUS` and
+/// `UDN_DELTAPOS` commit paths dispatch through this one table instead of
+/// five hand-written near-copies of the same five steps.
 pub(super) struct NumericField {
     edit_id: u16,
-    pub(super) updown_id: u16,
-    pub(super) min: u32,
-    pub(super) max: u32,
+    range: &'static RangeSpec,
     checkbox_id: Option<u16>,
     to_change: fn(u32) -> SettingChange,
     remember: Option<fn(&WindowState, u32)>,
@@ -631,9 +613,7 @@ pub(super) struct NumericField {
 pub(super) const NUMERIC_FIELDS: &[NumericField] = &[
     NumericField {
         edit_id: ID_STEP_EDIT,
-        updown_id: ID_STEP_UPDOWN,
-        min: STEP_RANGE.0,
-        max: STEP_RANGE.1,
+        range: &RANGE_SPECS[0],
         checkbox_id: None,
         to_change: |v| SettingChange::StepPercent(to_u8(v)),
         remember: None,
@@ -641,9 +621,7 @@ pub(super) const NUMERIC_FIELDS: &[NumericField] = &[
     },
     NumericField {
         edit_id: ID_OSD_TIMEOUT_EDIT,
-        updown_id: ID_OSD_TIMEOUT_UPDOWN,
-        min: OSD_TIMEOUT_RANGE.0,
-        max: OSD_TIMEOUT_RANGE.1,
+        range: &RANGE_SPECS[1],
         checkbox_id: None,
         to_change: SettingChange::OsdTimeoutMs,
         remember: None,
@@ -651,9 +629,7 @@ pub(super) const NUMERIC_FIELDS: &[NumericField] = &[
     },
     NumericField {
         edit_id: ID_OSD_OPACITY_EDIT,
-        updown_id: ID_OSD_OPACITY_UPDOWN,
-        min: OSD_OPACITY_RANGE.0,
-        max: OSD_OPACITY_RANGE.1,
+        range: &RANGE_SPECS[2],
         checkbox_id: None,
         to_change: |v| SettingChange::OsdOpacityPercent(to_u8(v)),
         remember: None,
@@ -661,9 +637,7 @@ pub(super) const NUMERIC_FIELDS: &[NumericField] = &[
     },
     NumericField {
         edit_id: ID_RESYNC_EDIT,
-        updown_id: ID_RESYNC_UPDOWN,
-        min: RESYNC_RANGE.0,
-        max: RESYNC_RANGE.1,
+        range: &RANGE_SPECS[3],
         checkbox_id: Some(ID_RESYNC_CHECK),
         to_change: SettingChange::RefreshPeriodicSeconds,
         remember: Some(|state, v| state.last_periodic.set(v)),
@@ -671,9 +645,7 @@ pub(super) const NUMERIC_FIELDS: &[NumericField] = &[
     },
     NumericField {
         edit_id: ID_INACT_EDIT,
-        updown_id: ID_INACT_UPDOWN,
-        min: INACTIVITY_RANGE.0,
-        max: INACTIVITY_RANGE.1,
+        range: &RANGE_SPECS[4],
         checkbox_id: Some(ID_INACT_CHECK),
         to_change: SettingChange::RefreshInactivitySeconds,
         remember: Some(|state, v| state.last_inactivity.set(v)),
@@ -862,20 +834,23 @@ fn handle_numeric_commit(hwnd: HWND, edit_id: u16) {
     if !field_enabled(hwnd, field) {
         return;
     }
-    let value = commit_edit_text(hwnd, field.edit_id, field.min, field.max);
+    let value = commit_edit_text(hwnd, field.edit_id, field.range.min, field.range.max);
     commit_numeric_field(field, value);
 }
 
 /// `UDN_DELTAPOS` on one of the five spinners: same commit as
 /// [`handle_numeric_commit`], from a click instead of a focus change.
 fn handle_spinner_delta(hwnd: HWND, updown_id: u16, delta: i32) {
-    let Some(field) = NUMERIC_FIELDS.iter().find(|f| f.updown_id == updown_id) else {
+    let Some(field) = NUMERIC_FIELDS
+        .iter()
+        .find(|f| f.range.updown_id == updown_id)
+    else {
         return;
     };
     if !field_enabled(hwnd, field) {
         return;
     }
-    let value = commit_spinner_delta(hwnd, field.edit_id, field.min, field.max, delta);
+    let value = commit_spinner_delta(hwnd, field.edit_id, field.range.min, field.range.max, delta);
     commit_numeric_field(field, value);
 }
 
@@ -1526,6 +1501,7 @@ impl SettingsSink for SettingsSinkImpl {
 
 #[cfg(test)]
 mod tests {
+    use super::super::layout::{ID_OSD_OPACITY_UPDOWN, ID_OSD_TIMEOUT_UPDOWN, ID_STEP_UPDOWN};
     use super::*;
 
     #[test]
@@ -1643,9 +1619,9 @@ mod tests {
                 field.edit_id
             );
             assert!(
-                ids.contains(&field.updown_id),
-                "NumericField.updown_id {} has no CONTROLS entry",
-                field.updown_id
+                ids.contains(&field.range.updown_id),
+                "NumericField.range.updown_id {} has no CONTROLS entry",
+                field.range.updown_id
             );
             if let Some(checkbox_id) = field.checkbox_id {
                 assert!(
@@ -1654,7 +1630,7 @@ mod tests {
                 );
             }
             assert!(
-                field.min <= field.max,
+                field.range.min <= field.range.max,
                 "NumericField for edit {} has min > max",
                 field.edit_id
             );
@@ -1663,13 +1639,12 @@ mod tests {
 
     #[test]
     fn every_numeric_field_range_matches_the_spinner_range_it_names() {
-        // configure_updowns now reads its ranges straight from
-        // NUMERIC_FIELDS (only its accel table is still hand-written), so
-        // there is no second copy left for this table to drift from — this
-        // pins STEP_RANGE/OSD_TIMEOUT_RANGE/... against a checked-in
-        // expectation instead, so an accidental edit to one of those
-        // constants shows up as a failing test rather than silently
-        // reaching every spinner and every EN_KILLFOCUS/UDN_DELTAPOS clamp.
+        // configure_updowns and every NumericField both read RANGE_SPECS
+        // directly now, so there is no second copy left for this table to
+        // drift from — this pins the layout table against a checked-in
+        // expectation instead, so an accidental edit to one of those values
+        // shows up as a failing test rather than silently reaching every
+        // spinner and every EN_KILLFOCUS/UDN_DELTAPOS clamp.
         let expected: &[(u16, u32, u32)] = &[
             (ID_STEP_UPDOWN, 1, 50),
             (ID_OSD_TIMEOUT_UPDOWN, 100, 10_000),
@@ -1680,10 +1655,30 @@ mod tests {
         for &(updown_id, min, max) in expected {
             let field = NUMERIC_FIELDS
                 .iter()
-                .find(|f| f.updown_id == updown_id)
+                .find(|f| f.range.updown_id == updown_id)
                 .unwrap_or_else(|| panic!("no NumericField for updown {updown_id}"));
-            assert_eq!(field.min, min, "min mismatch for updown {updown_id}");
-            assert_eq!(field.max, max, "max mismatch for updown {updown_id}");
+            assert_eq!(field.range.min, min, "min mismatch for updown {updown_id}");
+            assert_eq!(field.range.max, max, "max mismatch for updown {updown_id}");
+        }
+    }
+
+    #[test]
+    fn every_range_spec_is_referenced_by_exactly_one_numeric_field() {
+        // The layout table (RANGE_SPECS) and this module's control table
+        // (NUMERIC_FIELDS) must stay in a strict one-to-one correspondence:
+        // pointer identity, not value equality, so a NumericField that
+        // accidentally carried its own inline RangeSpec copy (reintroducing
+        // the drift this refactor removes) would fail this too.
+        for spec in RANGE_SPECS {
+            let referencing = NUMERIC_FIELDS
+                .iter()
+                .filter(|field| std::ptr::eq(field.range, spec))
+                .count();
+            assert_eq!(
+                referencing, 1,
+                "RangeSpec for updown {} is referenced by {referencing} NumericFields, expected exactly 1",
+                spec.updown_id
+            );
         }
     }
 }
