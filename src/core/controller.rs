@@ -1566,6 +1566,8 @@ where
         TrayMenuData {
             monitors,
             warnings: self.health_warnings(),
+            hotkey_up: self.config.hotkeys.brightness_up.clone(),
+            hotkey_down: self.config.hotkeys.brightness_down.clone(),
         }
     }
 }
@@ -2896,6 +2898,36 @@ mod tests {
         let data = reply_rx.try_recv().expect("menu data sent");
         assert!(data.warnings.hotkeys_lost);
         assert!(!data.warnings.ddc.is_degraded());
+    }
+
+    #[test]
+    fn tray_menu_data_carries_the_live_hotkey_bindings() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Ctrl+F5".to_string())),
+            base,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base,
+        )
+        .unwrap();
+
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+
+        let data = reply_rx.try_recv().expect("menu data sent");
+        assert_eq!(data.hotkey_up, "Ctrl+F5");
+        assert_eq!(data.hotkey_down, DEFAULT_HOTKEY_DOWN);
     }
 
     #[test]

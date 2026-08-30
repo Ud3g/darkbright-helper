@@ -501,6 +501,10 @@ pub struct TrayMenuData {
     pub(crate) monitors: Vec<TrayMonitorInfo>,
     /// Active degraded-subsystem warnings to show in the menu.
     pub(crate) warnings: HealthWarnings,
+    /// Live "brighten" hotkey binding, as currently configured.
+    pub(crate) hotkey_up: String,
+    /// Live "dim" hotkey binding, as currently configured.
+    pub(crate) hotkey_down: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
