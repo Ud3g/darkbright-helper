@@ -851,6 +851,19 @@ fn paint_combo(hwnd: HWND) {
             }
         }
 
+        // The numeric edits get this same 1px frame from their own
+        // WM_NCPAINT subclass (see `paint_edit_border`); the combo has no
+        // border of its own to paint over in dark mode, so it needs one
+        // drawn explicitly here — after the fill, before the arrow/text
+        // below, so neither is affected by adding it.
+        let border = unsafe { CreateSolidBrush(COLORREF(DARK_BORDER)) };
+        if !border.is_invalid() {
+            unsafe {
+                let _ = FrameRect(hdc, &raw const rect, border);
+                let _ = DeleteObject(border.into());
+            }
+        }
+
         // EnableWindow only gates input, never painting, but a disabled
         // combo still has to read as disabled: grayed text and arrow, not
         // full-contrast ones a user would read as still editable.

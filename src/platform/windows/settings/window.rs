@@ -16,26 +16,27 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, ICC_LINK_CLASS, ICC_STANDARD_CLASSES, ICC_UPDOWN_CLASS,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NM_CUSTOMDRAW, NM_RETURN, NMCUSTOMDRAW,
-    NMHDR, NMLINK, NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK,
-    WC_STATIC,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, LIF_ITEMINDEX, LIF_STATE, LIS_FOCUSED,
+    LIST_ITEM_STATE_FLAGS, LITEM, LM_SETITEM, NM_CLICK, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR, NMLINK,
+    NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
+    EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, SetFocus, VK_RETURN, VK_SHIFT, VK_TAB,
 };
+use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DM_GETDEFID, DefWindowProcW,
-    DestroyWindow, DispatchMessageW, EN_KILLFOCUS, GetDlgItem, GetMessageW, GetNextDlgTabItem,
-    GetWindowTextLengthW, GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild,
-    IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG,
-    MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
-    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
-    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_NOTIFY, WM_SETFOCUS,
-    WM_SETFONT, WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU,
-    WS_VISIBLE,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DLGC_HASSETSEL, DLGC_WANTCHARS,
+    DLGC_WANTMESSAGE, DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    EN_KILLFOCUS, GetDlgItem, GetMessageW, GetNextDlgTabItem, GetWindowTextLengthW, GetWindowTextW,
+    HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR,
+    MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
+    TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE,
+    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
+    WM_DPICHANGED, WM_GETDLGCODE, WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
+    WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -324,6 +325,14 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
             "COMBOBOX" => dark::install_combo_subclass(child),
             "msctls_updown32" => dark::install_updown_subclass(child),
             _ => {}
+        }
+
+        // Keyboard activation for the footer link's two embedded links —
+        // see "Footer Link Keyboard Activation" below for why this needs
+        // its own subclass rather than relying on the control's built-in
+        // handling.
+        if spec.id == ID_LINK_CONFIG {
+            install_footer_link_subclass(child);
         }
     }
 }
@@ -1249,10 +1258,12 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
 }
 
 /// Routes a `WM_NOTIFY`: a spinner's `UDN_DELTAPOS` commits its delta,
-/// `NM_CLICK` (mouse) or `NM_RETURN` (keyboard Enter while focused) on the
-/// footer `SysLink` posts the shell side effect matching whichever of its
-/// two embedded links fired, and `NM_CUSTOMDRAW` on one of the five
-/// checkboxes hand-paints its label (see [`dark::checkbox_custom_draw`]) —
+/// `NM_CLICK` (mouse) on the footer `SysLink` posts the shell side effect
+/// matching whichever of its two embedded links was clicked — keyboard
+/// activation of the same links is handled separately, by the subclass
+/// installed on that control (see "Footer Link Keyboard Activation"
+/// below), not through a notification here — and `NM_CUSTOMDRAW` on one of
+/// the five checkboxes hand-paints its label (see [`dark::checkbox_custom_draw`]) —
 /// the one notification code here whose return value the caller must
 /// actually use, since it tells the checkbox whether to skip its own
 /// default paint. Every other notification code is ignored and answers `0`
@@ -1274,11 +1285,9 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
             0
         }
         // The footer SysLink carries both links as one control; which one
-        // fired comes from NMLINK's embedded-link index, not the control id
-        // (there is only one id now). A mouse click sends NM_CLICK; Enter
-        // while the link is keyboard-focused sends NM_RETURN instead — both
-        // carry the same NMLINK payload, so both are handled here.
-        NM_CLICK | NM_RETURN if id == ID_LINK_CONFIG => {
+        // was clicked comes from NMLINK's embedded-link index, not the
+        // control id (there is only one id now).
+        NM_CLICK if id == ID_LINK_CONFIG => {
             let nmlink_ptr: *const NMLINK = hdr_ptr.cast();
             let message =
                 unsafe { nmlink_ptr.as_ref() }.and_then(|nmlink| match nmlink.item.iLink {
@@ -1297,6 +1306,178 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
         }
         _ => 0,
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Footer Link Keyboard Activation (SysLink subclass)
+// ─────────────────────────────────────────────────────────────────────────────
+// SysLink's own keyboard handling for a control with more than one embedded
+// link is unreliable once focus has moved past the first: pressing Enter
+// while the second link is internally focused produces no notification at
+// all (mouse clicks on either link work correctly — that path is untouched,
+// still handled by `NM_CLICK` above). Rather than depend on the control's
+// own internal link-focus state machine for the keyboard path, this
+// subclass tracks which of the two links is keyboard-focused itself, drives
+// the control's `LIS_FOCUSED` bit to match (so the native paint still draws
+// the focus indicator on the right link), and dispatches Enter directly
+// instead of waiting for a notification that may never arrive.
+
+/// Number of embedded links the merged footer `SysLink` carries — its
+/// `<a>` markup has exactly two: "Open config file" and "Open log folder".
+const FOOTER_LINK_COUNT: i32 = 2;
+
+const FOOTER_LINK_SUBCLASS_ID: usize = 1;
+
+thread_local! {
+    /// Which of the footer link's two embedded links (`0` or `1`) is
+    /// keyboard-focused right now. Reset to `0` on every `WM_SETFOCUS`
+    /// (SysLink's own documented default, kept here rather than trusted
+    /// from the control); advanced or retreated only by this subclass's own
+    /// `WM_KEYDOWN` handling for `VK_TAB`.
+    static FOOTER_LINK_FOCUS: Cell<i32> = const { Cell::new(0) };
+}
+
+/// Installs the footer link's keyboard-activation subclass. Called once at
+/// control creation, matching every other subclass this window installs
+/// (see `dark::install_edit_border_subclass` and its siblings).
+fn install_footer_link_subclass(hwnd: HWND) {
+    unsafe {
+        let _ = SetWindowSubclass(
+            hwnd,
+            Some(footer_link_subclass_proc),
+            FOOTER_LINK_SUBCLASS_ID,
+            0,
+        );
+    }
+}
+
+unsafe extern "system" fn footer_link_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _refdata: usize,
+) -> LRESULT {
+    unsafe {
+        match msg {
+            // Gaining focus (Tab in from either direction) always starts on
+            // the first link, matching SysLink's documented default; the
+            // native call runs first so the control's own has-focus
+            // bookkeeping updates, then the explicit LM_SETITEM pins the
+            // link state to match rather than trusting the control got
+            // there itself.
+            WM_SETFOCUS => {
+                let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+                FOOTER_LINK_FOCUS.with(|f| f.set(0));
+                set_footer_link_focus(hwnd, 0);
+                result
+            }
+            WM_KEYDOWN if wparam.0 == usize::from(VK_TAB.0) => {
+                let shift = GetKeyState(i32::from(VK_SHIFT.0)) < 0;
+                let focus = FOOTER_LINK_FOCUS.with(Cell::get);
+                let next = if shift { focus - 1 } else { focus + 1 };
+                if !(0..FOOTER_LINK_COUNT).contains(&next) {
+                    // No further link in this direction. WM_GETDLGCODE
+                    // below should have kept IsDialogMessageW from
+                    // forwarding this key at all; this is a fail-safe for
+                    // a Tab that reaches the control some other way, not a
+                    // path normal keyboard navigation takes.
+                    return LRESULT(0);
+                }
+                FOOTER_LINK_FOCUS.with(|f| f.set(next));
+                set_footer_link_focus(hwnd, next);
+                LRESULT(0)
+            }
+            // Dispatches directly from the tracked link index instead of
+            // forwarding to the control's own Enter handling, which is what
+            // silently drops the second link (see this section's doc
+            // comment above) — so DefSubclassProc is deliberately never
+            // called for this key.
+            WM_KEYDOWN if wparam.0 == usize::from(VK_RETURN.0) => {
+                let message = if FOOTER_LINK_FOCUS.with(Cell::get) == 0 {
+                    BrightnessMessage::OpenConfigFile
+                } else {
+                    BrightnessMessage::TrayOpenLogFolder
+                };
+                with_window_state(|state| send_message(state, message));
+                LRESULT(0)
+            }
+            // Tells IsDialogMessageW to hand Enter to this control always,
+            // and Tab only while another link remains in the requested
+            // direction — otherwise Tab falls through to normal dialog
+            // navigation, moving focus to the next/previous real control.
+            WM_GETDLGCODE => {
+                let vk = get_dlg_code_query_vkey(lparam);
+                let mut code = DLGC_HASSETSEL;
+                if vk == usize::from(VK_RETURN.0) {
+                    code |= DLGC_WANTMESSAGE;
+                } else if vk == usize::from(VK_TAB.0) {
+                    let shift = GetKeyState(i32::from(VK_SHIFT.0)) < 0;
+                    let focus = FOOTER_LINK_FOCUS.with(Cell::get);
+                    let has_more_links = if shift {
+                        focus > 0
+                    } else {
+                        focus + 1 < FOOTER_LINK_COUNT
+                    };
+                    code |= if has_more_links {
+                        DLGC_WANTTAB
+                    } else {
+                        DLGC_WANTCHARS
+                    };
+                }
+                LRESULT(isize::try_from(code).unwrap_or(0))
+            }
+            WM_NCDESTROY => {
+                let _ = RemoveWindowSubclass(
+                    hwnd,
+                    Some(footer_link_subclass_proc),
+                    FOOTER_LINK_SUBCLASS_ID,
+                );
+                DefSubclassProc(hwnd, msg, wparam, lparam)
+            }
+            _ => DefSubclassProc(hwnd, msg, wparam, lparam),
+        }
+    }
+}
+
+/// Sets exactly one of the footer link's two embedded links as
+/// keyboard-focused via `LM_SETITEM`, clearing the other. `LIS_FOCUSED`
+/// only ever changes from here, in lockstep with [`FOOTER_LINK_FOCUS`], so
+/// the control's own paint never disagrees with which link Enter would
+/// activate.
+fn set_footer_link_focus(hwnd: HWND, focused: i32) {
+    for link in 0..FOOTER_LINK_COUNT {
+        let mut item = LITEM {
+            mask: LIF_ITEMINDEX | LIF_STATE,
+            iLink: link,
+            stateMask: LIS_FOCUSED,
+            state: if link == focused {
+                LIS_FOCUSED
+            } else {
+                LIST_ITEM_STATE_FLAGS(0)
+            },
+            ..Default::default()
+        };
+        unsafe {
+            SendMessageW(
+                hwnd,
+                LM_SETITEM,
+                None,
+                Some(LPARAM((&raw mut item).expose_provenance().cast_signed())),
+            );
+        }
+    }
+}
+
+/// The virtual-key code a `WM_GETDLGCODE` query is asking about, read from
+/// the `MSG` its `lParam` points at — `0` (matches no key this handler
+/// cares about) when the query has no message context, which happens for
+/// callers that query `WM_GETDLGCODE` outside of `IsDialogMessageW`'s own
+/// per-key routing.
+fn get_dlg_code_query_vkey(lparam: LPARAM) -> usize {
+    let msg_ptr: *const MSG = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+    unsafe { msg_ptr.as_ref() }.map_or(0, |msg| msg.wParam.0)
 }
 
 /// Shared shape for every `WM_CTLCOLOR*` handler: runs `f` against the open
