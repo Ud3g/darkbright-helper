@@ -515,7 +515,7 @@ fn main() {
         OverlayManager::default(),
         supervisor,
         CursorLocator,
-        SettingsSinkImpl,
+        SettingsSinkImpl::new(tx.clone()),
         HotkeyPortImpl::new(hotkey_thread_id.clone(), hotkey_queue.clone()),
         WindowsConfigStore::new(Config::default_path()),
         Instant::now(),
