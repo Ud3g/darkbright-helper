@@ -37,28 +37,35 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, ICC_LINK_CLASS, ICC_STANDARD_CLASSES, ICC_UPDOWN_CLASS,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, UDACCEL, UDM_SETACCEL, UDM_SETRANGE32,
-    UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NMHDR, NMUPDOWN, UDACCEL, UDM_SETACCEL,
+    UDM_SETRANGE32, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK,
+    WC_STATIC,
 };
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, MDT_EFFECTIVE_DPI};
-use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_SETCURSEL, CreateWindowExW, DC_HASDEFID, DM_GETDEFID,
-    DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetDlgItem, GetMessageW, HMENU,
-    HWND_TOPMOST, IDC_ARROW, IsDialogMessageW, LoadCursorW, MSG, PM_REMOVE, PeekMessageW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW,
-    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
-    WM_DESTROY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP,
-    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
+    CreateWindowExW, DC_HASDEFID, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW,
+    EN_KILLFOCUS, GetCursorPos, GetDlgItem, GetMessageW, GetWindowTextLengthW, GetWindowTextW,
+    HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsDialogMessageW, LoadCursorW, MB_ICONWARNING,
+    MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
+    RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
+    SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_NOTIFY, WM_SETFONT,
+    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
+use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
-use crate::core::state::{BrightnessMessage, SettingsSnapshot};
+use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::error::{BrightnessError, Result};
 
-use super::{autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
+use super::{
+    autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error,
+    show_error_message_box,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Posted Messages
@@ -635,7 +642,7 @@ const CONTROLS: &[ControlSpec] = &[
         y: 506,
         w: 340,
         h: 32,
-        text: "(logging changes take effect after restart)",
+        text: "(logging changes take effect after restart; debug and below log monitor serials and paths)",
     },
     // ── Footer ──────────────────────────────────────────────────────────
     // SysLink markup: the visible text is exactly the spec's wording; the
@@ -1042,16 +1049,24 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
         &snap.osd_opacity_percent.to_string(),
     );
 
+    // The field itself never shows 0 — only the checkbox does — so a
+    // disabled field displays the remembered/default value, grayed out,
+    // rather than a literal "0" a user could mistake for a real setting.
+    let periodic_remembered = remembered_seconds(
+        snap.refresh_periodic_seconds,
+        DEFAULT_REFRESH_PERIODIC_SECONDS,
+    );
+    let inactivity_remembered = remembered_seconds(
+        snap.refresh_inactivity_seconds,
+        DEFAULT_REFRESH_INACTIVITY_SECONDS,
+    );
+
     set_checked(
         state.hwnd,
         ID_RESYNC_CHECK,
         snap.refresh_periodic_seconds != 0,
     );
-    set_text(
-        state.hwnd,
-        ID_RESYNC_EDIT,
-        &snap.refresh_periodic_seconds.to_string(),
-    );
+    set_text(state.hwnd, ID_RESYNC_EDIT, &periodic_remembered.to_string());
     set_checked(
         state.hwnd,
         ID_INACT_CHECK,
@@ -1060,7 +1075,7 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
     set_text(
         state.hwnd,
         ID_INACT_EDIT,
-        &snap.refresh_inactivity_seconds.to_string(),
+        &inactivity_remembered.to_string(),
     );
 
     set_text(state.hwnd, ID_HK_UP, &snap.hotkey_up);
@@ -1071,6 +1086,12 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
     set_combo_selection(state.hwnd, ID_LOG_LEVEL, &snap.file_log_level);
 
     set_checked(state.hwnd, ID_AUTOSTART, autostart::is_enabled());
+
+    // Re-derive session memory from what was just displayed, so a later
+    // uncheck-then-recheck in this same session restores *this* value, not
+    // one left over from before the refresh.
+    state.last_periodic.set(periodic_remembered);
+    state.last_inactivity.set(inactivity_remembered);
 
     SUPPRESS_NOTIFICATIONS.with(|s| s.set(false));
 }
@@ -1178,17 +1199,24 @@ fn compute_placement() -> Result<Placement> {
 /// Lives in a thread-local because the window's own dedicated thread is the
 /// only thread that ever touches it, and a plain `extern "system"` wndproc
 /// has no other way to reach it — the same pattern `tray.rs`/`osd.rs` use
-/// for their thread-local render/sender state. Every field here is written
-/// once (at construction) and only ever read afterward, which is what lets
-/// every reader below use `RefCell::borrow` (any number of these can be
-/// held at once) instead of `borrow_mut` (which panics if a second one is
-/// attempted while the first is still live).
+/// for their thread-local render/sender state. Every field except the two
+/// `Cell`s is written once (at construction) and only ever read afterward,
+/// which is what lets every reader below use `RefCell::borrow` (any number
+/// of these can be held at once) instead of `borrow_mut` (which panics if a
+/// second one is attempted while the first is still live); `last_periodic`
+/// and `last_inactivity` are mutated through that same shared borrow via
+/// their own interior mutability, so they don't need one either.
 struct WindowState {
     hwnd: HWND,
     sender: Sender<BrightnessMessage>,
     hwnd_slot: Arc<AtomicIsize>,
     font_regular: HFONT,
     font_bold: HFONT,
+    /// Last non-zero periodic-resync value the dialog has shown this
+    /// session — what re-checking "Resync brightness every" restores.
+    last_periodic: Cell<u32>,
+    /// Same session memory for "Resync after ... of inactivity".
+    last_inactivity: Cell<u32>,
 }
 
 thread_local! {
@@ -1208,17 +1236,26 @@ thread_local! {
     static SUPPRESS_NOTIFICATIONS: Cell<bool> = const { Cell::new(false) };
 }
 
+/// Runs `f` with the open window's state, if any. The single choke point
+/// for reaching [`WINDOW_STATE`] from a control-wiring handler; callers
+/// must not do anything inside `f` that can re-enter `settings_wnd_proc`
+/// (`SetWindowTextW` on an edit, `MessageBoxW`, `DestroyWindow`, ...) —
+/// extract what's needed and make that call after `f` returns instead.
+fn with_window_state(f: impl FnOnce(&WindowState)) {
+    WINDOW_STATE.with(|s| {
+        if let Some(state) = s.borrow().as_ref() {
+            f(state);
+        }
+    });
+}
+
 /// Reclaims ownership of `lparam`'s `Box<SettingsSnapshot>` and applies it.
 /// Other half of the contract documented on [`SettingsSinkImpl::post_boxed`].
 fn handle_refresh_message(lparam: LPARAM) {
     let ptr: *mut SettingsSnapshot =
         std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
     let snapshot = unsafe { Box::from_raw(ptr) };
-    WINDOW_STATE.with(|s| {
-        if let Some(state) = s.borrow().as_ref() {
-            apply_snapshot(state, &snapshot);
-        }
-    });
+    with_window_state(|state| apply_snapshot(state, &snapshot));
 }
 
 /// Reclaims ownership of `lparam`'s `Box<String>` and shows it on the
@@ -1230,18 +1267,406 @@ fn handle_refresh_message(lparam: LPARAM) {
 fn handle_hotkey_message_text(lparam: LPARAM) {
     let ptr: *mut String = std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
     let message = unsafe { Box::from_raw(ptr) };
-    WINDOW_STATE.with(|s| {
-        if let Some(state) = s.borrow().as_ref() {
-            set_text(state.hwnd, ID_HK_ERROR, &message);
+    with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, &message));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Control Wiring (Instant Apply)
+// ─────────────────────────────────────────────────────────────────────────────
+// Every control applies its change immediately and the controller persists
+// it on a debounce timer — there is no OK/Apply button, only "Restore
+// defaults" and "Close". The hotkey capture fields (`ID_HK_UP`/`ID_HK_DOWN`)
+// are plain, unwired edits here; a later task turns them into a capture
+// control. All `WM_CTLCOLOR*` handling (graying the explainer statics, dark
+// mode) is later work too — the two explainer statics below are created
+// with their text and left at the system's default colour.
+
+/// Valid range for the brightness-step edit, mirroring the range
+/// [`configure_updowns`] gave `ID_STEP_UPDOWN` and the validator in
+/// `core/config.rs`.
+const STEP_RANGE: (u32, u32) = (1, 50);
+/// Valid range for the OSD auto-hide timeout, in milliseconds.
+const OSD_TIMEOUT_RANGE: (u32, u32) = (100, 10_000);
+/// Valid range for the OSD opacity percentage.
+const OSD_OPACITY_RANGE: (u32, u32) = (10, 100);
+/// Valid range for the periodic-resync edit while its checkbox is checked
+/// (0, meaning disabled, only ever arrives through the checkbox itself —
+/// see [`NumericField::checkbox_id`]).
+const RESYNC_RANGE: (u32, u32) = (1, 3600);
+/// Valid range for the inactivity-resync edit while its checkbox is
+/// checked; same 0-is-checkbox-only rule as [`RESYNC_RANGE`].
+const INACTIVITY_RANGE: (u32, u32) = (1, 600);
+
+/// One spinner+edit control pair wired to instant apply: its ids, valid
+/// range, the checkbox that must be checked before it applies (`None` for
+/// the three unconditional fields), how a clamped value becomes the change
+/// to post, and — for the two checkbox-gated fields — where to remember it
+/// for the session. Both the `EN_KILLFOCUS` and `UDN_DELTAPOS` commit paths
+/// dispatch through this one table instead of five hand-written near-copies
+/// of the same five steps.
+struct NumericField {
+    edit_id: u16,
+    updown_id: u16,
+    min: u32,
+    max: u32,
+    checkbox_id: Option<u16>,
+    to_change: fn(u32) -> SettingChange,
+    remember: Option<fn(&WindowState, u32)>,
+}
+
+const NUMERIC_FIELDS: &[NumericField] = &[
+    NumericField {
+        edit_id: ID_STEP_EDIT,
+        updown_id: ID_STEP_UPDOWN,
+        min: STEP_RANGE.0,
+        max: STEP_RANGE.1,
+        checkbox_id: None,
+        to_change: |v| SettingChange::StepPercent(to_u8(v)),
+        remember: None,
+    },
+    NumericField {
+        edit_id: ID_OSD_TIMEOUT_EDIT,
+        updown_id: ID_OSD_TIMEOUT_UPDOWN,
+        min: OSD_TIMEOUT_RANGE.0,
+        max: OSD_TIMEOUT_RANGE.1,
+        checkbox_id: None,
+        to_change: SettingChange::OsdTimeoutMs,
+        remember: None,
+    },
+    NumericField {
+        edit_id: ID_OSD_OPACITY_EDIT,
+        updown_id: ID_OSD_OPACITY_UPDOWN,
+        min: OSD_OPACITY_RANGE.0,
+        max: OSD_OPACITY_RANGE.1,
+        checkbox_id: None,
+        to_change: |v| SettingChange::OsdOpacityPercent(to_u8(v)),
+        remember: None,
+    },
+    NumericField {
+        edit_id: ID_RESYNC_EDIT,
+        updown_id: ID_RESYNC_UPDOWN,
+        min: RESYNC_RANGE.0,
+        max: RESYNC_RANGE.1,
+        checkbox_id: Some(ID_RESYNC_CHECK),
+        to_change: SettingChange::RefreshPeriodicSeconds,
+        remember: Some(|state, v| state.last_periodic.set(v)),
+    },
+    NumericField {
+        edit_id: ID_INACT_EDIT,
+        updown_id: ID_INACT_UPDOWN,
+        min: INACTIVITY_RANGE.0,
+        max: INACTIVITY_RANGE.1,
+        checkbox_id: Some(ID_INACT_CHECK),
+        to_change: SettingChange::RefreshInactivitySeconds,
+        remember: Some(|state, v| state.last_inactivity.set(v)),
+    },
+];
+
+/// Narrows a clamped value to `u8`, matching the payload
+/// `StepPercent`/`OsdOpacityPercent` carry. Every [`NumericField`] range
+/// that feeds this stays within `u8`, so the fallback never actually
+/// triggers; it exists so a future range change fails safe instead of
+/// silently wrapping.
+#[must_use]
+fn to_u8(value: u32) -> u8 {
+    u8::try_from(value).unwrap_or(u8::MAX)
+}
+
+/// Parses `text` as a decimal integer and clamps it into `[min, max]`.
+/// Empty or non-numeric text clamps to `min`; text that parses but
+/// overflows `u32` (while still fitting `u64`) clamps to `max` instead of
+/// being lumped in with genuinely malformed input — the `u64` intermediate
+/// is what tells those two cases apart. The edit controls are
+/// `ES_NUMBER`-restricted to digits, so in practice only the empty-field
+/// case is reachable; the rest is defensive.
+#[must_use]
+fn parse_clamped(text: &str, min: u32, max: u32) -> u32 {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return min;
+    }
+    match trimmed.parse::<u64>() {
+        Ok(value) => u32::try_from(value.clamp(u64::from(min), u64::from(max))).unwrap_or(max),
+        Err(_) => min,
+    }
+}
+
+/// `pos + delta`, clamped into `[min, max]`. `i64` arithmetic sidesteps
+/// `u32` underflow when `delta` is negative (the down arrow) and `pos` is
+/// already at `min`.
+#[must_use]
+fn clamp_after_delta(pos: u32, delta: i32, min: u32, max: u32) -> u32 {
+    let next = i64::from(pos) + i64::from(delta);
+    u32::try_from(next.clamp(i64::from(min), i64::from(max))).unwrap_or(min)
+}
+
+/// What session memory should hold for a checkbox-gated 0-or-value field:
+/// `snapshot_value` unchanged if it is nonzero, otherwise `default`. This is
+/// the "re-checking after the dialog opened at 0 falls back to the default"
+/// rule, applied both at population time and after every later refresh.
+#[must_use]
+fn remembered_seconds(snapshot_value: u32, default: u32) -> u32 {
+    if snapshot_value == 0 {
+        default
+    } else {
+        snapshot_value
+    }
+}
+
+/// Reads `id`'s current window text. Empty if the control has no text or
+/// doesn't exist (best-effort, matching the rest of this module).
+fn get_text(hwnd: HWND, id: u16) -> String {
+    let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
+        return String::new();
+    };
+    let Ok(len) = usize::try_from(unsafe { GetWindowTextLengthW(child) }) else {
+        return String::new();
+    };
+    if len == 0 {
+        return String::new();
+    }
+    let mut buf = vec![0u16; len + 1];
+    let copied = usize::try_from(unsafe { GetWindowTextW(child, &mut buf) }).unwrap_or(0);
+    String::from_utf16_lossy(&buf[..copied])
+}
+
+/// Reads a checkbox's checked state via `BM_GETCHECK`. `false` if `id`
+/// doesn't exist.
+fn is_checked(hwnd: HWND, id: u16) -> bool {
+    let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
+        return false;
+    };
+    let result = unsafe { SendMessageW(child, BM_GETCHECK, None, None) };
+    u32::try_from(result.0).unwrap_or(0) == BST_CHECKED.0
+}
+
+/// Enables or disables a child control via `EnableWindow`. No-op if `id`
+/// doesn't exist.
+fn enable_control(hwnd: HWND, id: u16, enabled: bool) {
+    let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
+        return;
+    };
+    unsafe {
+        let _ = EnableWindow(child, enabled);
+    }
+}
+
+/// The combo's currently selected log level, if any (`CB_ERR`, when nothing
+/// is selected, fails the `usize` conversion and reads as `None`).
+fn combo_selected_level(hwnd: HWND, id: u16) -> Option<&'static str> {
+    let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
+        return None;
+    };
+    let index = unsafe { SendMessageW(child, CB_GETCURSEL, None, None) }.0;
+    usize::try_from(index)
+        .ok()
+        .and_then(|i| LOG_LEVELS.get(i))
+        .copied()
+}
+
+/// Reads `edit_id`'s current text, clamps it into `[min, max]`, writes the
+/// normalized text back — so typing `999` becomes `50` on focus loss, not
+/// just in the posted value — and returns the clamped value.
+fn commit_edit_text(hwnd: HWND, edit_id: u16, min: u32, max: u32) -> u32 {
+    let value = parse_clamped(&get_text(hwnd, edit_id), min, max);
+    set_text(hwnd, edit_id, &value.to_string());
+    value
+}
+
+/// Applies a spinner click's `delta` to whatever `edit_id` currently shows,
+/// clamps, writes the result back, and returns it. The spinner and edit
+/// have no buddy relationship (this window always writes control text
+/// itself, including on restore-defaults), so the edit's own displayed
+/// text — not the spinner's internal position — is the only value the two
+/// controls agree on.
+fn commit_spinner_delta(hwnd: HWND, edit_id: u16, min: u32, max: u32, delta: i32) -> u32 {
+    let current = parse_clamped(&get_text(hwnd, edit_id), min, max);
+    let value = clamp_after_delta(current, delta, min, max);
+    set_text(hwnd, edit_id, &value.to_string());
+    value
+}
+
+/// Whether `field` currently applies: unconditional fields always do;
+/// checkbox-gated fields only while their checkbox is checked (matching
+/// the disabled edit+updown a user could not have committed through).
+fn field_enabled(hwnd: HWND, field: &NumericField) -> bool {
+    field.checkbox_id.is_none_or(|cb| is_checked(hwnd, cb))
+}
+
+/// Records `value` in session memory (if `field` has any) and posts the
+/// change it maps to.
+fn commit_numeric_field(field: &NumericField, value: u32) {
+    with_window_state(|state| {
+        if let Some(remember) = field.remember {
+            remember(state, value);
         }
+        post_change(state, (field.to_change)(value));
     });
+}
+
+/// `EN_KILLFOCUS` on one of the five numeric edits: commit its text and
+/// post the change, unless its checkbox (if any) is unchecked — the field
+/// is disabled then, so nothing should have been editable to commit.
+fn handle_numeric_commit(hwnd: HWND, edit_id: u16) {
+    let Some(field) = NUMERIC_FIELDS.iter().find(|f| f.edit_id == edit_id) else {
+        return;
+    };
+    if !field_enabled(hwnd, field) {
+        return;
+    }
+    let value = commit_edit_text(hwnd, field.edit_id, field.min, field.max);
+    commit_numeric_field(field, value);
+}
+
+/// `UDN_DELTAPOS` on one of the five spinners: same commit as
+/// [`handle_numeric_commit`], from a click instead of a focus change.
+fn handle_spinner_delta(hwnd: HWND, updown_id: u16, delta: i32) {
+    let Some(field) = NUMERIC_FIELDS.iter().find(|f| f.updown_id == updown_id) else {
+        return;
+    };
+    if !field_enabled(hwnd, field) {
+        return;
+    }
+    let value = commit_spinner_delta(hwnd, field.edit_id, field.min, field.max, delta);
+    commit_numeric_field(field, value);
+}
+
+/// Posts `change` to the controller, no-op while [`SUPPRESS_NOTIFICATIONS`]
+/// is set — the one choke point every control-change handler posts
+/// through, so a programmatic re-display never sends a message the user
+/// never asked for.
+fn post_change(state: &WindowState, change: SettingChange) {
+    if SUPPRESS_NOTIFICATIONS.with(Cell::get) {
+        return;
+    }
+    send_message(state, BrightnessMessage::SettingChanged(change));
+}
+
+/// Sends a plain, non-`SettingChange` message to the controller — the
+/// footer links, which only ever fire from a real click, never from
+/// programmatic repopulation, so they bypass [`post_change`]'s suppression
+/// gate entirely rather than needing it.
+fn send_message(state: &WindowState, message: BrightnessMessage) {
+    if let Err(e) = state.sender.send(message) {
+        log::warn!(error:% = e; "Failed to send settings message (controller channel closed?)");
+    }
+}
+
+/// `ID_INTERCEPT` (`BN_CLICKED`): post the low-level-hook toggle.
+fn handle_intercept_click(hwnd: HWND) {
+    let checked = is_checked(hwnd, ID_INTERCEPT);
+    with_window_state(|state| post_change(state, SettingChange::InterceptBrightnessKeys(checked)));
+}
+
+/// `ID_LOG_CHECK` (`BN_CLICKED`): enable/disable the level combo to match,
+/// and post the toggle.
+fn handle_log_check_click(hwnd: HWND) {
+    let checked = is_checked(hwnd, ID_LOG_CHECK);
+    enable_control(hwnd, ID_LOG_LEVEL, checked);
+    with_window_state(|state| post_change(state, SettingChange::FileLogEnabled(checked)));
+}
+
+/// `ID_LOG_LEVEL` (`CBN_SELCHANGE`): post the newly selected level string.
+fn handle_log_level_selection(hwnd: HWND) {
+    let Some(level) = combo_selected_level(hwnd, ID_LOG_LEVEL) else {
+        return;
+    };
+    with_window_state(|state| post_change(state, SettingChange::FileLogLevel(level.to_string())));
+}
+
+/// `ID_RESYNC_CHECK` (`BN_CLICKED`): enable/disable its edit+updown; when
+/// re-checked, restore the remembered value into the field before posting
+/// it, so the display and the posted value never disagree.
+fn handle_resync_checkbox_click(hwnd: HWND) {
+    let checked = is_checked(hwnd, ID_RESYNC_CHECK);
+    enable_control(hwnd, ID_RESYNC_EDIT, checked);
+    enable_control(hwnd, ID_RESYNC_UPDOWN, checked);
+    let value = if checked {
+        let mut remembered = 0;
+        with_window_state(|state| remembered = state.last_periodic.get());
+        set_text(hwnd, ID_RESYNC_EDIT, &remembered.to_string());
+        remembered
+    } else {
+        0
+    };
+    with_window_state(|state| post_change(state, SettingChange::RefreshPeriodicSeconds(value)));
+}
+
+/// `ID_INACT_CHECK` (`BN_CLICKED`): same behaviour as
+/// [`handle_resync_checkbox_click`] for the inactivity field.
+fn handle_inactivity_checkbox_click(hwnd: HWND) {
+    let checked = is_checked(hwnd, ID_INACT_CHECK);
+    enable_control(hwnd, ID_INACT_EDIT, checked);
+    enable_control(hwnd, ID_INACT_UPDOWN, checked);
+    let value = if checked {
+        let mut remembered = 0;
+        with_window_state(|state| remembered = state.last_inactivity.get());
+        set_text(hwnd, ID_INACT_EDIT, &remembered.to_string());
+        remembered
+    } else {
+        0
+    };
+    with_window_state(|state| post_change(state, SettingChange::RefreshInactivitySeconds(value)));
+}
+
+/// `ID_AUTOSTART` (`BN_CLICKED`): toggle Windows autostart directly against
+/// the registry — this setting never goes through the settings channel,
+/// since its source of truth is the registry, not `config.json` (see the
+/// `autostart` module docs). On failure, revert the checkbox to what the
+/// registry actually holds and tell the user why, so it never lies about
+/// what was written.
+fn handle_autostart_click(hwnd: HWND) {
+    let checked = is_checked(hwnd, ID_AUTOSTART);
+    let result = if checked {
+        autostart::enable()
+    } else {
+        autostart::disable()
+    };
+    if let Err(e) = result {
+        log::warn!(error:% = e; "Failed to update the Windows startup entry");
+        set_checked(hwnd, ID_AUTOSTART, !checked);
+        show_error_message_box(
+            "Brightness Control - Autostart",
+            &format!("Couldn't update the Windows startup entry:\n{e}"),
+        );
+    }
+}
+
+/// `ID_RESTORE` (`BN_CLICKED`): confirm before applying `RestoreDefaults` —
+/// under instant apply this resets ten settings, both hotkeys included, in
+/// one click with no undo.
+fn handle_restore_click(hwnd: HWND) {
+    if !confirm_restore_defaults(hwnd) {
+        return;
+    }
+    with_window_state(|state| post_change(state, SettingChange::RestoreDefaults));
+}
+
+/// Blocking OK/Cancel confirmation with a warning icon, owned by `hwnd` so
+/// it stays in front of this topmost window; `true` iff the user chose OK.
+/// A bare `MessageBoxW` call rather than `platform/windows/mod.rs`'s
+/// helpers, which are OK-only and have no result to report.
+fn confirm_restore_defaults(hwnd: HWND) -> bool {
+    let message = wide("Reset all settings to their defaults? Hotkeys are applied immediately.");
+    let title = wide("Brightness Control - Restore Defaults");
+    let result = unsafe {
+        MessageBoxW(
+            Some(hwnd),
+            PCWSTR(message.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            MB_OKCANCEL | MB_ICONWARNING,
+        )
+    };
+    result == IDOK
 }
 
 /// Routes a `WM_COMMAND`: a genuine click (`BN_CLICKED`) on Close, or
 /// `IsDialogMessageW`'s simulated default-button click on Enter, or Esc's
-/// `IDCANCEL` — all three close the window. Everything else (checkbox,
-/// edit, combo, link notifications) is unwired here; this module only
-/// creates and lays out those controls.
+/// `IDCANCEL`, close the window. `BN_CLICKED` on any other control,
+/// `EN_KILLFOCUS` on a numeric edit, and `CBN_SELCHANGE` on the log-level
+/// combo dispatch to their handler above; anything else (`EN_CHANGE`
+/// included — deliberately never wired, so retyping a value can't
+/// transiently apply a half-typed one) is ignored.
 fn handle_command(hwnd: HWND, wparam: WPARAM) {
     let Ok(id) = u16::try_from(wparam.0 & 0xFFFF) else {
         return;
@@ -1253,6 +1678,54 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
         unsafe {
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
+        return;
+    }
+
+    match notify_code {
+        BN_CLICKED => match id {
+            ID_AUTOSTART => handle_autostart_click(hwnd),
+            ID_INTERCEPT => handle_intercept_click(hwnd),
+            ID_LOG_CHECK => handle_log_check_click(hwnd),
+            ID_RESYNC_CHECK => handle_resync_checkbox_click(hwnd),
+            ID_INACT_CHECK => handle_inactivity_checkbox_click(hwnd),
+            ID_RESTORE => handle_restore_click(hwnd),
+            _ => {}
+        },
+        EN_KILLFOCUS => handle_numeric_commit(hwnd, id),
+        CBN_SELCHANGE if id == ID_LOG_LEVEL => handle_log_level_selection(hwnd),
+        _ => {}
+    }
+}
+
+/// Routes a `WM_NOTIFY`: a spinner's `UDN_DELTAPOS` commits its delta, and
+/// `NM_CLICK` on a footer `SysLink` posts the matching shell side effect.
+/// Every other notification code (including the `SysLink`'s own
+/// `NM_RETURN`, unreachable from a mouse click) is ignored.
+fn handle_notify(hwnd: HWND, lparam: LPARAM) {
+    let hdr_ptr: *const NMHDR = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+    let Some(hdr) = (unsafe { hdr_ptr.as_ref() }) else {
+        return;
+    };
+    let id = u16::try_from(hdr.idFrom).unwrap_or(u16::MAX);
+
+    match hdr.code {
+        UDN_DELTAPOS => {
+            let nmud_ptr: *const NMUPDOWN = hdr_ptr.cast();
+            if let Some(nmud) = unsafe { nmud_ptr.as_ref() } {
+                handle_spinner_delta(hwnd, id, nmud.iDelta);
+            }
+        }
+        NM_CLICK => {
+            let message = match id {
+                ID_LINK_CONFIG => Some(BrightnessMessage::OpenConfigFile),
+                ID_LINK_LOGS => Some(BrightnessMessage::TrayOpenLogFolder),
+                _ => None,
+            };
+            if let Some(message) = message {
+                with_window_state(|state| send_message(state, message));
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1308,6 +1781,10 @@ unsafe extern "system" fn settings_wnd_proc(
             }
             WM_COMMAND => {
                 handle_command(hwnd, wparam);
+                LRESULT(0)
+            }
+            WM_NOTIFY => {
+                handle_notify(hwnd, lparam);
                 LRESULT(0)
             }
             WM_APP_SETTINGS_REFRESH => {
@@ -1402,6 +1879,11 @@ fn create_settings_window(
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular,
         font_bold,
+        // apply_snapshot (right below) overwrites both before the window is
+        // ever shown or focusable, so the placeholder value here never
+        // reaches a user-visible codepath.
+        last_periodic: Cell::new(0),
+        last_inactivity: Cell::new(0),
     };
     apply_snapshot(&state, snapshot);
     WINDOW_STATE.with(|s| *s.borrow_mut() = Some(state));
@@ -1520,6 +2002,14 @@ const OPENING: isize = -1;
 /// `CreateWindowExW` calls, two fonts, layout, population), and a second
 /// activation landing inside that window would otherwise see the slot still
 /// at `0` and spawn a duplicate window/thread.
+///
+/// Known limitation: if the spawned thread panics after the claim above but
+/// before `run_settings_window` stores the real handle, the slot is left
+/// stuck at [`OPENING`] and Settings can never be reopened without
+/// restarting the process. Nothing on that path unwraps, expects, or
+/// panics today, so it isn't reachable — this is recorded so a future
+/// change to that path is made with the failure mode in mind, in keeping
+/// with this project's fail-fast panic policy elsewhere.
 pub struct SettingsSinkImpl {
     tx: Sender<BrightnessMessage>,
     hwnd: Arc<AtomicIsize>,
@@ -1837,5 +2327,133 @@ mod tests {
         assert_eq!(log_level_index("debug"), Some(3));
         assert_eq!(log_level_index("trace"), Some(4));
         assert_eq!(log_level_index("bogus"), None);
+    }
+
+    #[test]
+    fn parse_clamped_accepts_an_in_range_value() {
+        assert_eq!(parse_clamped("30", 1, 50), 30);
+        assert_eq!(parse_clamped("  30  ", 1, 50), 30);
+    }
+
+    #[test]
+    fn parse_clamped_clamps_a_too_large_value_to_the_max() {
+        // The scenario the brief calls out by name: typing 999 into the
+        // step field (range 1-50) clamps to 50 on focus loss.
+        assert_eq!(parse_clamped("999", 1, 50), 50);
+    }
+
+    #[test]
+    fn parse_clamped_clamps_a_too_small_value_to_the_min() {
+        assert_eq!(parse_clamped("0", 1, 50), 1);
+    }
+
+    #[test]
+    fn parse_clamped_treats_empty_text_as_below_range() {
+        assert_eq!(parse_clamped("", 1, 50), 1);
+        assert_eq!(parse_clamped("   ", 100, 10_000), 100);
+    }
+
+    #[test]
+    fn parse_clamped_treats_unparseable_text_as_below_range() {
+        assert_eq!(parse_clamped("abc", 1, 50), 1);
+    }
+
+    #[test]
+    fn parse_clamped_clamps_a_u64_scale_overflow_to_the_max_not_the_min() {
+        // Too big to fit u32 but not u64: a real "too large" value, not
+        // malformed text, so it clamps to max rather than falling back to
+        // min like a parse failure would.
+        assert_eq!(parse_clamped("99999999999", 1, 3600), 3600);
+    }
+
+    #[test]
+    fn clamp_after_delta_adds_a_normal_step() {
+        assert_eq!(clamp_after_delta(5000, 100, 100, 10_000), 5100);
+        assert_eq!(clamp_after_delta(30, -1, 1, 50), 29);
+    }
+
+    #[test]
+    fn clamp_after_delta_stops_at_the_top_of_the_range() {
+        assert_eq!(clamp_after_delta(50, 1, 1, 50), 50);
+    }
+
+    #[test]
+    fn clamp_after_delta_stops_at_the_bottom_without_underflowing() {
+        assert_eq!(clamp_after_delta(1, -1, 1, 50), 1);
+    }
+
+    #[test]
+    fn remembered_seconds_keeps_a_nonzero_snapshot_value() {
+        assert_eq!(remembered_seconds(45, DEFAULT_REFRESH_PERIODIC_SECONDS), 45);
+    }
+
+    #[test]
+    fn remembered_seconds_falls_back_to_the_default_when_the_snapshot_was_zero() {
+        assert_eq!(
+            remembered_seconds(0, DEFAULT_REFRESH_PERIODIC_SECONDS),
+            DEFAULT_REFRESH_PERIODIC_SECONDS
+        );
+        assert_eq!(
+            remembered_seconds(0, DEFAULT_REFRESH_INACTIVITY_SECONDS),
+            DEFAULT_REFRESH_INACTIVITY_SECONDS
+        );
+    }
+
+    #[test]
+    fn to_u8_narrows_values_within_its_callers_ranges() {
+        assert_eq!(to_u8(1), 1u8);
+        assert_eq!(to_u8(50), 50u8);
+        assert_eq!(to_u8(100), 100u8);
+    }
+
+    #[test]
+    fn every_numeric_field_id_matches_a_real_control_in_the_layout_table() {
+        let ids: std::collections::HashSet<u16> = CONTROLS.iter().map(|c| c.id).collect();
+        for field in NUMERIC_FIELDS {
+            assert!(
+                ids.contains(&field.edit_id),
+                "NumericField.edit_id {} has no CONTROLS entry",
+                field.edit_id
+            );
+            assert!(
+                ids.contains(&field.updown_id),
+                "NumericField.updown_id {} has no CONTROLS entry",
+                field.updown_id
+            );
+            if let Some(checkbox_id) = field.checkbox_id {
+                assert!(
+                    ids.contains(&checkbox_id),
+                    "NumericField.checkbox_id {checkbox_id} has no CONTROLS entry"
+                );
+            }
+            assert!(
+                field.min <= field.max,
+                "NumericField for edit {} has min > max",
+                field.edit_id
+            );
+        }
+    }
+
+    #[test]
+    fn every_numeric_field_range_matches_the_spinner_range_it_names() {
+        // Guards STEP_RANGE/OSD_TIMEOUT_RANGE/... against drifting from the
+        // literal ranges configure_updowns gives the matching msctls_updown32,
+        // since NUMERIC_FIELDS and configure_updowns aren't a single source
+        // of truth (the latter also needs an accel table on one entry).
+        let expected: &[(u16, u32, u32)] = &[
+            (ID_STEP_UPDOWN, 1, 50),
+            (ID_OSD_TIMEOUT_UPDOWN, 100, 10_000),
+            (ID_OSD_OPACITY_UPDOWN, 10, 100),
+            (ID_RESYNC_UPDOWN, 1, 3600),
+            (ID_INACT_UPDOWN, 1, 600),
+        ];
+        for &(updown_id, min, max) in expected {
+            let field = NUMERIC_FIELDS
+                .iter()
+                .find(|f| f.updown_id == updown_id)
+                .unwrap_or_else(|| panic!("no NumericField for updown {updown_id}"));
+            assert_eq!(field.min, min, "min mismatch for updown {updown_id}");
+            assert_eq!(field.max, max, "max mismatch for updown {updown_id}");
+        }
     }
 }
