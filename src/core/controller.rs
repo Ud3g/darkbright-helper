@@ -10,14 +10,15 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::core::brightness::calculate_adjustment;
-use crate::core::config::Config;
+use crate::core::config::{Config, SettingsDirty};
 use crate::core::reconcile::{
     HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REFRESH_TIMEOUT, RefreshTracker, RespawnOutcome,
     SET_TIMEOUT,
 };
 use crate::core::state::{
-    BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, MonitorId, MonitorState, SetOutcome,
-    TrayMenuData, TrayMonitorInfo, UNREAD_BRIGHTNESS_SEED, generate_display_names,
+    BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, HotkeyOp, MonitorId, MonitorState,
+    SetOutcome, SettingsSnapshot, TrayMenuData, TrayMonitorInfo, UNREAD_BRIGHTNESS_SEED,
+    generate_display_names,
 };
 use crate::error::{BrightnessError, Result};
 
@@ -108,11 +109,78 @@ pub trait MonitorLocator {
     fn resolve_id(&self, handle: MonitorHandle) -> Result<MonitorId>;
 }
 
+/// Seam for the settings dialog window.
+pub trait SettingsSink {
+    /// Opens (or focuses) the settings window with current values.
+    fn open(&mut self, snapshot: &SettingsSnapshot);
+
+    /// Re-displays all values (restore defaults, rebind revert).
+    fn refresh(&mut self, snapshot: &SettingsSnapshot);
+
+    /// Inline red error for the hotkey row (registration failure).
+    fn hotkey_error(&mut self, message: &str);
+
+    /// Non-error notice (e.g. hook fallback active).
+    fn hotkey_notice(&mut self, message: &str);
+
+    /// Re-assert `HWND_TOPMOST` (the overlay re-asserts on every update).
+    fn assert_topmost(&mut self);
+}
+
+/// Seam for the hotkey thread's in-place operations (rebind/suspend/resume).
+pub trait HotkeyPort {
+    /// Posts a rebind with new bindings and intercept setting.
+    ///
+    /// # Errors
+    ///
+    /// Errors mean the post itself failed (thread dead/queue gone); results
+    /// otherwise arrive async as `HotkeyRebindResult`.
+    fn rebind(&mut self, up: &str, down: &str, intercept: bool) -> Result<()>;
+
+    /// Posts a suspend (stop delivering brightness hotkeys).
+    ///
+    /// # Errors
+    ///
+    /// Errors mean the post itself failed (thread dead/queue gone); results
+    /// otherwise arrive async as `HotkeyRebindResult`.
+    fn suspend(&mut self) -> Result<()>;
+
+    /// Posts a resume (resume delivering brightness hotkeys).
+    ///
+    /// # Errors
+    ///
+    /// Errors mean the post itself failed (thread dead/queue gone); results
+    /// otherwise arrive async as `HotkeyRebindResult`.
+    fn resume(&mut self) -> Result<()>;
+}
+
+/// Outcome of a [`ConfigStore::save`] attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveResult {
+    /// The config was written.
+    Saved,
+    /// On-disk file changed AND doesn't parse; save deferred (stay dirty).
+    Deferred(String),
+    /// The write failed.
+    Failed(String),
+}
+
+/// Seam for persisting the runtime config to disk.
+pub trait ConfigStore {
+    /// Saves `config`, merging onto a concurrently-edited file per the
+    /// dirty set. `force` (close/quit) never defers.
+    fn save(&mut self, config: &Config, dirty: &SettingsDirty, force: bool) -> SaveResult;
+}
+
 /// Main controller for brightness management.
 ///
 /// Owns all `MonitorState` and drives OSD/overlay/DDC through the seams.
 /// Single-threaded: the binary's main loop is the only caller.
-pub struct Controller<Osd, Ovl, Ddc, Loc> {
+// The bools below are independent latches/flags (degraded-subsystem state,
+// dialog session state), not a state machine with mutually exclusive modes —
+// an enum would not fit them any better than it does `SettingsDirty`.
+#[allow(clippy::struct_excessive_bools)]
+pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     /// Current state (brightness, overlay, absence evidence) per monitor.
     states: HashMap<MonitorId, MonitorState>,
     /// Dimming overlay windows.
@@ -152,16 +220,55 @@ pub struct Controller<Osd, Ovl, Ddc, Loc> {
     file_log_failed: bool,
     /// Monitor whose state the OSD is currently showing (for error restyling).
     osd_monitor: Option<MonitorId>,
+    // The settings-dialog seams and session state below are wired into
+    // message handling by the controller logic that lands with the
+    // settings-window work; until then they are only ever set, never read.
+    /// Settings dialog window.
+    #[allow(dead_code)]
+    settings: Set,
+    /// Hotkey thread's in-place rebind/suspend/resume port.
+    #[allow(dead_code)]
+    hotkey_port: Hk,
+    /// Config persistence.
+    #[allow(dead_code)]
+    store: Store,
+    /// Whether the settings window is currently open.
+    #[allow(dead_code)]
+    settings_open: bool,
+    /// Whether the hotkey capture field is currently capturing (interception
+    /// suspended).
+    #[allow(dead_code)]
+    capture_active: bool,
+    /// Settings fields changed since the last save.
+    #[allow(dead_code)]
+    dirty: SettingsDirty,
+    /// When the current debounce window for a pending save started.
+    #[allow(dead_code)]
+    pending_save_since: Option<Instant>,
+    /// The in-place hotkey operation currently awaiting its ack, and when it
+    /// was posted (for the ack deadline).
+    #[allow(dead_code)]
+    pending_hotkey_op: Option<(HotkeyOp, Instant)>,
+    /// True while a hotkey rebind/suspend/resume has failed or timed out;
+    /// cleared by the next successful ack.
+    hotkeys_degraded: bool,
+    /// Hotkey bindings/intercept setting to revert to if a rebind fails.
+    #[allow(dead_code)]
+    prev_hotkeys: Option<(String, String, bool)>,
 }
 
-impl<Osd, Ovl, Ddc, Loc> Controller<Osd, Ovl, Ddc, Loc>
+impl<Osd, Ovl, Ddc, Loc, Set, Hk, Store> Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store>
 where
     Osd: OsdSink,
     Ovl: OverlaySink,
     Ddc: DdcPort,
     Loc: MonitorLocator,
+    Set: SettingsSink,
+    Hk: HotkeyPort,
+    Store: ConfigStore,
 {
     /// Creates a controller; `now` stamps the activity/health/refresh baselines.
+    #[allow(clippy::too_many_arguments)] // one independent seam per parameter
     #[must_use]
     pub fn new(
         config: Config,
@@ -169,6 +276,9 @@ where
         overlay: Ovl,
         ddc: Ddc,
         locator: Loc,
+        settings: Set,
+        hotkey_port: Hk,
+        store: Store,
         now: Instant,
     ) -> Self {
         Self {
@@ -188,6 +298,16 @@ where
             hotkeys_lost: false,
             file_log_failed: false,
             osd_monitor: None,
+            settings,
+            hotkey_port,
+            store,
+            settings_open: false,
+            capture_active: false,
+            dirty: SettingsDirty::default(),
+            pending_save_since: None,
+            pending_hotkey_op: None,
+            hotkeys_degraded: false,
+            prev_hotkeys: None,
         }
     }
 
@@ -218,6 +338,7 @@ where
         HealthWarnings {
             ddc: self.ddc_health,
             hotkeys_lost: self.hotkeys_lost,
+            hotkeys_degraded: self.hotkeys_degraded,
             file_log_failed: self.file_log_failed,
         }
     }
@@ -805,14 +926,26 @@ where
                 self.handle_refresh(now);
             }
             // ── Tray Icon Messages ───────────────────────────────────────
-            BrightnessMessage::TrayOpenSettings | BrightnessMessage::TrayOpenLogFolder => {
+            BrightnessMessage::TrayOpenSettings
+            | BrightnessMessage::TrayOpenLogFolder
+            | BrightnessMessage::OpenConfigFile => {
                 // Shell side effects; the binary's loop handles them before
                 // forwarding. Reaching this arm means the binary failed to
-                // intercept the message, silently no-op'ing the tray item.
+                // intercept the message, silently no-op'ing the menu/dialog item.
                 log::warn!(
                     "Shell message reached core controller unhandled; wiring regression \
-                     (tray item will silently no-op)"
+                     (menu/dialog item will silently no-op)"
                 );
+            }
+            // ── Settings Dialog Messages ─────────────────────────────────
+            // The settings window and its message handling are not wired up
+            // yet; these are inert until that work lands.
+            BrightnessMessage::SettingChanged(_)
+            | BrightnessMessage::HotkeyRebindResult { .. }
+            | BrightnessMessage::SettingsClosed
+            | BrightnessMessage::HotkeyCaptureStarted
+            | BrightnessMessage::HotkeyCaptureEnded => {
+                log::debug!("Settings-dialog message received; no handling wired up yet");
             }
             BrightnessMessage::TrayRequestQuit => {
                 log::info!("Quit requested from tray menu");
@@ -1002,9 +1135,98 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct FakeSettings {
+        opened: Vec<SettingsSnapshot>,
+        refreshed: Vec<SettingsSnapshot>,
+        errors: Vec<String>,
+        notices: Vec<String>,
+        topmost_asserts: u32,
+    }
+
+    impl SettingsSink for FakeSettings {
+        fn open(&mut self, snapshot: &SettingsSnapshot) {
+            self.opened.push(snapshot.clone());
+        }
+        fn refresh(&mut self, snapshot: &SettingsSnapshot) {
+            self.refreshed.push(snapshot.clone());
+        }
+        fn hotkey_error(&mut self, message: &str) {
+            self.errors.push(message.to_string());
+        }
+        fn hotkey_notice(&mut self, message: &str) {
+            self.notices.push(message.to_string());
+        }
+        fn assert_topmost(&mut self) {
+            self.topmost_asserts += 1;
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeHotkeyPort {
+        rebinds: Vec<(String, String, bool)>,
+        suspends: u32,
+        resumes: u32,
+        /// When true, the next call returns `Err` (one-shot).
+        fail_next: bool,
+    }
+
+    impl FakeHotkeyPort {
+        /// Consumes `fail_next` and reports whether this call should fail.
+        fn take_fail(&mut self) -> bool {
+            std::mem::take(&mut self.fail_next)
+        }
+    }
+
+    impl HotkeyPort for FakeHotkeyPort {
+        fn rebind(&mut self, up: &str, down: &str, intercept: bool) -> Result<()> {
+            if self.take_fail() {
+                return Err(BrightnessError::ChannelSend);
+            }
+            self.rebinds
+                .push((up.to_string(), down.to_string(), intercept));
+            Ok(())
+        }
+        fn suspend(&mut self) -> Result<()> {
+            if self.take_fail() {
+                return Err(BrightnessError::ChannelSend);
+            }
+            self.suspends += 1;
+            Ok(())
+        }
+        fn resume(&mut self) -> Result<()> {
+            if self.take_fail() {
+                return Err(BrightnessError::ChannelSend);
+            }
+            self.resumes += 1;
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FakeStore {
+        saves: Vec<(Config, SettingsDirty, bool)>,
+        result: Option<SaveResult>,
+    }
+
+    impl ConfigStore for FakeStore {
+        fn save(&mut self, config: &Config, dirty: &SettingsDirty, force: bool) -> SaveResult {
+            self.saves.push((config.clone(), *dirty, force));
+            self.result.clone().unwrap_or(SaveResult::Saved)
+        }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    type TestController = Controller<FakeOsd, FakeOverlay, FakeDdc, FakeLocator>;
+    type TestController = Controller<
+        FakeOsd,
+        FakeOverlay,
+        FakeDdc,
+        FakeLocator,
+        FakeSettings,
+        FakeHotkeyPort,
+        FakeStore,
+    >;
 
     fn test_id() -> MonitorId {
         MonitorId::new("DEL", "U2722D", Some("SN123".to_string()))
@@ -1024,6 +1246,9 @@ mod tests {
                 handle: MonitorHandle(1),
                 id: test_id(),
             },
+            FakeSettings::default(),
+            FakeHotkeyPort::default(),
+            FakeStore::default(),
             base,
         )
     }

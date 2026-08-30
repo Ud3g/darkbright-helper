@@ -362,6 +362,77 @@ impl Default for MonitorState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Settings Dialog Support
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One typed settings mutation from the dialog. Values arrive pre-parsed
+/// and pre-clamped by the dialog.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingChange {
+    /// New brightness adjustment step, in percent.
+    StepPercent(u8),
+    /// New OSD auto-hide timeout, in milliseconds.
+    OsdTimeoutMs(u32),
+    /// New OSD opacity, 10-100 percent; the controller maps this to the
+    /// underlying 0.1-1.0 config range.
+    OsdOpacityPercent(u8),
+    /// New periodic refresh interval, in seconds (0 = disabled).
+    RefreshPeriodicSeconds(u32),
+    /// New inactivity refresh threshold, in seconds (0 = disabled).
+    RefreshInactivitySeconds(u32),
+    /// New brightness-up hotkey binding string.
+    HotkeyUp(String),
+    /// New brightness-down hotkey binding string.
+    HotkeyDown(String),
+    /// Whether the dedicated brightness keys should be intercepted via the
+    /// low-level keyboard hook.
+    InterceptBrightnessKeys(bool),
+    /// Whether the rolling file log is enabled.
+    FileLogEnabled(bool),
+    /// New file log level filter (e.g. "info", "debug").
+    FileLogLevel(String),
+    /// Reset all settings-dialog fields to their defaults.
+    RestoreDefaults,
+}
+
+/// Which in-place hotkey-thread operation an ack refers to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyOp {
+    /// Re-registering the brightness hotkeys with new bindings.
+    Rebind,
+    /// Suspending hotkey delivery (e.g. while the capture field has focus).
+    Suspend,
+    /// Resuming hotkey delivery after a suspend.
+    Resume,
+}
+
+/// Current config values handed to the settings window on open/refresh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SettingsSnapshot {
+    /// Brightness adjustment step, in percent.
+    pub step_percent: u8,
+    /// OSD auto-hide timeout, in milliseconds.
+    pub osd_timeout_ms: u32,
+    /// OSD opacity, as a 10-100 percent value.
+    pub osd_opacity_percent: u8,
+    /// Periodic refresh interval, in seconds (0 = disabled).
+    pub refresh_periodic_seconds: u32,
+    /// Inactivity refresh threshold, in seconds (0 = disabled).
+    pub refresh_inactivity_seconds: u32,
+    /// Brightness-up hotkey binding string.
+    pub hotkey_up: String,
+    /// Brightness-down hotkey binding string.
+    pub hotkey_down: String,
+    /// Whether the dedicated brightness keys are intercepted via the
+    /// low-level keyboard hook.
+    pub intercept_brightness_keys: bool,
+    /// Whether the rolling file log is enabled.
+    pub file_log_enabled: bool,
+    /// File log level filter.
+    pub file_log_level: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tray Menu Data
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -413,6 +484,10 @@ pub struct HealthWarnings {
     pub(crate) ddc: DdcHealth,
     /// The hotkey thread died repeatedly and supervision gave up.
     pub(crate) hotkeys_lost: bool,
+    /// A hotkey rebind/suspend/resume failed or timed out; cleared by the
+    /// next successful ack. Unlike `hotkeys_lost` this is recoverable from
+    /// the settings dialog.
+    pub(crate) hotkeys_degraded: bool,
     /// The opt-in file log was requested but could not be attached. Unlike its
     /// siblings this says nothing about whether brightness control works — it
     /// only means the user asked for a diagnostic that is not being written.
@@ -513,6 +588,32 @@ pub enum BrightnessMessage {
         /// Channel to send the menu data back to the tray thread.
         reply_tx: Sender<TrayMenuData>,
     },
+
+    // ── Settings Dialog Messages ─────────────────────────────────────────
+    /// A single setting was changed in the dialog.
+    SettingChanged(SettingChange),
+    /// Ack from the hotkey thread for a posted in-place operation.
+    HotkeyRebindResult {
+        /// Which operation this ack refers to.
+        op: HotkeyOp,
+        /// Whether the operation succeeded.
+        success: bool,
+        /// Hook install failed; plain registrations of the dedicated
+        /// brightness keys are active instead.
+        fallback_active: bool,
+        /// Error message when `success` is `false`.
+        error: Option<String>,
+    },
+    /// The settings window was destroyed (flush pending save; end capture).
+    SettingsClosed,
+    /// The capture field took focus for capturing (suspend interception).
+    HotkeyCaptureStarted,
+    /// Capture ended WITHOUT a new binding (Esc/kill-focus/close).
+    /// A capture that produced a binding sends `SettingChanged::Hotkey*` instead.
+    HotkeyCaptureEnded,
+    /// Dialog footer: open config.json in the default editor (shell side
+    /// effect, intercepted by the binary's loop like `TrayOpenLogFolder`).
+    OpenConfigFile,
 
     /// Shutdown the application gracefully.
     Shutdown,

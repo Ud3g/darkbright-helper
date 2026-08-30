@@ -25,13 +25,14 @@ use darkbright_helper::core::state::{BrightnessMessage, HealthWarnings};
 use darkbright_helper::platform::windows::CursorLocator;
 use darkbright_helper::platform::windows::hotkey::{
     BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
-    HotkeyManager, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP, parse_hotkey,
+    HotkeyManager, HotkeyPortImpl, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP, parse_hotkey,
 };
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::single_instance::{self, InstanceLock, SingleInstance};
 use darkbright_helper::platform::windows::{
-    DdcSupervisor, PowerEventListener, TrayIcon, TrayStatusHandle,
+    DdcSupervisor, PowerEventListener, SettingsSinkImpl, TrayIcon, TrayStatusHandle,
+    WindowsConfigStore,
 };
 use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 use darkbright_helper::{BrightnessError, Result};
@@ -567,6 +568,9 @@ fn main() {
         OverlayManager::default(),
         supervisor,
         CursorLocator,
+        SettingsSinkImpl,
+        HotkeyPortImpl,
+        WindowsConfigStore::new(Config::default_path()),
         Instant::now(),
     );
 

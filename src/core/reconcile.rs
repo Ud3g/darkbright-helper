@@ -34,6 +34,21 @@ pub(crate) const HUNG_TIMEOUT_LIMIT: u32 = 3;
 /// can never prune on its own.
 pub(crate) const PRUNE_ABSENCE_WINDOW: Duration = Duration::from_secs(90);
 
+/// Debounce window between the last dialog change and the config save.
+///
+/// Consumed by the settings-dialog save-scheduling logic added alongside the
+/// window itself; unused until then.
+#[allow(dead_code)]
+pub(crate) const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
+
+/// Ack deadline for one posted hotkey-thread operation (suspend/resume/
+/// rebind). Never a bound on user-paced capture itself.
+///
+/// Consumed by the settings-dialog save-scheduling logic added alongside the
+/// window itself; unused until then.
+#[allow(dead_code)]
+pub(crate) const REBIND_TIMEOUT: Duration = Duration::from_secs(3);
+
 /// Returns whether another worker respawn is permitted right now.
 ///
 /// `true` when fewer than `max` of the `recent` respawn timestamps fall within
@@ -243,6 +258,15 @@ impl RefreshTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_debounce_and_rebind_timeout_hold_their_documented_values() {
+        // Pins the values consumed by the settings-dialog save/ack scheduling
+        // logic (added ahead of that logic in this change) against accidental
+        // drift.
+        assert_eq!(SAVE_DEBOUNCE, Duration::from_millis(500));
+        assert_eq!(REBIND_TIMEOUT, Duration::from_secs(3));
+    }
 
     #[test]
     fn respawn_allowed_denies_when_window_full() {
