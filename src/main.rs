@@ -405,8 +405,7 @@ fn start_hotkey_thread(
     let config_clone = config.clone();
     let handle = std::thread::spawn(move || {
         // Create hotkey manager on THIS thread (creates message window here)
-        let mut hotkey_manager = match HotkeyManager::new(tx, config_clone.brightness.step_percent)
-        {
+        let mut hotkey_manager = match HotkeyManager::new(tx) {
             Ok(hm) => hm,
             Err(e) => {
                 let _ = result_tx.send(Err(e));

@@ -472,6 +472,13 @@ pub enum BrightnessMessage {
         /// Brightness change (-100 to +100).
         delta: i8,
     },
+    /// Adjust brightness on the monitor under the cursor by one configured
+    /// step. The controller multiplies by its live `step_percent`, so a
+    /// changed step applies without touching the hotkey thread.
+    AdjustStep {
+        /// Direction of the adjustment: +1 = brighter, -1 = darker.
+        direction: i8,
+    },
     /// Refresh cached brightness values from all monitors.
     Refresh,
     /// System resumed from sleep/hibernate.

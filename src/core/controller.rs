@@ -787,6 +787,11 @@ where
             BrightnessMessage::Adjust { monitor_id, delta } => {
                 self.handle_adjust(monitor_id, delta, now)?;
             }
+            BrightnessMessage::AdjustStep { direction } => {
+                let step = self.config.brightness.step_percent.cast_signed();
+                let delta = direction.signum().saturating_mul(step);
+                self.handle_adjust(None, delta, now)?;
+            }
             BrightnessMessage::Refresh => {
                 self.handle_refresh(now);
             }
@@ -1476,6 +1481,23 @@ mod tests {
             })
         ));
         assert_eq!(c.osd_monitor.as_ref(), Some(&id));
+    }
+
+    #[test]
+    fn adjust_step_multiplies_by_live_step_percent() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let id = seed(&mut c, test_id(), 50);
+
+        c.config.brightness.step_percent = 7;
+        c.handle_message(BrightnessMessage::AdjustStep { direction: -1 }, base)
+            .unwrap();
+
+        assert_eq!(
+            c.states[&id].effective_brightness(),
+            43,
+            "delta must use the live step_percent (7), not a value frozen at hotkey-thread spawn"
+        );
     }
 
     #[test]
