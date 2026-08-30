@@ -440,7 +440,7 @@ impl std::fmt::Display for ParsedHotkey {
         let key_name = VK_TO_NAME
             .iter()
             .find(|(_, vk)| *vk == self.vk_code)
-            .map_or("Unknown", |(name, _)| *name);
+            .map_or("Unknown", |(name, _)| name.as_str());
 
         parts.push(key_name);
         write!(f, "{}", parts.join("+"))
@@ -559,39 +559,55 @@ static KEY_MAP: LazyLock<HashMap<&'static str, VIRTUAL_KEY>> = LazyLock::new(|| 
     m
 });
 
-/// Reverse mapping from VK codes to display names (for `Display` impl).
-static VK_TO_NAME: LazyLock<Vec<(&'static str, VIRTUAL_KEY)>> = LazyLock::new(|| {
-    vec![
-        ("Up", VK_UP),
-        ("Down", VK_DOWN),
-        ("Left", VK_LEFT),
-        ("Right", VK_RIGHT),
-        ("F1", VK_F1),
-        ("F2", VK_F2),
-        ("F3", VK_F3),
-        ("F4", VK_F4),
-        ("F5", VK_F5),
-        ("F6", VK_F6),
-        ("F7", VK_F7),
-        ("F8", VK_F8),
-        ("F9", VK_F9),
-        ("F10", VK_F10),
-        ("F11", VK_F11),
-        ("F12", VK_F12),
-        ("PageUp", VK_PRIOR),
-        ("PageDown", VK_NEXT),
-        ("Home", VK_HOME),
-        ("End", VK_END),
-        ("Insert", VK_INSERT),
-        ("Delete", VK_DELETE),
-        ("Space", VK_SPACE),
-        ("Tab", VK_TAB),
-        ("Enter", VK_RETURN),
-        ("Escape", VK_ESCAPE),
-        ("Backspace", VK_BACK),
-        ("Plus", VK_OEM_PLUS),
-        ("Minus", VK_OEM_MINUS),
-    ]
+/// Reverse mapping from VK codes to display names (for `Display` impl and
+/// [`key_name`]).
+///
+/// Owned `String`s (rather than `&'static str`) because letters and digits
+/// are generated in a loop instead of written as literals.
+static VK_TO_NAME: LazyLock<Vec<(String, VIRTUAL_KEY)>> = LazyLock::new(|| {
+    let mut v = vec![
+        ("Up".to_string(), VK_UP),
+        ("Down".to_string(), VK_DOWN),
+        ("Left".to_string(), VK_LEFT),
+        ("Right".to_string(), VK_RIGHT),
+        ("F1".to_string(), VK_F1),
+        ("F2".to_string(), VK_F2),
+        ("F3".to_string(), VK_F3),
+        ("F4".to_string(), VK_F4),
+        ("F5".to_string(), VK_F5),
+        ("F6".to_string(), VK_F6),
+        ("F7".to_string(), VK_F7),
+        ("F8".to_string(), VK_F8),
+        ("F9".to_string(), VK_F9),
+        ("F10".to_string(), VK_F10),
+        ("F11".to_string(), VK_F11),
+        ("F12".to_string(), VK_F12),
+        ("PageUp".to_string(), VK_PRIOR),
+        ("PageDown".to_string(), VK_NEXT),
+        ("Home".to_string(), VK_HOME),
+        ("End".to_string(), VK_END),
+        ("Insert".to_string(), VK_INSERT),
+        ("Delete".to_string(), VK_DELETE),
+        ("Space".to_string(), VK_SPACE),
+        ("Tab".to_string(), VK_TAB),
+        ("Enter".to_string(), VK_RETURN),
+        ("Escape".to_string(), VK_ESCAPE),
+        ("Backspace".to_string(), VK_BACK),
+        ("Plus".to_string(), VK_OEM_PLUS),
+        ("Minus".to_string(), VK_OEM_MINUS),
+    ];
+
+    // Letters A-Z and digits 0-9 (VK codes match ASCII uppercase / ASCII).
+    for c in 'A'..='Z' {
+        let code = u16::try_from(u32::from(c)).expect("ASCII letter code always fits in a u16");
+        v.push((c.to_string(), VIRTUAL_KEY(code)));
+    }
+    for c in '0'..='9' {
+        let code = u16::try_from(u32::from(c)).expect("ASCII digit code always fits in a u16");
+        v.push((c.to_string(), VIRTUAL_KEY(code)));
+    }
+
+    v
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -685,6 +701,47 @@ pub fn parse_hotkey(s: &str) -> Result<ParsedHotkey> {
     })?;
 
     Ok(ParsedHotkey::new(modifiers, vk_code))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Capture-field support
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Returns the human-readable name for `vk`, if `parse_hotkey` would accept it
+/// as a key.
+///
+/// Used by the capture control to reject a pressed key it cannot represent
+/// (and therefore cannot round-trip through `config.json`).
+pub(crate) fn key_name(vk: VIRTUAL_KEY) -> Option<String> {
+    VK_TO_NAME
+        .iter()
+        .find(|(_, candidate)| *candidate == vk)
+        .map(|(name, _)| name.clone())
+}
+
+/// Formats `modifiers` and `vk` as a `"Ctrl+Shift+Up"`-style string, in the
+/// same human-readable format `config.json` already stores hotkeys in.
+///
+/// Returns `None` if `vk` has no name, i.e. is not a key `parse_hotkey`
+/// accepts.
+#[must_use]
+pub fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<String> {
+    key_name(vk)?;
+    Some(ParsedHotkey::new(modifiers, vk).to_string())
+}
+
+/// True when `a` and `b` parse to the same modifiers and key, regardless of
+/// case, modifier order, or alias spelling (e.g. `shift+ctrl+up` equals
+/// `Control+Shift+Up`).
+///
+/// Input that fails to parse never conflicts with anything, so a hand-edited
+/// but unparseable `config.json` entry stays as permissive as it is today.
+#[must_use]
+pub fn bindings_conflict(a: &str, b: &str) -> bool {
+    let (Ok(a), Ok(b)) = (parse_hotkey(a), parse_hotkey(b)) else {
+        return false;
+    };
+    a.modifiers == b.modifiers && a.vk_code == b.vk_code
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -791,5 +848,26 @@ mod tests {
     fn test_parse_plus_key() {
         let hotkey = parse_hotkey("Ctrl+Plus").unwrap();
         assert_eq!(hotkey.vk_code, VK_OEM_PLUS);
+    }
+
+    #[test]
+    fn every_accepted_key_round_trips_through_display() {
+        for (name, _vk) in KEY_MAP.iter() {
+            let s = format!("Ctrl+{name}");
+            let parsed = parse_hotkey(&s).unwrap_or_else(|_| panic!("parse {s}"));
+            let shown = parsed.to_string();
+            let reparsed =
+                parse_hotkey(&shown).unwrap_or_else(|_| panic!("re-parse {shown} (from {s})"));
+            assert_eq!(parsed.vk_code, reparsed.vk_code, "{s} -> {shown}");
+            assert_eq!(parsed.modifiers, reparsed.modifiers);
+        }
+    }
+
+    #[test]
+    fn conflict_is_canonical_not_textual() {
+        assert!(bindings_conflict("Ctrl+Shift+Up", "shift+control+up"));
+        assert!(bindings_conflict("Ctrl+B", "ctrl+b"));
+        assert!(!bindings_conflict("Ctrl+Shift+Up", "Ctrl+Shift+Down"));
+        assert!(!bindings_conflict("garbage", "Ctrl+Shift+Up"));
     }
 }
