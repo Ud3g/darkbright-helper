@@ -61,10 +61,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETDLGCODE, WM_KEYDOWN,
-    WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCDESTROY, WM_NOTIFY, WM_PAINT, WM_SETFOCUS, WM_SETFONT,
-    WM_SETTEXT, WM_SYSKEYDOWN, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST,
-    WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    WINDOW_STYLE, WM_APP, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_GETDLGCODE,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCDESTROY, WM_NOTIFY, WM_PAINT,
+    WM_SETFOCUS, WM_SETFONT, WM_SETTEXT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WNDCLASSEXW,
+    WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -199,9 +199,15 @@ const STYLE_UPDOWN: u32 = 0;
 const STYLE_CHECKBOX: u32 = BS_AUTOCHECKBOX | WS_TABSTOP.0;
 const STYLE_CHECKBOX_GROUP: u32 = STYLE_CHECKBOX | WS_GROUP.0;
 const STYLE_EDIT: u32 = ES_AUTOHSCROLL | WS_BORDER.0 | WS_TABSTOP.0;
-const STYLE_EDIT_GROUP: u32 = STYLE_EDIT | WS_GROUP.0;
 const STYLE_EDIT_NUM: u32 = STYLE_EDIT | ES_NUMBER;
 const STYLE_EDIT_NUM_GROUP: u32 = STYLE_EDIT_NUM | WS_GROUP.0;
+// The hotkey capture fields (`ID_HK_UP`/`ID_HK_DOWN`) are a custom-drawn
+// class, not `EDIT` — `ES_AUTOHSCROLL` is EDIT-specific and inert here, so
+// this gets its own style constant rather than borrowing `STYLE_EDIT`'s
+// name for a control that isn't one (the border/tabstop/group bits it
+// actually needs are identical).
+const STYLE_CAPTURE: u32 = WS_BORDER.0 | WS_TABSTOP.0;
+const STYLE_CAPTURE_GROUP: u32 = STYLE_CAPTURE | WS_GROUP.0;
 const STYLE_COMBO: u32 = CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP.0;
 const STYLE_LINK: u32 = WS_TABSTOP.0;
 const STYLE_LINK_GROUP: u32 = STYLE_LINK | WS_GROUP.0;
@@ -347,7 +353,7 @@ const CONTROLS: &[ControlSpec] = &[
     ControlSpec {
         id: ID_HK_UP,
         class: "HOTKEY_CAPTURE",
-        style: STYLE_EDIT_GROUP,
+        style: STYLE_CAPTURE_GROUP,
         x: 170,
         y: 138,
         w: 180,
@@ -367,7 +373,7 @@ const CONTROLS: &[ControlSpec] = &[
     ControlSpec {
         id: ID_HK_DOWN,
         class: "HOTKEY_CAPTURE",
-        style: STYLE_EDIT,
+        style: STYLE_CAPTURE,
         x: 170,
         y: 168,
         w: 180,
@@ -1949,7 +1955,9 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) {
 //       posts HotkeyCaptureStarted (suspends interception)
 //   capturing --Esc, or WM_KILLFOCUS--> idle
 //       posts HotkeyCaptureEnded (resumes interception)
-//   capturing --modifier keydown--> capturing (live preview only, no post)
+//   capturing --modifier keydown, or matching keyup--> capturing (live
+//       preview only, no post; the keyup half keeps the preview from going
+//       stale after a modifier is released mid-capture)
 //   capturing --accepted non-modifier keydown--> idle
 //       posts SettingChanged::HotkeyUp/Down; NOT HotkeyCaptureEnded — the
 //       controller treats a rebind as its own resume (see
@@ -1993,7 +2001,7 @@ const CAPTURE_PROMPT: &str = "Press a key combination… (Esc to cancel)";
 
 /// Inline rejection: the candidate had no Ctrl/Alt/Win modifier. Shift alone
 /// is deliberately insufficient — see [`has_required_modifier`].
-const REJECT_NO_MODIFIER: &str = "Add Ctrl, Alt, or Win \u{2014} Shift alone can't be a hotkey";
+const REJECT_NO_MODIFIER: &str = "Add Ctrl, Alt, or Win (Shift alone isn't enough)";
 /// Inline rejection: `hotkey_string` returned `None`, i.e. `key_name`
 /// cannot represent the pressed key (so it could not round-trip through
 /// `config.json`).
@@ -2005,13 +2013,24 @@ const REJECT_DUPLICATE: &str = "Already assigned to the other brightness hotkey"
 /// Retrieves `hwnd`'s [`CaptureState`] pointer from `GWLP_USERDATA`, or a
 /// null pointer before `WM_CREATE` has run / after `WM_NCDESTROY` has freed
 /// it.
+///
+/// Soundness precondition (this function has a safe signature but is not
+/// sound for an arbitrary `hwnd`): `hwnd` must be a window of the
+/// `"DarkBrightHotkeyCapture"` class. `GWLP_USERDATA` is untyped storage —
+/// this reinterprets whatever is there as `*mut CaptureState` with no tag
+/// to check, so an `hwnd` of any other class would read garbage through
+/// it. The precondition holds by construction: every caller in this module
+/// is reached from inside [`capture_wnd_proc`], which Windows only ever
+/// invokes for windows of this class; it would not hold for a call from
+/// anywhere else.
 fn capture_state_ptr(hwnd: HWND) -> *mut CaptureState {
     let raw = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) };
     std::ptr::with_exposed_provenance_mut(raw.cast_unsigned())
 }
 
 /// A copy of `hwnd`'s current [`CaptureState`], or the default (idle, no
-/// modifiers) if the pointer isn't set yet.
+/// modifiers) if the pointer isn't set yet. Same `hwnd`-must-be-this-class
+/// precondition as [`capture_state_ptr`].
 fn capture_state(hwnd: HWND) -> CaptureState {
     let ptr = capture_state_ptr(hwnd);
     if ptr.is_null() {
@@ -2025,7 +2044,8 @@ fn capture_state(hwnd: HWND) -> CaptureState {
 /// Rust reference is held past this call, so nothing here can alias across
 /// a re-entrant call the mutation triggers (e.g. `InvalidateRect` posts a
 /// repaint asynchronously; it does not call back into this wndproc). No-op
-/// before `WM_CREATE` / after `WM_NCDESTROY`.
+/// before `WM_CREATE` / after `WM_NCDESTROY`. Same `hwnd`-must-be-this-class
+/// precondition as [`capture_state_ptr`].
 fn with_capture_state_mut(hwnd: HWND, f: impl FnOnce(&mut CaptureState)) {
     let ptr = capture_state_ptr(hwnd);
     if !ptr.is_null() {
@@ -2220,18 +2240,34 @@ fn evaluate_candidate(
 /// Extracts the virtual-key code carried in a keydown message's `wParam`
 /// (the whole low value, unlike `WM_COMMAND`'s packed word — see
 /// `handle_command`).
+#[must_use]
 fn vk_from_wparam(wparam: WPARAM) -> VIRTUAL_KEY {
     VIRTUAL_KEY(u16::try_from(wparam.0).unwrap_or(0))
 }
 
+/// Clears the shared `ID_HK_ERROR` status line. Any message standing there
+/// is stale the instant a fresh capture starts or a capture completes: the
+/// brief's Step 4 calls the rejection message a *"short red flash"* —
+/// transient — and a permanent message with no clear on any path would
+/// leave a rejection sitting under a since-accepted binding, or a
+/// controller-originated registration error sitting under a later
+/// successful rebind, with no way for the user to tell whether the just-
+/// shown value actually took.
+fn clear_capture_error() {
+    with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, ""));
+}
+
 /// Enters capture: focuses the control (harmless if it already has focus),
-/// marks it capturing with no modifiers held yet, repaints to the base
-/// prompt, and tells the controller to suspend hotkey interception.
-/// `SetFocus` runs first, before this window's own state changes, so if it
-/// moves focus away from a sibling capture field that was itself mid
-/// capture, that field's `WM_KILLFOCUS` cancels *its* capture (and resumes
-/// interception) before this one suspends it again — no window is ever left
-/// capturing without interception suspended.
+/// marks it capturing with no modifiers held yet, clears any stale status
+/// message (including one left over from a previous controller-originated
+/// registration failure — starting a new capture is exactly when the user
+/// is trying to fix it), repaints to the base prompt, and tells the
+/// controller to suspend hotkey interception. `SetFocus` runs first, before
+/// this window's own state changes, so if it moves focus away from a
+/// sibling capture field that was itself mid capture, that field's
+/// `WM_KILLFOCUS` cancels *its* capture (and resumes interception) before
+/// this one suspends it again — no window is ever left capturing without
+/// interception suspended.
 fn start_capture(hwnd: HWND) {
     unsafe {
         let _ = SetFocus(Some(hwnd));
@@ -2240,6 +2276,7 @@ fn start_capture(hwnd: HWND) {
         cs.capturing = true;
         cs.live_modifiers = HOT_KEY_MODIFIERS(0);
     });
+    clear_capture_error();
     invalidate(hwnd);
     with_window_state(|state| send_message(state, BrightnessMessage::HotkeyCaptureStarted));
 }
@@ -2256,16 +2293,18 @@ fn cancel_capture(hwnd: HWND) {
 }
 
 /// Leaves capture with a new binding: displays it (via [`set_self_text`],
-/// which repaints itself) and posts the `SettingChange` the caller built —
-/// deliberately *not* `HotkeyCaptureEnded`, since the controller treats this
-/// rebind as its own resume (see the state-machine comment at the top of
-/// this section).
+/// which repaints itself), clears any stale rejection/error text — the
+/// binding it described no longer applies, it has just been replaced — and
+/// posts the `SettingChange` the caller built. Deliberately *not*
+/// `HotkeyCaptureEnded`, since the controller treats this rebind as its own
+/// resume (see the state-machine comment at the top of this section).
 fn accept_capture(hwnd: HWND, candidate: String, change: fn(String) -> SettingChange) {
     with_capture_state_mut(hwnd, |cs| {
         cs.capturing = false;
         cs.live_modifiers = HOT_KEY_MODIFIERS(0);
     });
     set_self_text(hwnd, &candidate);
+    clear_capture_error();
     with_window_state(|state| post_change(state, change(candidate)));
 }
 
@@ -2277,6 +2316,21 @@ fn reject_capture(message: &str) {
     with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, message));
 }
 
+/// Re-reads the live modifier mask and repaints — the shared half of
+/// updating the capture preview, used on both a modifier keydown (a
+/// modifier is now held that wasn't) and a modifier keyup (one that was
+/// held no longer is). Without the keyup half the displayed preview goes
+/// stale the moment a user releases a modifier: hold Ctrl, release it,
+/// press `B` — the field would still show `"Ctrl+"` while the freshly
+/// re-read mask (used for the actual accept/reject decision, so
+/// correctness was never at risk) rejects the candidate as having no
+/// modifier, and the displayed reason and the shown preview would disagree.
+fn refresh_modifier_preview(hwnd: HWND) {
+    let modifiers = live_modifier_flags();
+    with_capture_state_mut(hwnd, |cs| cs.live_modifiers = modifiers);
+    invalidate(hwnd);
+}
+
 /// `WM_KEYDOWN`/`WM_SYSKEYDOWN` while `hwnd` is capturing: Esc cancels, a
 /// modifier keydown updates the live preview, anything else is evaluated as
 /// a candidate binding against whichever id is *not* `hwnd`'s own.
@@ -2286,9 +2340,7 @@ fn handle_capture_keydown(hwnd: HWND, vk: VIRTUAL_KEY) {
         return;
     }
     if is_modifier_vk(vk) {
-        let modifiers = live_modifier_flags();
-        with_capture_state_mut(hwnd, |cs| cs.live_modifiers = modifiers);
-        invalidate(hwnd);
+        refresh_modifier_preview(hwnd);
         return;
     }
 
@@ -2306,6 +2358,17 @@ fn handle_capture_keydown(hwnd: HWND, vk: VIRTUAL_KEY) {
     match evaluate_candidate(modifiers, vk, &other_binding) {
         CaptureOutcome::Accept(candidate) => accept_capture(hwnd, candidate, change),
         CaptureOutcome::Rejected(message) => reject_capture(message),
+    }
+}
+
+/// `WM_KEYUP`/`WM_SYSKEYUP` while `hwnd` is capturing: only a modifier keyup
+/// does anything (refreshes the stale-preview problem [`refresh_modifier_preview`]
+/// documents). The message is swallowed either way — see
+/// `capture_wnd_proc`'s `WM_KEYUP | WM_SYSKEYUP` arm for why letting it fall
+/// through to `DefWindowProcW` mid-capture is unsafe, not just untidy.
+fn handle_capture_keyup(hwnd: HWND, vk: VIRTUAL_KEY) {
+    if is_modifier_vk(vk) {
+        refresh_modifier_preview(hwnd);
     }
 }
 
@@ -2344,6 +2407,7 @@ const CAPTURE_TEXT_INSET: i32 = 4;
 /// UTF-16 encoding for `DrawTextW`, deliberately without [`wide`]'s
 /// NUL terminator: `DrawTextW` takes an explicit slice length, and drawing
 /// past the real text would render a trailing NUL glyph.
+#[must_use]
 fn wide_for_draw(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
@@ -2355,7 +2419,10 @@ fn wide_for_draw(s: &str) -> Vec<u16> {
 /// `GetSysColor`-based per this task's palette rule); an idle control that
 /// currently holds keyboard focus also gets a focus rectangle. Capturing
 /// never draws a focus rectangle of its own — the prompt/preview already
-/// signals which field is active.
+/// signals which field is active. Reads `hwnd`'s `CaptureState` via
+/// [`capture_state`], so it carries that function's same `hwnd`-must-be-the-
+/// capture-class precondition — satisfied here because this is only ever
+/// called from `capture_wnd_proc`'s own `WM_PAINT` arm.
 fn paint_capture(hwnd: HWND, hdc: HDC) {
     let mut rect = RECT::default();
     if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_err() {
@@ -2460,6 +2527,31 @@ unsafe extern "system" fn capture_wnd_proc(
                     LRESULT(0)
                 } else if matches!(vk, VK_SPACE | VK_RETURN) {
                     start_capture(hwnd);
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            // Swallowed only while capturing. `IsDialogMessageW` still
+            // translates a keydown it passed through into these follow-up
+            // messages, so leaving them to `DefWindowProcW` mid-capture is
+            // not just untidy but actively wrong: a `WM_SYSCHAR` beeps on a
+            // non-mnemonic, and `WM_SYSKEYUP` on `VK_MENU` is what raises
+            // `SC_KEYMENU` — releasing Alt mid-capture would otherwise pop
+            // the window's system menu, steal focus, and thereby fire
+            // `WM_KILLFOCUS`, silently canceling the capture the user was
+            // still in the middle of. While idle these fall through to
+            // `DefWindowProcW` exactly as before.
+            WM_KEYUP | WM_SYSKEYUP => {
+                if capture_state(hwnd).capturing {
+                    handle_capture_keyup(hwnd, vk_from_wparam(wparam));
+                    LRESULT(0)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_CHAR | WM_SYSCHAR => {
+                if capture_state(hwnd).capturing {
                     LRESULT(0)
                 } else {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
