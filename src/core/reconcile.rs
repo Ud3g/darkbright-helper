@@ -35,10 +35,6 @@ pub(crate) const HUNG_TIMEOUT_LIMIT: u32 = 3;
 pub(crate) const PRUNE_ABSENCE_WINDOW: Duration = Duration::from_secs(90);
 
 /// Debounce window between the last dialog change and the config save.
-///
-/// Consumed by the settings-dialog save-scheduling logic added alongside the
-/// window itself; unused until then.
-#[allow(dead_code)]
 pub(crate) const SAVE_DEBOUNCE: Duration = Duration::from_millis(500);
 
 /// Ack deadline for one posted hotkey-thread operation (suspend/resume/

@@ -30,6 +30,13 @@ use crate::error::{BrightnessError, Result};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct MonitorHandle(pub isize);
 
+/// Consecutive failed dialog-save attempts (`Deferred` or `Failed`, back to
+/// back) before the automatic retry stops re-arming itself and leaves the
+/// change dirty for the next dialog edit or close/quit flush to pick up.
+/// Matches the DDC write path's own retry budget: initial attempt plus two
+/// retries.
+const SAVE_FAILURE_LIMIT: u32 = 3;
+
 /// Seam for the on-screen display window.
 pub trait OsdSink {
     /// Shows the OSD on the given monitor with the state's current values.
@@ -179,6 +186,18 @@ pub trait ConfigStore {
     fn save(&mut self, config: &Config, dirty: &SettingsDirty, force: bool) -> SaveResult;
 }
 
+/// What one non-`Saved` outcome means for logging, in terms of how far into
+/// the current consecutive-failure streak it falls.
+enum SaveFailureStage {
+    /// The first failure of a new streak.
+    Began,
+    /// A later attempt, still under `SAVE_FAILURE_LIMIT` (carries the
+    /// attempt number).
+    Retrying(u32),
+    /// The streak just reached `SAVE_FAILURE_LIMIT` (carries the total).
+    GaveUp(u32),
+}
+
 /// Main controller for brightness management.
 ///
 /// Owns all `MonitorState` and drives OSD/overlay/DDC through the seams.
@@ -247,6 +266,10 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     dirty: SettingsDirty,
     /// When the current debounce window for a pending save started.
     pending_save_since: Option<Instant>,
+    /// Consecutive `Deferred`/`Failed` save outcomes, back to back; reset by
+    /// the next `Saved` one. Caps the automatic retry loop at
+    /// `SAVE_FAILURE_LIMIT`.
+    consecutive_save_failures: u32,
     /// The in-place hotkey operation currently awaiting its ack, and when it
     /// was posted (for the ack deadline).
     #[allow(dead_code)]
@@ -306,6 +329,7 @@ where
             capture_active: false,
             dirty: SettingsDirty::default(),
             pending_save_since: None,
+            consecutive_save_failures: 0,
             pending_hotkey_op: None,
             hotkeys_degraded: false,
             prev_hotkeys: None,
@@ -426,6 +450,14 @@ where
         let Some(since) = self.pending_save_since else {
             return;
         };
+        if !self.dirty.any() {
+            // Defensive: `pending_save_since` must never outlive `dirty`. If
+            // a future `SettingChanged` arm ever sets one without the other,
+            // this stops it from silently rewriting config.json on a run
+            // that never touched the dialog, instead of masking the bug.
+            self.pending_save_since = None;
+            return;
+        }
         if now.saturating_duration_since(since) < SAVE_DEBOUNCE {
             return;
         }
@@ -551,24 +583,80 @@ where
     /// against its outcome.
     ///
     /// Only `SaveResult::Saved` clears the dirty set: `Deferred` (an
-    /// on-disk conflict) and `Failed` both keep it and re-arm the debounce
-    /// from `now`, so the next tick retries after another full window
-    /// instead of hammering the store every tick.
+    /// on-disk conflict) and `Failed` both keep it. Each also counts toward
+    /// `SAVE_FAILURE_LIMIT`; below the cap the debounce re-arms from `now`
+    /// so the next tick retries after another full window, but once the cap
+    /// is reached the retry loop stops re-arming itself (the change stays
+    /// dirty, so a later dialog edit or a close/quit flush still saves it).
+    /// A persistent failure — read-only file, AV lock, full disk — must not
+    /// turn into unbounded synchronous file I/O on this thread.
     fn flush_save(&mut self, now: Instant, force: bool) {
         match self.store.save(&self.config, &self.dirty, force) {
             SaveResult::Saved => {
                 self.dirty = SettingsDirty::default();
                 self.pending_save_since = None;
+                self.consecutive_save_failures = 0;
             }
             SaveResult::Deferred(reason) => {
-                log::warn!(reason:% = reason; "Settings save deferred; will retry");
-                self.pending_save_since = Some(now);
+                match self.note_save_failure() {
+                    SaveFailureStage::Began => {
+                        log::error!(reason:% = reason; "Settings save deferred; will retry");
+                    }
+                    SaveFailureStage::Retrying(attempt) => {
+                        log::debug!(reason:% = reason, attempt; "Settings save deferred again; retrying");
+                    }
+                    SaveFailureStage::GaveUp(attempts) => {
+                        log::error!(
+                            reason:% = reason, attempts;
+                            "Settings save deferred repeatedly; giving up until the next change"
+                        );
+                    }
+                }
+                self.rearm_or_give_up(now);
             }
             SaveResult::Failed(reason) => {
-                log::error!(reason:% = reason; "Settings save failed; will retry");
-                self.pending_save_since = Some(now);
+                match self.note_save_failure() {
+                    SaveFailureStage::Began => {
+                        log::error!(reason:% = reason; "Settings save failed; will retry");
+                    }
+                    SaveFailureStage::Retrying(attempt) => {
+                        log::debug!(reason:% = reason, attempt; "Settings save failed again; retrying");
+                    }
+                    SaveFailureStage::GaveUp(attempts) => {
+                        log::error!(
+                            reason:% = reason, attempts;
+                            "Settings save failed repeatedly; giving up until the next change"
+                        );
+                    }
+                }
+                self.rearm_or_give_up(now);
             }
         }
+    }
+
+    /// Advances the consecutive-failure counter and reports which log level
+    /// this attempt calls for: `error` once when a streak begins and once
+    /// when it gives up at `SAVE_FAILURE_LIMIT`, `debug` for every attempt
+    /// in between — so a persistent failure logs a handful of lines, not one
+    /// every debounce window forever.
+    fn note_save_failure(&mut self) -> SaveFailureStage {
+        self.consecutive_save_failures += 1;
+        match self.consecutive_save_failures {
+            1 => SaveFailureStage::Began,
+            n if n < SAVE_FAILURE_LIMIT => SaveFailureStage::Retrying(n),
+            n => SaveFailureStage::GaveUp(n),
+        }
+    }
+
+    /// Re-arms the debounce for another retry, unless the failure streak has
+    /// just reached `SAVE_FAILURE_LIMIT` — then the automatic loop stops
+    /// (leaving `dirty` set) rather than re-arming itself forever.
+    fn rearm_or_give_up(&mut self, now: Instant) {
+        self.pending_save_since = if self.consecutive_save_failures >= SAVE_FAILURE_LIMIT {
+            None
+        } else {
+            Some(now)
+        };
     }
 
     /// Handles the result of a DDC refresh operation.
@@ -2642,6 +2730,12 @@ mod tests {
         .unwrap();
         assert_eq!(c.config.osd.timeout_ms, 2500);
         assert!(c.dirty.osd_timeout_ms);
+        assert_eq!(c.pending_save_since, Some(base), "schedules a save");
+        assert_eq!(
+            c.osd.appearance_calls.len(),
+            1,
+            "exactly one live-preview call, not a spurious duplicate"
+        );
         assert_eq!(
             c.osd.appearance_calls.last(),
             Some(&(c.config.osd.opacity, 2500))
@@ -2654,6 +2748,12 @@ mod tests {
         .unwrap();
         assert!((c.config.osd.opacity - 0.34).abs() < f32::EPSILON);
         assert!(c.dirty.osd_opacity);
+        assert_eq!(c.pending_save_since, Some(base), "schedules a save");
+        assert_eq!(
+            c.osd.appearance_calls.len(),
+            2,
+            "exactly one more live-preview call"
+        );
         assert_eq!(
             c.osd.appearance_calls.last(),
             Some(&(c.config.osd.opacity, 2500)),
@@ -2705,6 +2805,7 @@ mod tests {
         assert_eq!(c.config.logging.file_level, "debug");
         assert!(c.dirty.log_enabled);
         assert!(c.dirty.log_level);
+        assert_eq!(c.pending_save_since, Some(base), "schedules a save");
         assert!(
             c.osd.appearance_calls.is_empty(),
             "logging changes are restart-only; no live effect"
@@ -2986,5 +3087,85 @@ mod tests {
         assert_eq!(c.store.saves.len(), 1);
         assert!(c.dirty.step_percent);
         assert_eq!(c.pending_save_since, Some(base + SAVE_DEBOUNCE));
+    }
+
+    #[test]
+    fn a_persistent_save_failure_stops_retrying_at_the_cap_but_stays_dirty() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.store.result = Some(SaveResult::Failed("disk full".to_string()));
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+
+        // Attempts 1 and 2 (below SAVE_FAILURE_LIMIT) keep re-arming.
+        c.check_pending_save(base + SAVE_DEBOUNCE);
+        assert_eq!(c.store.saves.len(), 1);
+        assert!(c.pending_save_since.is_some(), "attempt 1 re-arms");
+
+        c.check_pending_save(base + SAVE_DEBOUNCE * 2);
+        assert_eq!(c.store.saves.len(), 2);
+        assert!(c.pending_save_since.is_some(), "attempt 2 re-arms");
+
+        // Attempt 3 reaches SAVE_FAILURE_LIMIT and stops re-arming.
+        c.check_pending_save(base + SAVE_DEBOUNCE * 3);
+        assert_eq!(c.store.saves.len(), 3, "the cap is 3 attempts");
+        assert_eq!(
+            c.pending_save_since, None,
+            "the automatic retry gives up once the cap is reached"
+        );
+        assert!(
+            c.dirty.step_percent,
+            "the change is not lost, just not retried automatically"
+        );
+
+        // No further tick attempts a save on its own.
+        c.check_pending_save(base + SAVE_DEBOUNCE * 10);
+        assert_eq!(
+            c.store.saves.len(),
+            3,
+            "no unbounded retry loop once given up"
+        );
+    }
+
+    #[test]
+    fn a_new_change_after_giving_up_retries_and_a_success_resets_the_streak() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.store.result = Some(SaveResult::Failed("disk full".to_string()));
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        c.check_pending_save(base + SAVE_DEBOUNCE);
+        c.check_pending_save(base + SAVE_DEBOUNCE * 2);
+        c.check_pending_save(base + SAVE_DEBOUNCE * 3);
+        assert_eq!(c.pending_save_since, None, "given up after 3 attempts");
+        assert_eq!(c.consecutive_save_failures, 3);
+
+        // A later dialog edit re-arms the debounce even though the loop had
+        // stopped retrying on its own.
+        let later = base + SAVE_DEBOUNCE * 5;
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(40)),
+            later,
+        )
+        .unwrap();
+        assert_eq!(c.pending_save_since, Some(later));
+
+        // The underlying problem clears; the next attempt succeeds and
+        // resets everything, including the failure streak.
+        c.store.result = None;
+        c.check_pending_save(later + SAVE_DEBOUNCE);
+
+        assert_eq!(c.store.saves.len(), 4);
+        assert_eq!(c.pending_save_since, None);
+        assert_eq!(c.dirty, SettingsDirty::default());
+        assert_eq!(c.consecutive_save_failures, 0);
     }
 }
