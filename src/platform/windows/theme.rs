@@ -257,10 +257,6 @@ pub(crate) fn refresh_menu_theme() {
 /// controls that were never granted the `DarkMode_Explorer`/`DarkMode_CFD`
 /// visual style would be dark-on-dark and unreadable, so a caller gates its
 /// own dark palette on this before touching a single brush.
-// A custom-drawn dark palette is only safe to paint once this is
-// true (see the doc comment above); no such window exists in this
-// crate yet, so nothing calls this today.
-#[allow(dead_code)]
 #[must_use]
 pub(crate) fn dark_ui_available() -> bool {
     api().is_some()
@@ -272,9 +268,7 @@ pub(crate) fn dark_ui_available() -> bool {
 /// release might add — reads as light, the same default a value that was
 /// never set at all falls back to.
 // The pure half of `system_prefers_dark`'s registry read, split out so
-// the interpretation is testable without a live registry; reachable
-// only from that function, which nothing outside this module calls yet.
-#[allow(dead_code)]
+// the interpretation is testable without a live registry.
 #[must_use]
 fn prefers_dark(apps_use_light_theme: u32) -> bool {
     apps_use_light_theme == 0
@@ -291,8 +285,7 @@ fn prefers_dark(apps_use_light_theme: u32) -> bool {
 /// default a fresh Windows install actually renders.
 // Answers "does the user want dark UI" independently of whether the
 // uxtheme opt-in resolved — a custom-drawn window needs both before it
-// paints a single brush. No such window exists in this crate yet.
-#[allow(dead_code)]
+// paints a single brush.
 #[must_use]
 pub(crate) fn system_prefers_dark() -> bool {
     const SUBKEY: PCWSTR = w!(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
@@ -324,11 +317,9 @@ pub(crate) fn system_prefers_dark() -> bool {
 }
 
 /// Attribute number on builds that predate `DWMWA_USE_IMMERSIVE_DARK_MODE`
-/// (20): the same 17763-18984 range `MIN_DARK_MENU_BUILD` already draws a
-/// line through used this value for the identical feature.
-// Only read from `enable_dark_title_bar`'s fallback path, which nothing
-// calls yet.
-#[allow(dead_code)]
+/// (20) — the same 17763–18984 range `MIN_DARK_MENU_BUILD` already draws a
+/// line through, since those builds shipped the identical feature under
+/// this older attribute number instead.
 const DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIBUTE(19);
 
 /// Toggles the immersive dark title bar via `DwmSetWindowAttribute`.
@@ -344,9 +335,6 @@ const DWMWA_USE_IMMERSIVE_DARK_MODE_LEGACY: DWMWINDOWATTRIBUTE = DWMWINDOWATTRIB
 /// Best-effort: nothing here is worth returning to a caller. A title bar
 /// that stays whatever colour it already had is not a condition a caller
 /// could act on, so a failure is logged at `debug` and otherwise swallowed.
-// Darkens a window's title bar via the one documented API in this
-// module; no top-level window in this crate asks for that yet.
-#[allow(dead_code)]
 pub(crate) fn enable_dark_title_bar(hwnd: HWND, dark: bool) {
     let value = BOOL::from(dark);
     let size = u32::try_from(std::mem::size_of_val(&value)).unwrap_or(4);

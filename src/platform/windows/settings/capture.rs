@@ -8,9 +8,10 @@
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_GRAYTEXT, COLOR_WINDOWTEXT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, DrawFocusRect, DrawTextW, EndPaint, GetSysColor, HDC,
-    InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+    BeginPaint, COLOR_GRAYTEXT, COLOR_WINDOWTEXT, CreateSolidBrush, DT_END_ELLIPSIS, DT_LEFT,
+    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, EndPaint,
+    FillRect, GetSysColor, HDC, InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
+    TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, GetKeyState, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, SetFocus,
@@ -20,14 +21,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     DLGC_BUTTON, DLGC_WANTALLKEYS, DLGC_WANTMESSAGE, DefWindowProcW, GWLP_USERDATA, GetClientRect,
     GetDlgCtrlID, GetWindowLongPtrW, MSG, SetWindowLongPtrW, SetWindowTextW, WM_CHAR, WM_CREATE,
-    WM_GETDLGCODE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCDESTROY, WM_PAINT,
-    WM_SETFOCUS, WM_SETTEXT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCDESTROY,
+    WM_PAINT, WM_SETFOCUS, WM_SETTEXT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::PCWSTR;
 
 use crate::core::state::{BrightnessMessage, SettingChange};
 
 use super::super::hotkey::{bindings_conflict, hotkey_string};
+use super::dark;
 use super::layout::{ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP};
 use super::window::{
     get_text, post_change, send_message, set_text, wide, window_text, with_window_state,
@@ -540,12 +542,21 @@ fn paint_capture(hwnd: HWND, hdc: HDC) {
     with_window_state(|state| unsafe {
         let old_font = SelectObject(hdc, state.font_regular.into());
         SetBkMode(hdc, TRANSPARENT);
-        let color_index = if is_placeholder {
-            COLOR_GRAYTEXT
+        let color = if state.dark.get() {
+            if is_placeholder {
+                dark::DARK_GRAY_TEXT
+            } else {
+                dark::DARK_TEXT
+            }
         } else {
-            COLOR_WINDOWTEXT
+            let color_index = if is_placeholder {
+                COLOR_GRAYTEXT
+            } else {
+                COLOR_WINDOWTEXT
+            };
+            GetSysColor(color_index)
         };
-        SetTextColor(hdc, COLORREF(GetSysColor(color_index)));
+        SetTextColor(hdc, COLORREF(color));
 
         let mut text_rect = RECT {
             left: rect.left + CAPTURE_TEXT_INSET,
@@ -603,6 +614,28 @@ pub(super) unsafe extern "system" fn capture_wnd_proc(
                     let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 }
                 DefWindowProcW(hwnd, msg, wparam, lparam)
+            }
+            WM_ERASEBKGND => {
+                // The class background brush (COLOR_WINDOW, set at
+                // registration) is only ever right in light mode; in dark
+                // mode this control paints its own background here instead,
+                // matching every other custom-drawn control in this window.
+                let mut dark = false;
+                with_window_state(|state| dark = state.dark.get());
+                if dark {
+                    let mut rect = RECT::default();
+                    if GetClientRect(hwnd, &raw mut rect).is_ok() {
+                        let hdc = HDC(std::ptr::with_exposed_provenance_mut(wparam.0));
+                        let brush = CreateSolidBrush(COLORREF(dark::DARK_CONTROL_BG));
+                        if !brush.is_invalid() {
+                            FillRect(hdc, &raw const rect, brush);
+                            let _ = DeleteObject(brush.into());
+                        }
+                    }
+                    LRESULT(1)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
             }
             WM_PAINT => {
                 let mut ps = PAINTSTRUCT::default();
