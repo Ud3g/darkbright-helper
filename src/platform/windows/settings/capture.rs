@@ -22,7 +22,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DLGC_BUTTON, DLGC_WANTALLKEYS, DLGC_WANTMESSAGE, DefWindowProcW, GWLP_USERDATA, GetClientRect,
     GetDlgCtrlID, GetWindowLongPtrW, MSG, SetWindowLongPtrW, SetWindowTextW, WM_CHAR, WM_CREATE,
     WM_ERASEBKGND, WM_GETDLGCODE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_NCDESTROY,
-    WM_PAINT, WM_SETFOCUS, WM_SETTEXT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_NCPAINT, WM_PAINT, WM_SETFOCUS, WM_SETTEXT, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 use windows::core::PCWSTR;
 
@@ -588,6 +588,48 @@ fn paint_capture(hwnd: HWND, hdc: HDC) {
     }
 }
 
+/// `WM_ERASEBKGND`: whether this control just painted its own dark
+/// background (`true`), or left it to the caller's `DefWindowProcW`
+/// fallback (`false`). The class background brush (`COLOR_WINDOW`, set at
+/// registration) is only ever right in light mode; dark mode paints its
+/// own fill here instead, matching every other custom-drawn control in
+/// this window.
+fn handle_capture_erasebkgnd(hwnd: HWND, wparam: WPARAM) -> bool {
+    let mut dark = false;
+    with_window_state(|state| dark = state.dark.get());
+    if !dark {
+        return false;
+    }
+    let mut rect = RECT::default();
+    if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_ok() {
+        let hdc = HDC(std::ptr::with_exposed_provenance_mut(wparam.0));
+        let brush = unsafe { CreateSolidBrush(COLORREF(dark::DARK_CONTROL_BG)) };
+        if !brush.is_invalid() {
+            unsafe {
+                FillRect(hdc, &raw const rect, brush);
+                let _ = DeleteObject(brush.into());
+            }
+        }
+    }
+    true
+}
+
+/// `WM_NCPAINT`: whether this control just hand-painted its own border
+/// (`true`), or left it to the caller's `DefWindowProcW` fallback
+/// (`false`). This class carries plain `WS_BORDER`, same as the five
+/// numeric edits; `DefWindowProcW`'s own frame paints in
+/// `COLOR_WINDOWFRAME` (black), invisible against this window's dark
+/// background, so dark mode hand-paints it the same way the edits' own
+/// `WM_NCPAINT` subclass does.
+fn handle_capture_ncpaint(hwnd: HWND) -> bool {
+    let mut dark = false;
+    with_window_state(|state| dark = state.dark.get());
+    if dark {
+        dark::paint_edit_border(hwnd);
+    }
+    dark
+}
+
 /// Window procedure for the hotkey capture control class.
 ///
 /// # Safety
@@ -616,23 +658,15 @@ pub(super) unsafe extern "system" fn capture_wnd_proc(
                 DefWindowProcW(hwnd, msg, wparam, lparam)
             }
             WM_ERASEBKGND => {
-                // The class background brush (COLOR_WINDOW, set at
-                // registration) is only ever right in light mode; in dark
-                // mode this control paints its own background here instead,
-                // matching every other custom-drawn control in this window.
-                let mut dark = false;
-                with_window_state(|state| dark = state.dark.get());
-                if dark {
-                    let mut rect = RECT::default();
-                    if GetClientRect(hwnd, &raw mut rect).is_ok() {
-                        let hdc = HDC(std::ptr::with_exposed_provenance_mut(wparam.0));
-                        let brush = CreateSolidBrush(COLORREF(dark::DARK_CONTROL_BG));
-                        if !brush.is_invalid() {
-                            FillRect(hdc, &raw const rect, brush);
-                            let _ = DeleteObject(brush.into());
-                        }
-                    }
+                if handle_capture_erasebkgnd(hwnd, wparam) {
                     LRESULT(1)
+                } else {
+                    DefWindowProcW(hwnd, msg, wparam, lparam)
+                }
+            }
+            WM_NCPAINT => {
+                if handle_capture_ncpaint(hwnd) {
+                    LRESULT(0)
                 } else {
                     DefWindowProcW(hwnd, msg, wparam, lparam)
                 }
