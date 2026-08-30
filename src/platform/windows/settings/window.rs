@@ -52,8 +52,9 @@ use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_INACT_CHECK,
     ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL,
     ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK, ID_RESYNC_EDIT,
-    ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement, configure_updowns,
-    dpi_from_wparam, font_height_for_dpi, is_section_header, layout,
+    ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement,
+    configure_combo_height, configure_updowns, dpi_from_wparam, font_height_for_dpi,
+    is_section_header, layout,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -62,17 +63,17 @@ use super::layout::{
 
 /// Re-populate every control from a fresh `Box<SettingsSnapshot>` carried in
 /// `lparam`. See [`SettingsSinkImpl::post_boxed`] for the ownership contract.
-pub const WM_APP_SETTINGS_REFRESH: u32 = WM_APP + 1;
+pub(super) const WM_APP_SETTINGS_REFRESH: u32 = WM_APP + 1;
 /// Bring the window to the foreground; no payload.
-pub const WM_APP_SETTINGS_FOCUS: u32 = WM_APP + 2;
+pub(super) const WM_APP_SETTINGS_FOCUS: u32 = WM_APP + 2;
 /// Show a hotkey registration error, a `Box<String>` carried in `lparam`.
 /// See [`SettingsSinkImpl::post_boxed`] for the ownership contract.
-pub const WM_APP_SETTINGS_HK_ERROR: u32 = WM_APP + 3;
+pub(super) const WM_APP_SETTINGS_HK_ERROR: u32 = WM_APP + 3;
 /// Show a non-error hotkey notice, a `Box<String>` carried in `lparam`, same
 /// ownership contract as [`WM_APP_SETTINGS_HK_ERROR`].
-pub const WM_APP_SETTINGS_HK_NOTICE: u32 = WM_APP + 4;
+pub(super) const WM_APP_SETTINGS_HK_NOTICE: u32 = WM_APP + 4;
 /// Re-assert `HWND_TOPMOST`; no payload.
-pub const WM_APP_SETTINGS_TOPMOST: u32 = WM_APP + 5;
+pub(super) const WM_APP_SETTINGS_TOPMOST: u32 = WM_APP + 5;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Window Class Registration
@@ -466,9 +467,16 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 
     // Re-derive session memory from what was just displayed, so a later
     // uncheck-then-recheck in this same session restores *this* value, not
-    // one left over from before the refresh.
-    state.last_periodic.set(periodic_remembered);
-    state.last_inactivity.set(inactivity_remembered);
+    // one left over from before the refresh. Only overwrite when the
+    // snapshot actually carries a nonzero value: a disabled field's
+    // snapshot value is 0, and it must not clobber the value the user had
+    // remembered from before it was unchecked.
+    if periodic_checked {
+        state.last_periodic.set(periodic_remembered);
+    }
+    if inactivity_checked {
+        state.last_inactivity.set(inactivity_remembered);
+    }
 
     // Seed "what was last posted" from what was just displayed, so a user
     // who tabs through the dialog right after it opens or refreshes,
@@ -748,6 +756,11 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
     });
 
     layout(hwnd, dpi);
+    // Re-measure and re-apply after the font rebuild above and the reflow
+    // just below it: the combo's system-default item height is font-driven,
+    // so a DPI change (new font, new edit rects) invalidates whatever was
+    // set at creation or the last DPI change.
+    configure_combo_height(hwnd);
 }
 
 /// Reclaims ownership of `lparam`'s `Box<SettingsSnapshot>` and applies it.
@@ -999,8 +1012,8 @@ fn field_enabled(hwnd: HWND, field: &NumericField) -> bool {
 
 /// Records `value` in session memory (if `field` has any) and posts the
 /// change it maps to — unless `value` is exactly what this field last
-/// posted, in which case this is a no-op: the brief's "post if changed"
-/// rule for `EN_KILLFOCUS`, and what keeps a spinner click's `EN_KILLFOCUS`
+/// posted, in which case this is a no-op: a "post only if changed" rule for
+/// `EN_KILLFOCUS`, which is what keeps a spinner click's `EN_KILLFOCUS`
 /// (fired when the click steals focus away from the edit) from applying
 /// alongside its own `UDN_DELTAPOS` for the same click.
 fn commit_numeric_field(field: &NumericField, value: u32) {
@@ -1235,6 +1248,15 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
     let is_close_click = id == ID_CLOSE && notify_code == BN_CLICKED;
     let is_cancel = id == IDCANCEL_ID;
     if is_close_click || is_cancel {
+        // A value typed into a numeric edit but not yet committed (no
+        // EN_KILLFOCUS fired) still survives closing this way: DestroyWindow
+        // moves focus off the still-focused edit before it tears the window
+        // down, so that edit's EN_KILLFOCUS — and the commit it triggers —
+        // reaches this thread's queue and is processed before WM_DESTROY
+        // clears window state, ahead of SettingsClosed. Verified on
+        // hardware. This depends on that message ordering; if a future
+        // Windows build ever delivered WM_DESTROY first, an explicit commit
+        // before posting WM_CLOSE below would become necessary.
         unsafe {
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
@@ -1695,6 +1717,7 @@ fn create_settings_window(
     create_controls(hwnd, hinstance.into(), font_regular, font_bold);
     layout(hwnd, placement.dpi);
     configure_updowns(hwnd);
+    configure_combo_height(hwnd);
 
     let state = WindowState {
         hwnd,
@@ -1740,17 +1763,19 @@ fn create_settings_window(
     Ok(hwnd)
 }
 
-/// Reclaims any `WM_APP_SETTINGS_*` payload messages still queued for
-/// `hwnd` after the message loop has ended. `PostQuitMessage` only yields
-/// `WM_QUIT` once the rest of the thread's queue is drained, so a message
-/// posted shortly before the window was destroyed is still retrieved by
-/// `GetMessageW` right along with everything else in the loop above — it is
-/// only `DispatchMessageW` that silently drops a message whose target
-/// window is already gone, since there is no wndproc left to route it to.
-/// `PeekMessageW` can still read it back by (now-stale) target `hwnd`, so
-/// this reclaims each `Box` directly instead of leaking it — see
-/// [`SettingsSinkImpl::post_boxed`] for the other two reclaim sites this
-/// closes the loop with.
+/// Defensive backstop for `WM_APP_SETTINGS_*` payload messages still
+/// carrying a `Box` for `hwnd`, walked after the message loop above has
+/// ended.
+///
+/// In practice this never finds anything to reclaim: `PostQuitMessage`
+/// only yields `WM_QUIT` once the rest of the thread's queue is otherwise
+/// empty, so every message posted to `hwnd` — payload messages included —
+/// is always retrieved and dispatched by the loop's own `GetMessageW`/
+/// `DispatchMessageW` cycling *before* `WM_QUIT` can ever surface. A post
+/// attempted after the window is already gone fails at `PostMessageW`
+/// itself and is reclaimed immediately in [`SettingsSinkImpl::post_boxed`],
+/// not here. This walk exists as depth against that queue-ordering
+/// guarantee, not because it is known to run against a live message.
 fn drain_pending_payload_messages(hwnd: HWND) {
     let mut msg = MSG::default();
     while unsafe {
@@ -1798,6 +1823,13 @@ fn run_settings_window(
             // Release the "opening" claim so a later activation can retry
             // instead of finding the slot permanently stuck.
             hwnd_slot.store(0, Ordering::SeqCst);
+            // Creation never reached handle_destroy, which is the usual
+            // sender of this message, so send it here — otherwise the
+            // controller's settings_open latches true for the rest of the
+            // process's life.
+            if let Err(e) = tx.send(BrightnessMessage::SettingsClosed) {
+                log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
+            }
             return;
         }
     };
@@ -1891,15 +1923,15 @@ impl SettingsSinkImpl {
     /// `Box::into_raw` here transfers ownership into the posted message; the
     /// wndproc's matching arm (`handle_refresh_message` /
     /// `handle_hotkey_message_text`) reclaims it with exactly one
-    /// `Box::from_raw`. If the post itself fails, the box is reconstituted
-    /// and dropped right here instead of leaking. A message posted just
-    /// before the window is destroyed is *not* lost either: it is still
-    /// retrieved by `GetMessageW` along with everything else (`PostQuitMessage`
-    /// only yields `WM_QUIT` once the rest of the queue is drained) but never
-    /// reaches this wndproc, since `DispatchMessageW` drops a message whose
-    /// target window is already gone — `run_settings_window` closes that gap
-    /// with `drain_pending_payload_messages` right after its loop ends. Every
-    /// posted `Box` is reclaimed on exactly one of these three paths.
+    /// `Box::from_raw`. If the post itself fails — including a post
+    /// attempted after the window is already gone, which fails right here
+    /// at `PostMessageW` rather than surfacing later as a dropped message —
+    /// the box is reconstituted and dropped right here instead of leaking.
+    /// Between the window being alive when a post is made (reclaimed by the
+    /// wndproc) and a post failing outright once it is not (reclaimed
+    /// above), every `Box` this function hands off is accounted for;
+    /// `drain_pending_payload_messages` is defensive depth on top, not a
+    /// third path this relies on.
     fn post_boxed<T>(&self, msg: u32, value: T) {
         let Some(hwnd) = self.target_hwnd() else {
             return;
@@ -1985,8 +2017,8 @@ mod tests {
 
     #[test]
     fn parse_clamped_clamps_a_too_large_value_to_the_max() {
-        // The scenario the brief calls out by name: typing 999 into the
-        // step field (range 1-50) clamps to 50 on focus loss.
+        // Typing 999 into the step field (range 1-50) clamps to 50 on
+        // focus loss, rather than rejecting the edit outright.
         assert_eq!(parse_clamped("999", 1, 50), 50);
     }
 

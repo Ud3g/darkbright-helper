@@ -41,10 +41,24 @@ impl WindowsConfigStore {
 
     /// Reads `(len, modified)` for `path`, or `None` if it can't be stat'd
     /// (missing, permissions, or a filesystem that doesn't report mtimes).
+    /// Used to refresh the baseline after a write we just performed
+    /// ourselves, where a stat failure just means "no baseline to compare
+    /// against next time" rather than a change-detection decision.
     fn identity(path: &Path) -> Option<(u64, SystemTime)> {
-        let meta = std::fs::metadata(path).ok()?;
-        let modified = meta.modified().ok()?;
-        Some((meta.len(), modified))
+        Self::identity_checked(path).ok().flatten()
+    }
+
+    /// Like [`Self::identity`], but distinguishes a missing file (`Ok(None)`)
+    /// from a stat that failed for some other reason (`Err`) — permissions,
+    /// a locked file, or any other I/O error. Change detection needs that
+    /// distinction: a transient stat failure on a file that does exist must
+    /// not be read the same as "the file is gone, nothing to conflict with".
+    fn identity_checked(path: &Path) -> std::io::Result<Option<(u64, SystemTime)>> {
+        match std::fs::metadata(path) {
+            Ok(meta) => Ok(Some((meta.len(), meta.modified()?))),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Writes `config` in full and refreshes the identity baseline.
@@ -69,11 +83,21 @@ impl ConfigStore for WindowsConfigStore {
             return SaveResult::Failed("no config path available".to_string());
         };
 
-        let current_identity = Self::identity(&path);
-        let externally_changed = matches!(
-            (self.last_identity, current_identity),
-            (Some(last), Some(current)) if last != current
-        );
+        // A stat failure on a file we have a baseline for is treated as a
+        // possible external change rather than "unchanged": collapsing it
+        // to "unchanged" would let a transient stat error (permissions, a
+        // momentary lock) fall through to a full overwrite of a file that
+        // may have just been hand-edited. A genuine NotFound (the file was
+        // deleted) is not a stat failure in that sense and keeps the direct
+        // write behavior below.
+        let externally_changed = match (self.last_identity, Self::identity_checked(&path)) {
+            (Some(_), Err(e)) => {
+                log::warn!(error:% = e; "Failed to stat config file for change detection; treating as possibly externally changed");
+                true
+            }
+            (Some(last), Ok(Some(current))) => last != current,
+            _ => false,
+        };
 
         if !externally_changed {
             return self.write_direct(&path, config);

@@ -80,7 +80,16 @@ pub fn is_enabled() -> bool {
             None,
         )
     };
-    status == ERROR_SUCCESS
+    if status == ERROR_SUCCESS {
+        return true;
+    }
+    // The value simply not being there is the normal "disabled" state and
+    // not worth a log line; anything else (e.g. access denied) means the
+    // query itself failed and "disabled" is a guess, not a fact.
+    if status != ERROR_FILE_NOT_FOUND && status != ERROR_PATH_NOT_FOUND {
+        log::warn!(status = status.0; "Failed to query autostart Run value; reporting disabled");
+    }
+    false
 }
 
 /// Writes the `Run` value with the quoted current exe path and deletes any
