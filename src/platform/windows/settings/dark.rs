@@ -181,6 +181,7 @@ pub(super) fn apply_theme(state: &WindowState) {
 
     set_class_background(hwnd, dark, &state.palette);
     redraw_all(hwnd);
+    redraw_hand_painted_borders(hwnd);
 
     log::debug!(dark; "Settings window theme applied");
 }
@@ -257,19 +258,54 @@ pub(super) fn set_class_background(hwnd: HWND, dark: bool, palette: &Palette) {
 
 /// Forces every pixel of the window and its children to repaint immediately
 /// with whatever theme [`apply_theme`] just applied.
+///
+/// `RDW_FRAME` here only asks for a fresh `WM_NCPAINT` on the *window handle
+/// passed in* — `RDW_ALLCHILDREN` extends this call's client-area
+/// invalidation to every child, but a child's own non-client area still
+/// needs its own frame request. [`redraw_hand_painted_borders`] covers the
+/// controls that actually hand-paint one; every other child's non-client
+/// area (native `WS_BORDER`/theme chrome Windows itself draws) has nothing
+/// depending on `WM_NCPAINT` firing here.
 fn redraw_all(hwnd: HWND) {
     unsafe {
         let _ = RedrawWindow(
             Some(hwnd),
             None,
             None,
-            // RDW_FRAME is what actually asks for a fresh WM_NCPAINT — without
-            // it RDW_INVALIDATE only covers the client area, so a border a
-            // subclass hand-paints there (the numeric edits, the hotkey
-            // capture fields) would never get repainted on a live theme
-            // switch, staying whatever DefWindowProc drew the first time.
             RDW_INVALIDATE | RDW_FRAME | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
         );
+    }
+}
+
+/// Forces a fresh `WM_NCPAINT` on every control whose border is hand-painted
+/// rather than left to `DefWindowProc`/`DefSubclassProc`: the five numeric
+/// edits (subclassed) and the two hotkey capture fields (their own window
+/// class's wndproc). `RedrawWindow`'s `RDW_FRAME` flag is per-window-handle,
+/// so [`redraw_all`]'s single call against the top level never reaches these
+/// — each needs its own call, addressed directly by its own `HWND`.
+///
+/// The capture fields do not strictly need this (their first real
+/// `WM_NCPAINT` already runs after `WINDOW_STATE` holds live state, since
+/// nothing forces an early one the way the edits' subclass installation
+/// does), but including them is harmless and keeps this list "every
+/// hand-painted border" rather than "every hand-painted border that
+/// happened to need it".
+fn redraw_hand_painted_borders(hwnd: HWND) {
+    for spec in CONTROLS {
+        if !matches!(spec.class, "EDIT" | "HOTKEY_CAPTURE") {
+            continue;
+        }
+        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(spec.id)) }) else {
+            continue;
+        };
+        unsafe {
+            let _ = RedrawWindow(
+                Some(child),
+                None,
+                None,
+                RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW,
+            );
+        }
     }
 }
 
