@@ -20,6 +20,7 @@ use crate::error::{BrightnessError, Result};
 // load-bearing, not tidiness: everything `pub` in a `pub mod` counts as
 // externally reachable, so rustc reports no unused items inside one. Keeping
 // the surface at its true width is what lets `dead_code` see this crate at all.
+pub(crate) mod config_store;
 pub mod ddc;
 pub(crate) mod ddc_worker;
 pub mod hotkey;
@@ -27,13 +28,16 @@ pub mod osd;
 mod osd_render;
 pub mod overlay;
 pub(crate) mod power;
+pub(crate) mod settings;
 pub mod single_instance;
 mod theme;
 pub(crate) mod tray;
 
 // Re-export commonly used types
+pub use config_store::WindowsConfigStore;
 pub use ddc_worker::DdcSupervisor;
 pub use power::PowerEventListener;
+pub use settings::SettingsSinkImpl;
 pub use single_instance::{InstanceLock, SingleInstance};
 pub use tray::{TrayIcon, TrayStatusHandle};
 

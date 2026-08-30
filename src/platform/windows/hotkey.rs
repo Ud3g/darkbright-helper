@@ -32,6 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
+use crate::core::controller::HotkeyPort;
 use crate::core::state::BrightnessMessage;
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -443,6 +444,39 @@ impl std::fmt::Display for ParsedHotkey {
 
         parts.push(key_name);
         write!(f, "{}", parts.join("+"))
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HotkeyPort Seam (stub)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Placeholder [`HotkeyPort`]: posting a rebind/suspend/resume to the hotkey
+/// thread is not wired up yet, so every call logs and succeeds trivially.
+///
+/// A later change replaces this unit struct with one carrying the hotkey
+/// thread's id and a command queue.
+pub struct HotkeyPortImpl;
+
+impl HotkeyPort for HotkeyPortImpl {
+    fn rebind(&mut self, up: &str, down: &str, intercept: bool) -> Result<()> {
+        log::debug!(
+            up = up,
+            down = down,
+            intercept = intercept;
+            "HotkeyPort::rebind (stub, no hotkey thread wiring yet)"
+        );
+        Ok(())
+    }
+
+    fn suspend(&mut self) -> Result<()> {
+        log::debug!("HotkeyPort::suspend (stub, no hotkey thread wiring yet)");
+        Ok(())
+    }
+
+    fn resume(&mut self) -> Result<()> {
+        log::debug!("HotkeyPort::resume (stub, no hotkey thread wiring yet)");
+        Ok(())
     }
 }
 

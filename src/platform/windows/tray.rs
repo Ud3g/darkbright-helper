@@ -110,6 +110,9 @@ fn compose_tooltip(warnings: HealthWarnings) -> String {
     if warnings.hotkeys_lost {
         parts.push("hotkeys stopped");
     }
+    if warnings.hotkeys_degraded {
+        parts.push("hotkey rebind failed");
+    }
     if warnings.file_log_failed {
         parts.push("file logging off");
     }
@@ -138,6 +141,11 @@ fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
     if warnings.hotkeys_lost {
         // The give-up latch only clears with a fresh process.
         lines.push("⚠ Hotkeys stopped working — restart the app");
+    }
+    if warnings.hotkeys_degraded {
+        // Unlike hotkeys_lost, this clears on the next successful rebind —
+        // no restart needed.
+        lines.push("⚠ Hotkey change failed — check Settings");
     }
     if warnings.file_log_failed {
         // "Open Log Folder" sits a few items below in this same menu, which is
@@ -176,20 +184,23 @@ fn usage_menu_lines(hotkey_up: &str, hotkey_down: &str) -> [String; 3] {
 /// letting it light the badge would weaken the signal for the two conditions
 /// that genuinely mean something is broken.
 fn wants_warning_badge(warnings: HealthWarnings) -> bool {
-    warnings.ddc.is_degraded() || warnings.hotkeys_lost
+    warnings.ddc.is_degraded() || warnings.hotkeys_lost || warnings.hotkeys_degraded
 }
 
 /// Packs warnings into the `wparam` payload of a [`WM_TRAY_STATUS`] post.
 ///
 /// The tray runs on its own thread, so the state has to survive a trip through
-/// a window message; low two bits carry the DDC condition, bit 2 the hotkeys.
+/// a window message; low two bits carry the DDC condition, bit 2 `hotkeys_lost`,
+/// bit 3 `file_log_failed`, bit 4 `hotkeys_degraded`.
 fn warnings_to_bits(warnings: HealthWarnings) -> usize {
     let ddc = match warnings.ddc {
         DdcHealth::Ok => 0,
         DdcHealth::WorkerDead => 1,
         DdcHealth::WorkerHung => 2,
     };
-    ddc | (usize::from(warnings.hotkeys_lost) << 2) | (usize::from(warnings.file_log_failed) << 3)
+    ddc | (usize::from(warnings.hotkeys_lost) << 2)
+        | (usize::from(warnings.file_log_failed) << 3)
+        | (usize::from(warnings.hotkeys_degraded) << 4)
 }
 
 /// Unpacks what [`warnings_to_bits`] wrote. Unknown bit patterns decode as
@@ -203,6 +214,7 @@ fn warnings_from_bits(bits: usize) -> HealthWarnings {
         },
         hotkeys_lost: bits & 0b100 != 0,
         file_log_failed: bits & 0b1000 != 0,
+        hotkeys_degraded: bits & 0b1_0000 != 0,
     }
 }
 
@@ -1136,6 +1148,7 @@ mod tests {
         let both = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
+            hotkeys_degraded: false,
             file_log_failed: false,
         };
         assert_eq!(
@@ -1171,6 +1184,7 @@ mod tests {
         let all = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
+            hotkeys_degraded: false,
             file_log_failed: true,
         };
         let lines = warning_menu_lines(all);
@@ -1229,17 +1243,20 @@ mod tests {
     fn status_bits_round_trip_every_warning_combination() {
         for ddc in [DdcHealth::Ok, DdcHealth::WorkerDead, DdcHealth::WorkerHung] {
             for hotkeys_lost in [false, true] {
-                for file_log_failed in [false, true] {
-                    let warnings = HealthWarnings {
-                        ddc,
-                        hotkeys_lost,
-                        file_log_failed,
-                    };
-                    assert_eq!(
-                        warnings_from_bits(warnings_to_bits(warnings)),
-                        warnings,
-                        "lost across the window-message hop"
-                    );
+                for hotkeys_degraded in [false, true] {
+                    for file_log_failed in [false, true] {
+                        let warnings = HealthWarnings {
+                            ddc,
+                            hotkeys_lost,
+                            hotkeys_degraded,
+                            file_log_failed,
+                        };
+                        assert_eq!(
+                            warnings_from_bits(warnings_to_bits(warnings)),
+                            warnings,
+                            "lost across the window-message hop"
+                        );
+                    }
                 }
             }
         }
