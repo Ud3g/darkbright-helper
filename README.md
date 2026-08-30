@@ -24,6 +24,10 @@ first half, because DDC/CI dims the monitor's backlight rather than the image.*
   tray icon whose context menu shows live per-monitor status and your hotkeys, and offers
   Settings, Open Log Folder and Quit — with warning entries and an icon badge while
   degraded (e.g. DDC unavailable).
+- **A real settings window, not just a JSON file.** The tray's Settings item opens a native,
+  dark-mode-aware window covering every option — hotkey rebinding included — with changes
+  applying instantly. An optional "Start with Windows" toggle lives there too. The config
+  file stays a fully supported escape hatch, one click away from the window's footer.
 
 ## Download
 
@@ -74,7 +78,6 @@ inclination; equally, it may never happen.
 **Not planned, but not ruled out:**
 
 - A Linux port (see Platform, above)
-- A settings GUI
 - Some form of contrast handling to improve text readability at very low overlay levels
 - Laptop internal panels, which do not speak DDC/CI and would need a separate Windows
   backend alongside it
@@ -85,6 +88,10 @@ If you need something this tool does not do, forking is genuinely encouraged —
 permits it, and I would rather you have the tool you want than wait on me.
 
 ## Configuration
+
+Everything below is editable live from the tray's Settings window (right-click the tray
+icon → Settings) — this section documents the file it writes to, which stays a supported way
+to edit the same values directly.
 
 The configuration file is automatically created at:
 `%APPDATA%\BrightnessControl\config.json`
@@ -129,6 +136,10 @@ The configuration file is automatically created at:
 - **logging.file_level**: Level filter for the file log — `error`/`warn`/`info`/`debug`/`trace` (default: info).
 
 The `monitors` field is reserved for future per-monitor settings and currently ignored.
+
+**Start with Windows** is a separate toggle in the settings window, not a field in this file
+— it writes directly to the `HKCU\Run` registry key, since the app ships as a portable zip
+that can move between locations.
 
 ## Logging
 
