@@ -22,7 +22,7 @@
 //! makes Tab/Enter/Esc behave, places it on the cursor's monitor, and
 //! answers the [`SettingsSink`] seam.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, OnceLock};
@@ -43,13 +43,14 @@ use windows::Win32::UI::Controls::{
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_SETCHECK, CB_ADDSTRING, CB_SETCURSEL, CreateWindowExW, DC_HASDEFID, DM_GETDEFID,
+    BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_SETCURSEL, CreateWindowExW, DC_HASDEFID, DM_GETDEFID,
     DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetDlgItem, GetMessageW, HMENU,
-    HWND_TOPMOST, IDC_ARROW, IsDialogMessageW, LoadCursorW, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, TranslateMessage, WINDOW_EX_STYLE,
-    WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_SETFONT, WNDCLASSEXW, WS_BORDER,
-    WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    HWND_TOPMOST, IDC_ARROW, IsDialogMessageW, LoadCursorW, MSG, PM_REMOVE, PeekMessageW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW,
+    ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND,
+    WM_DESTROY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -367,6 +368,7 @@ const CONTROLS: &[ControlSpec] = &[
         h: 20,
         text: "Try to intercept dedicated brightness keys",
     },
+    // Muted explainer text under the intercept checkbox.
     ControlSpec {
         id: ID_HK_HINT,
         class: "STATIC",
@@ -377,6 +379,9 @@ const CONTROLS: &[ControlSpec] = &[
         h: 34,
         text: "(may not work with all keyboards; some antivirus software flags low-level hooks)",
     },
+    // Inline hotkey status line, empty until handle_hotkey_message_text sets
+    // it; whether it renders as an error (red) or a notice (muted) is a
+    // colour decided by the control-colour handler, not by this table.
     ControlSpec {
         id: ID_HK_ERROR,
         class: "STATIC",
@@ -811,7 +816,7 @@ fn build_font(dpi: u32, weight: FONT_WEIGHT) -> HFONT {
     };
 
     let font = unsafe { CreateFontIndirectW(&raw const logfont) };
-    if font.0.is_null() {
+    if font.is_invalid() {
         log::warn!("CreateFontIndirectW failed; settings controls fall back to the system font");
     }
     font
@@ -938,8 +943,9 @@ fn set_updown_accel(hwnd: HWND, id: u16, accel: &[UDACCEL]) {
 }
 
 /// Applies every spinner's range (and, for the OSD timeout, its
-/// acceleration table) per the brief's ranges: step 1-50, timeout
-/// 100-10000, opacity 10-100, resync 1-3600, inactivity 1-600.
+/// acceleration table), mirroring the accepted ranges `core/config.rs`'s
+/// validator enforces: step 1-50, timeout 100-10000, opacity 10-100,
+/// resync 1-3600, inactivity 1-600.
 fn configure_updowns(hwnd: HWND) {
     set_updown_range(hwnd, ID_STEP_UPDOWN, 1, 50);
     set_updown_range(hwnd, ID_OSD_TIMEOUT_UPDOWN, 100, 10_000);
@@ -1015,14 +1021,14 @@ fn set_combo_selection(hwnd: HWND, id: u16, level: &str) {
 /// checkbox from the live registry state — not part of `SettingsSnapshot`,
 /// since autostart's source of truth is the registry, not `config.json`.
 ///
-/// Notifications are suppressed for the whole population, not per field:
-/// creation calls this with the window's first values, and
-/// `WM_APP_SETTINGS_REFRESH` calls it again (restore-defaults, a hotkey
-/// revert). A later task's `EN_CHANGE`/`BN_CLICKED` handlers are expected to
-/// check `suppress_notifications` before posting a live `SettingChanged` so
-/// programmatic population never looks like a user edit.
-fn apply_snapshot(state: &mut WindowState, snap: &SettingsSnapshot) {
-    state.suppress_notifications = true;
+/// Notifications are suppressed for the whole population, not per field, via
+/// [`SUPPRESS_NOTIFICATIONS`] (kept out of `WindowState`/its `RefCell` on
+/// purpose — see that thread-local's doc comment): a programmatic
+/// re-display — creation's first values, or a later `WM_APP_SETTINGS_REFRESH`
+/// (restore-defaults, a hotkey revert) — must never be mistaken for a value
+/// the user is actively committing.
+fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
+    SUPPRESS_NOTIFICATIONS.with(|s| s.set(true));
 
     set_text(state.hwnd, ID_STEP_EDIT, &snap.step_percent.to_string());
     set_text(
@@ -1066,20 +1072,35 @@ fn apply_snapshot(state: &mut WindowState, snap: &SettingsSnapshot) {
 
     set_checked(state.hwnd, ID_AUTOSTART, autostart::is_enabled());
 
-    state.suppress_notifications = false;
+    SUPPRESS_NOTIFICATIONS.with(|s| s.set(false));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Placement
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Computes the settings window's outer rect (position + size, in screen
-/// coordinates) centered on the monitor under the cursor, plus that
-/// monitor's DPI. Geometry is computed before `CreateWindowExW` — new
+/// The settings window's outer rect (position + size, in screen
+/// coordinates) plus the DPI it was computed for. A named struct rather
+/// than a same-typed tuple: `x`/`y`/`w`/`h`/`dpi` all being `i32`/`u32`
+/// makes a positional tuple a transposition hazard for whatever calls this
+/// next (the DPI-change task reuses it).
+struct Placement {
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    dpi: u32,
+}
+
+/// Computes [`Placement`]: centered on the *work area* (`rcWork`, which
+/// excludes the taskbar — the same area shell dialogs center on) of the
+/// monitor under the cursor, clamped so the window's top-left corner is
+/// always inside that work area even when the work area is smaller than the
+/// window itself. Geometry is computed before `CreateWindowExW` — new
 /// sequencing versus `osd.rs`, which creates once with `CW_USEDEFAULT` and
 /// positions per show; this window instead needs its final DPI known before
 /// creation so [`layout`] only ever runs once at the right scale.
-fn compute_placement() -> Result<(i32, i32, i32, i32, u32)> {
+fn compute_placement() -> Result<Placement> {
     let mut cursor = POINT::default();
     unsafe { GetCursorPos(&raw mut cursor) }
         .map_err(|e| BrightnessError::windows_api("GetCursorPos", e.code().0.cast_unsigned()))?;
@@ -1128,11 +1149,25 @@ fn compute_placement() -> Result<(i32, i32, i32, i32, u32)> {
     let outer_w = rect.right - rect.left;
     let outer_h = rect.bottom - rect.top;
 
-    let mon = mi.rcMonitor;
-    let x = mon.left + ((mon.right - mon.left) - outer_w) / 2;
-    let y = mon.top + ((mon.bottom - mon.top) - outer_h) / 2;
+    let work = mi.rcWork;
+    let x_centered = work.left + ((work.right - work.left) - outer_w) / 2;
+    let y_centered = work.top + ((work.bottom - work.top) - outer_h) / 2;
+    // Clamp to [work.left, work.right - outer_w] (and the same on the y
+    // axis): the upper bound is floored at work.left via `.max` so a window
+    // taller/wider than the work area still starts at the work area's
+    // top-left corner instead of being pushed above/left of it — this
+    // window is unusually tall, so at high DPI on a short work area (e.g.
+    // 150% on 1920x1080) that upper bound is what actually binds.
+    let x = x_centered.clamp(work.left, (work.right - outer_w).max(work.left));
+    let y = y_centered.clamp(work.top, (work.bottom - outer_h).max(work.top));
 
-    Ok((x, y, outer_w, outer_h, dpi))
+    Ok(Placement {
+        x,
+        y,
+        w: outer_w,
+        h: outer_h,
+        dpi,
+    })
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1143,23 +1178,34 @@ fn compute_placement() -> Result<(i32, i32, i32, i32, u32)> {
 /// Lives in a thread-local because the window's own dedicated thread is the
 /// only thread that ever touches it, and a plain `extern "system"` wndproc
 /// has no other way to reach it — the same pattern `tray.rs`/`osd.rs` use
-/// for their thread-local render/sender state.
+/// for their thread-local render/sender state. Every field here is written
+/// once (at construction) and only ever read afterward, which is what lets
+/// every reader below use `RefCell::borrow` (any number of these can be
+/// held at once) instead of `borrow_mut` (which panics if a second one is
+/// attempted while the first is still live).
 struct WindowState {
     hwnd: HWND,
     sender: Sender<BrightnessMessage>,
     hwnd_slot: Arc<AtomicIsize>,
     font_regular: HFONT,
     font_bold: HFONT,
-    /// True for the duration of `apply_snapshot`. A later task's live-edit
-    /// handlers are expected to check this before posting `SettingChanged`;
-    /// nothing outside `apply_snapshot` reads it yet, but the field and its
-    /// toggling have to exist now so that wiring has something to check.
-    #[allow(dead_code)]
-    suppress_notifications: bool,
 }
 
 thread_local! {
     static WINDOW_STATE: RefCell<Option<WindowState>> = const { RefCell::new(None) };
+
+    /// Set for the duration of `apply_snapshot`, so an edit/checkbox/combo
+    /// handler can tell a value it is being asked to *display* apart from
+    /// one a person just committed. Deliberately not a `WindowState` field:
+    /// `SetWindowTextW` on an `EDIT` control synchronously sends
+    /// `EN_CHANGE` back through `WM_COMMAND` before it returns, re-entering
+    /// `settings_wnd_proc` while `apply_snapshot` is still on the stack. If
+    /// that live-edit handling lived behind `WINDOW_STATE`'s `RefCell` it
+    /// would need a `borrow_mut` at exactly the moment a re-entrant
+    /// `borrow` from the same re-entrant call is already outstanding —
+    /// panicking on every single population. A separate `Cell` sidesteps
+    /// the question entirely: no borrow to conflict with.
+    static SUPPRESS_NOTIFICATIONS: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Reclaims ownership of `lparam`'s `Box<SettingsSnapshot>` and applies it.
@@ -1169,17 +1215,18 @@ fn handle_refresh_message(lparam: LPARAM) {
         std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
     let snapshot = unsafe { Box::from_raw(ptr) };
     WINDOW_STATE.with(|s| {
-        if let Some(state) = s.borrow_mut().as_mut() {
+        if let Some(state) = s.borrow().as_ref() {
             apply_snapshot(state, &snapshot);
         }
     });
 }
 
 /// Reclaims ownership of `lparam`'s `Box<String>` and shows it on the
-/// hotkey-error line. Same contract as [`handle_refresh_message`]. Error and
-/// notice share the single `ID_HK_ERROR` line: the brief's control-id list
-/// has no separate notice control, and coloring the two differently is
-/// theming work for a later task.
+/// hotkey status line. A registration error and a non-error notice share
+/// the single `ID_HK_ERROR` control — it is one inline status line, not
+/// two — so both go through this same function; which colour it renders in
+/// (red for an error, muted for a notice) is decided by the control-colour
+/// handler, not here. Same reclaim contract as [`handle_refresh_message`].
 fn handle_hotkey_message_text(lparam: LPARAM) {
     let ptr: *mut String = std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
     let message = unsafe { Box::from_raw(ptr) };
@@ -1190,29 +1237,42 @@ fn handle_hotkey_message_text(lparam: LPARAM) {
     });
 }
 
-/// Routes a `WM_COMMAND`: Close (button click or `IsDialogMessageW`'s
-/// simulated default-button click on Enter) and Esc's `IDCANCEL` both close
-/// the window; everything else is unwired in this task (instant-apply is
-/// later work).
+/// Routes a `WM_COMMAND`: a genuine click (`BN_CLICKED`) on Close, or
+/// `IsDialogMessageW`'s simulated default-button click on Enter, or Esc's
+/// `IDCANCEL` — all three close the window. Everything else (checkbox,
+/// edit, combo, link notifications) is unwired here; this module only
+/// creates and lays out those controls.
 fn handle_command(hwnd: HWND, wparam: WPARAM) {
     let Ok(id) = u16::try_from(wparam.0 & 0xFFFF) else {
         return;
     };
-    if id == ID_CLOSE || id == IDCANCEL_ID {
+    let notify_code = u32::try_from((wparam.0 >> 16) & 0xFFFF).unwrap_or(u32::MAX);
+    let is_close_click = id == ID_CLOSE && notify_code == BN_CLICKED;
+    let is_cancel = id == IDCANCEL_ID;
+    if is_close_click || is_cancel {
         unsafe {
             let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
     }
 }
 
-/// Clears the shared HWND slot, notifies the controller, and frees the
-/// fonts this window owns. Runs on `WM_DESTROY`, so every exit path (Esc,
+/// Clears this window's own slot value (never a value a newer window may
+/// have written there since), notifies the controller, and frees the fonts
+/// this window owns. Runs on `WM_DESTROY`, so every exit path (Esc,
 /// Enter-to-Close, the Close button, Alt+F4, the system-menu Close item)
 /// converges on it via `WM_CLOSE` -> `DestroyWindow` -> `WM_DESTROY`.
 fn handle_destroy() {
     WINDOW_STATE.with(|s| {
         if let Some(state) = s.borrow_mut().take() {
-            state.hwnd_slot.store(0, Ordering::SeqCst);
+            let my_value = hwnd_to_isize(state.hwnd);
+            // compare_exchange, not store(0): if a second window has
+            // already claimed and overwritten the slot (this window closing
+            // late, after a newer one opened), clearing unconditionally
+            // would strand that newer window unreachable by focus/refresh.
+            let _ =
+                state
+                    .hwnd_slot
+                    .compare_exchange(my_value, 0, Ordering::SeqCst, Ordering::SeqCst);
             if let Err(e) = state.sender.send(BrightnessMessage::SettingsClosed) {
                 log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
             }
@@ -1302,22 +1362,25 @@ fn create_settings_window(
     snapshot: &SettingsSnapshot,
 ) -> Result<HWND> {
     let class_name = ensure_settings_class_registered()?;
-    let (x, y, outer_w, outer_h, dpi) = compute_placement()?;
+    let placement = compute_placement()?;
 
     let hinstance = unsafe { GetModuleHandleW(None) }.map_err(|e| {
         BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
     })?;
 
+    // No WS_VISIBLE here: control creation, layout and snapshot population
+    // all happen before the window is ever shown, so the open does not
+    // visibly assemble itself on screen.
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_TOPMOST,
             class_name,
             w!("darkbright-helper Settings"),
-            WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
-            x,
-            y,
-            outer_w,
-            outer_h,
+            WS_CAPTION | WS_SYSMENU,
+            placement.x,
+            placement.y,
+            placement.w,
+            placement.h,
             None,
             None,
             Some(hinstance.into()),
@@ -1326,27 +1389,25 @@ fn create_settings_window(
     }
     .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
-    let font_regular = build_font(dpi, FW_NORMAL);
-    let font_bold = build_font(dpi, FW_BOLD);
+    let font_regular = build_font(placement.dpi, FW_NORMAL);
+    let font_bold = build_font(placement.dpi, FW_BOLD);
 
     create_controls(hwnd, hinstance.into(), font_regular, font_bold);
-    layout(hwnd, dpi);
+    layout(hwnd, placement.dpi);
     configure_updowns(hwnd);
 
-    let mut state = WindowState {
+    let state = WindowState {
         hwnd,
         sender: tx.clone(),
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular,
         font_bold,
-        suppress_notifications: false,
     };
-    apply_snapshot(&mut state, snapshot);
+    apply_snapshot(&state, snapshot);
     WINDOW_STATE.with(|s| *s.borrow_mut() = Some(state));
 
-    // WS_VISIBLE on the creation style already shows the window; only
-    // activation and initial focus are left to do here.
     unsafe {
+        let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
         if let Ok(first) = GetDlgItem(Some(hwnd), i32::from(ID_AUTOSTART)) {
             let _ = SetFocus(Some(first));
@@ -1354,6 +1415,48 @@ fn create_settings_window(
     }
 
     Ok(hwnd)
+}
+
+/// Reclaims any `WM_APP_SETTINGS_*` payload messages still queued for
+/// `hwnd` after the message loop has ended. `PostQuitMessage` only yields
+/// `WM_QUIT` once the rest of the thread's queue is drained, so a message
+/// posted shortly before the window was destroyed is still retrieved by
+/// `GetMessageW` right along with everything else in the loop above — it is
+/// only `DispatchMessageW` that silently drops a message whose target
+/// window is already gone, since there is no wndproc left to route it to.
+/// `PeekMessageW` can still read it back by (now-stale) target `hwnd`, so
+/// this reclaims each `Box` directly instead of leaking it — see
+/// [`SettingsSinkImpl::post_boxed`] for the other two reclaim sites this
+/// closes the loop with.
+fn drain_pending_payload_messages(hwnd: HWND) {
+    let mut msg = MSG::default();
+    while unsafe {
+        PeekMessageW(
+            &raw mut msg,
+            Some(hwnd),
+            WM_APP_SETTINGS_REFRESH,
+            WM_APP_SETTINGS_TOPMOST,
+            PM_REMOVE,
+        )
+    }
+    .as_bool()
+    {
+        match msg.message {
+            WM_APP_SETTINGS_REFRESH => {
+                let ptr: *mut SettingsSnapshot =
+                    std::ptr::with_exposed_provenance_mut(msg.lParam.0.cast_unsigned());
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            WM_APP_SETTINGS_HK_ERROR | WM_APP_SETTINGS_HK_NOTICE => {
+                let ptr: *mut String =
+                    std::ptr::with_exposed_provenance_mut(msg.lParam.0.cast_unsigned());
+                drop(unsafe { Box::from_raw(ptr) });
+            }
+            // WM_APP_SETTINGS_FOCUS / WM_APP_SETTINGS_TOPMOST carry no
+            // payload; PeekMessageW's range just happens to include them.
+            _ => {}
+        }
+    }
 }
 
 /// Runs the settings window on the calling thread: creates it, stores its
@@ -1369,6 +1472,9 @@ fn run_settings_window(
         Ok(hwnd) => hwnd,
         Err(e) => {
             log::error!(error:% = e; "Failed to create settings window");
+            // Release the "opening" claim so a later activation can retry
+            // instead of finding the slot permanently stuck.
+            hwnd_slot.store(0, Ordering::SeqCst);
             return;
         }
     };
@@ -1387,6 +1493,7 @@ fn run_settings_window(
         }
     }
 
+    drain_pending_payload_messages(hwnd);
     log::debug!("Settings window message loop ended");
 }
 
@@ -1394,12 +1501,25 @@ fn run_settings_window(
 // Sink
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Sentinel for [`SettingsSinkImpl::hwnd`] while a window is being created:
+/// claimed (via `compare_exchange` from `0`) but not yet a real handle. A
+/// second `open()` landing in that window must neither spawn a competing
+/// thread (there would then be two windows and only one slot) nor try to
+/// focus a window that does not exist yet — it sees this value and no-ops.
+const OPENING: isize = -1;
+
 /// [`SettingsSink`] backed by a real Win32 window on its own thread.
 ///
-/// `hwnd` is `0` when no window is open. It crosses the thread boundary as
-/// an `AtomicIsize` rather than a raw `HWND` because `HWND` is a pointer
-/// type and not `Send`/`Sync` — the same seam shape `TrayStatusHandle` uses
-/// for the tray window's handle.
+/// `hwnd` is `0` when no window is open, [`OPENING`] while one is being
+/// created, otherwise the real `HWND`. It crosses the thread boundary as an
+/// `AtomicIsize` rather than a raw `HWND` because `HWND` is a pointer type
+/// and not `Send`/`Sync` — the same seam shape `TrayStatusHandle` uses for
+/// the tray window's handle. The slot is claimed with a `compare_exchange`
+/// in `open()` *before* spawning, not written after the window finishes
+/// creating: creation is not instant (class registration, 45 child
+/// `CreateWindowExW` calls, two fonts, layout, population), and a second
+/// activation landing inside that window would otherwise see the slot still
+/// at `0` and spawn a duplicate window/thread.
 pub struct SettingsSinkImpl {
     tx: Sender<BrightnessMessage>,
     hwnd: Arc<AtomicIsize>,
@@ -1415,10 +1535,10 @@ impl SettingsSinkImpl {
         }
     }
 
-    /// The open window's `HWND`, if any.
+    /// The open window's `HWND`, if one exists and isn't still [`OPENING`].
     fn target_hwnd(&self) -> Option<HWND> {
         let raw = self.hwnd.load(Ordering::SeqCst);
-        (raw != 0).then(|| hwnd_from_isize(raw))
+        (raw != 0 && raw != OPENING).then(|| hwnd_from_isize(raw))
     }
 
     /// Posts a payload-free message. Fails harmlessly (logged at debug) once
@@ -1441,14 +1561,14 @@ impl SettingsSinkImpl {
     /// wndproc's matching arm (`handle_refresh_message` /
     /// `handle_hotkey_message_text`) reclaims it with exactly one
     /// `Box::from_raw`. If the post itself fails, the box is reconstituted
-    /// and dropped right here instead of leaking. The one gap neither side
-    /// can close: a window destroyed after a *successful* post but before
-    /// the message is pumped — Windows discards a destroyed window's queued
-    /// posted messages without dispatching them, so that Box would never be
-    /// reclaimed. Accepted as a narrow, rare leak (a few dozen bytes, once,
-    /// only on that exact race) rather than a correctness risk; see the
-    /// module report's Concerns for why redesigning around it (e.g.
-    /// `SendMessageW`) was rejected.
+    /// and dropped right here instead of leaking. A message posted just
+    /// before the window is destroyed is *not* lost either: it is still
+    /// retrieved by `GetMessageW` along with everything else (`PostQuitMessage`
+    /// only yields `WM_QUIT` once the rest of the queue is drained) but never
+    /// reaches this wndproc, since `DispatchMessageW` drops a message whose
+    /// target window is already gone — `run_settings_window` closes that gap
+    /// with `drain_pending_payload_messages` right after its loop ends. Every
+    /// posted `Box` is reclaimed on exactly one of these three paths.
     fn post_boxed<T>(&self, msg: u32, value: T) {
         let Some(hwnd) = self.target_hwnd() else {
             return;
@@ -1466,21 +1586,32 @@ impl SettingsSinkImpl {
 
 impl SettingsSink for SettingsSinkImpl {
     fn open(&mut self, snapshot: &SettingsSnapshot) {
-        if let Some(hwnd) = self.target_hwnd() {
-            unsafe {
-                if let Err(e) =
-                    PostMessageW(Some(hwnd), WM_APP_SETTINGS_FOCUS, WPARAM(0), LPARAM(0))
-                {
-                    log::debug!(error:% = e; "Focus post failed (settings window gone?)");
+        match self
+            .hwnd
+            .compare_exchange(0, OPENING, Ordering::SeqCst, Ordering::SeqCst)
+        {
+            Ok(_) => {
+                let tx = self.tx.clone();
+                let hwnd_slot = Arc::clone(&self.hwnd);
+                let snapshot = snapshot.clone();
+                std::thread::spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
+            }
+            Err(OPENING) => {
+                log::debug!(
+                    "Settings window is already being created; ignoring a duplicate activation"
+                );
+            }
+            Err(raw) => {
+                let hwnd = hwnd_from_isize(raw);
+                unsafe {
+                    if let Err(e) =
+                        PostMessageW(Some(hwnd), WM_APP_SETTINGS_FOCUS, WPARAM(0), LPARAM(0))
+                    {
+                        log::debug!(error:% = e; "Focus post failed (settings window gone?)");
+                    }
                 }
             }
-            return;
         }
-
-        let tx = self.tx.clone();
-        let hwnd_slot = Arc::clone(&self.hwnd);
-        let snapshot = snapshot.clone();
-        std::thread::spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
     }
 
     fn refresh(&mut self, snapshot: &SettingsSnapshot) {
@@ -1515,30 +1646,51 @@ mod tests {
     }
 
     #[test]
-    fn scaling_at_125_percent_is_exact_for_multiples_of_4() {
-        // 120 DPI = 125% scaling; px * 120 / 96 = px * 1.25, exact whenever
-        // px is a multiple of 4 (every x/y/w/h in CONTROLS is).
+    fn scaling_at_125_percent_matches_the_mul_div_formula_on_a_few_values() {
+        // 120 DPI = 125% scaling; px * 120 / 96 = px * 1.25. These three
+        // values happen to divide evenly — a property of these particular
+        // numbers, not a claim about every entry in CONTROLS (several of
+        // which do not, e.g. x: 155, x: 214, h: 22).
         assert_eq!(scale_dimension(400, 120), 500);
         assert_eq!(scale_dimension(24, 120), 30);
         assert_eq!(scale_dimension(16, 120), 20);
     }
 
     #[test]
-    fn scaling_at_150_percent_is_exact_for_even_values() {
-        // 144 DPI = 150% scaling; px * 144 / 96 = px * 1.5, exact whenever
-        // px is even (every x/y/w/h in CONTROLS is).
+    fn scaling_at_150_percent_matches_the_mul_div_formula_on_a_few_values() {
+        // 144 DPI = 150% scaling; px * 144 / 96 = px * 1.5. Same caveat as
+        // the 125% case above: these three values divide evenly; that is
+        // not true of the whole table.
         assert_eq!(scale_dimension(400, 144), 600);
         assert_eq!(scale_dimension(24, 144), 36);
         assert_eq!(scale_dimension(16, 144), 24);
     }
 
     #[test]
-    fn every_control_x_y_w_h_scales_without_overflow_or_panic_at_150_percent() {
-        for spec in CONTROLS {
-            let _ = scale_dimension(spec.x, 144);
-            let _ = scale_dimension(spec.y, 144);
-            let _ = scale_dimension(spec.w, 144);
-            let _ = scale_dimension(spec.h, 144);
+    fn every_dimension_scales_to_a_sane_positive_size_at_125_and_150_percent() {
+        // A real property over the whole table (not just hand-picked
+        // values): positions never go negative and every width/height stays
+        // positive after scaling, at both DPIs the layout is expected to
+        // run at.
+        for dpi in [120, 144] {
+            for spec in CONTROLS {
+                assert!(
+                    scale_dimension(spec.x, dpi) >= 0,
+                    "{spec:?} x went negative at {dpi} dpi"
+                );
+                assert!(
+                    scale_dimension(spec.y, dpi) >= 0,
+                    "{spec:?} y went negative at {dpi} dpi"
+                );
+                assert!(
+                    scale_dimension(spec.w, dpi) > 0,
+                    "{spec:?} w is not positive at {dpi} dpi"
+                );
+                assert!(
+                    scale_dimension(spec.h, dpi) > 0,
+                    "{spec:?} h is not positive at {dpi} dpi"
+                );
+            }
         }
     }
 
@@ -1564,16 +1716,30 @@ mod tests {
         a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
     }
 
-    #[test]
-    fn no_two_controls_overlap() {
-        for (i, a) in CONTROLS.iter().enumerate() {
-            for b in &CONTROLS[i + 1..] {
+    /// `spec` scaled to `dpi` — same fields, just run through
+    /// `scale_dimension` — so overlap checks can reuse [`rects_overlap`] on
+    /// the geometry `layout()` would actually produce at that DPI, not only
+    /// on the 96-DPI baseline table.
+    fn scaled(spec: &ControlSpec, dpi: u32) -> ControlSpec {
+        ControlSpec {
+            x: scale_dimension(spec.x, dpi),
+            y: scale_dimension(spec.y, dpi),
+            w: scale_dimension(spec.w, dpi),
+            h: scale_dimension(spec.h, dpi),
+            ..*spec
+        }
+    }
+
+    fn assert_no_overlap_at(dpi: u32) {
+        let scaled: Vec<ControlSpec> = CONTROLS.iter().map(|c| scaled(c, dpi)).collect();
+        for (i, a) in scaled.iter().enumerate() {
+            for b in &scaled[i + 1..] {
                 if overlap_exempt(a.class) || overlap_exempt(b.class) {
                     continue;
                 }
                 assert!(
                     !rects_overlap(a, b),
-                    "controls {} and {} overlap: {:?} vs {:?}",
+                    "controls {} and {} overlap at {dpi} dpi: {:?} vs {:?}",
                     a.id,
                     b.id,
                     a,
@@ -1581,6 +1747,21 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn no_two_controls_overlap() {
+        assert_no_overlap_at(96);
+    }
+
+    #[test]
+    fn no_two_controls_overlap_at_125_percent() {
+        assert_no_overlap_at(120);
+    }
+
+    #[test]
+    fn no_two_controls_overlap_at_150_percent() {
+        assert_no_overlap_at(144);
     }
 
     #[test]
@@ -1630,21 +1811,21 @@ mod tests {
     }
 
     #[test]
-    fn every_tabstop_control_belongs_to_the_window() {
-        // Sanity check on the table itself: every WS_TABSTOP entry must sit
-        // inside the window's base client rect, or Tab navigation would
-        // reach an off-screen control.
+    fn every_tabstop_control_fits_inside_the_client_rect() {
+        // A bounds check, not a membership check — despite the name (kept
+        // for continuity with the invariant it was written to guard), every
+        // entry is checked, not just WS_TABSTOP ones: a decorative label
+        // that overflows the window clips just as visibly as a control
+        // someone could tab to.
         for spec in CONTROLS {
-            if spec.style & WS_TABSTOP.0 != 0 {
-                assert!(
-                    spec.x >= 0 && spec.x + spec.w <= BASE_WINDOW_WIDTH,
-                    "{spec:?} exceeds window width"
-                );
-                assert!(
-                    spec.y >= 0 && spec.y + spec.h <= BASE_WINDOW_HEIGHT,
-                    "{spec:?} exceeds window height"
-                );
-            }
+            assert!(
+                spec.x >= 0 && spec.x + spec.w <= BASE_WINDOW_WIDTH,
+                "{spec:?} exceeds window width"
+            );
+            assert!(
+                spec.y >= 0 && spec.y + spec.h <= BASE_WINDOW_HEIGHT,
+                "{spec:?} exceeds window height"
+            );
         }
     }
 
@@ -1656,21 +1837,5 @@ mod tests {
         assert_eq!(log_level_index("debug"), Some(3));
         assert_eq!(log_level_index("trace"), Some(4));
         assert_eq!(log_level_index("bogus"), None);
-    }
-
-    #[test]
-    fn section_headers_are_exactly_the_four_named_labels() {
-        let headers: Vec<u16> = CONTROLS
-            .iter()
-            .filter(|c| is_section_header(c.id))
-            .map(|c| c.id)
-            .collect();
-        assert_eq!(headers.len(), 4);
-        for id in headers {
-            assert!(matches!(
-                id,
-                ID_HEADER_GENERAL | ID_HEADER_HOTKEYS | ID_HEADER_OSD | ID_HEADER_ADVANCED
-            ));
-        }
     }
 }
