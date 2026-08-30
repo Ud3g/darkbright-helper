@@ -157,10 +157,13 @@ out the interval. The first OSD paint is not delayed either: after a message is 
 the loop continues to the top and pumps before blocking again. The interval governs one
 thing only — how quickly *unsolicited* window messages are noticed.
 
-**What that leaves.** Only the OSD's auto-hide `WM_TIMER` and interaction with the usage
-window (its OK button, close box and repaints). The overlay needs no pumping at all: it is
-a layered `LWA_ALPHA` window with no `WM_PAINT` handler, composited by the DWM, and it is
-click-through like the OSD, so neither receives input.
+**What that leaves.** Only the OSD's auto-hide `WM_TIMER`. The overlay needs no pumping at
+all: it is a layered `LWA_ALPHA` window with no `WM_PAINT` handler, composited by the DWM,
+and it is click-through like the OSD, so neither receives input. (A modeless "usage" window
+once lived on this thread too and would have belonged in this paragraph; it was removed in
+favour of tray menu rows — see §13. The settings window added later needs no pumping either,
+for the opposite reason: it runs on its own dedicated thread with its own `GetMessageW` loop,
+see §14, so it never reaches this one at all.)
 
 **The bounds are fixed by two other decisions.** Below, `osd.timeout_ms` may be configured
 as low as 100 ms, and an auto-hide must not visibly overshoot it. Above, Windows treats a
@@ -411,6 +414,12 @@ map's contents are exempt (its key format is not yet a contract).
 | `refresh.inactivity_seconds` | 0 - 600 | 30 |
 | `logging.file_enabled` | `true` / `false` | `false` |
 | `logging.file_level` | `error` / `warn` / `info` / `debug` / `trace` (case-insensitive) | `info` |
+
+These ranges are shared with, but enforced differently by, the settings window (§14): the
+loader above *substitutes the default* for an out-of-range value (a repair policy for
+unattended startup), while the dialog *clamps to the nearest bound* on focus loss (a guidance
+policy for a user mid-edit). Same never-fatal spirit, deliberately different mechanism — don't
+"fix" one to match the other.
 
 Example log output for invalid config:
 ```
@@ -992,7 +1001,7 @@ The application runs as a background process with a system tray icon for user in
 │ Brighter                        Ctrl+Shift+Up   │
 │ Dimmer                        Ctrl+Shift+Down   │
 │─────────────────────────────────────────────────│
-│ Settings                                        │  → Opens config.json in default editor
+│ Settings                                        │  → Opens the settings window (§14)
 │ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
 │ Quit Brightness Control                         │  → Graceful shutdown
 │─────────────────────────────────────────────────│
@@ -1095,16 +1104,16 @@ Brighter                           Ctrl+Shift+Up
 Dimmer                           Ctrl+Shift+Down
 ```
 
-Three disabled rows, composed once at tray startup from the running
-configuration — a user who rebound the hotkeys is taught the keys that actually
-work, not the defaults. Everything after a `	` is drawn right-aligned in the
-menu's shortcut column, which is where a reader already scans for a key
-combination and what keeps the rows no wider than the monitor status lines
-above them.
+Three disabled rows, sourced live from the same `TrayMenuOpening` reply as the
+monitor status rows above — a user who rebound the hotkeys in the settings
+window (§14) is taught the keys that actually work, not the ones the process
+started with. Everything after a `	` is drawn right-aligned in the menu's
+shortcut column, which is where a reader already scans for a key combination
+and what keeps the rows no wider than the monitor status lines above them.
 
 **Implementation Notes:**
 - The rows carry no dark-mode handling of their own: they are part of the menu, which already follows the system setting (see Menu Theming above)
-- They do not come from `TrayMenuOpening`, so they still appear when the main thread misses the reply timeout
+- The bindings arrive with each `TrayMenuOpening` reply, so a rebind shows up the next time the menu opens; if the request times out, the tray thread keeps a thread-local copy of the last pair it did receive and shows that rather than nothing
 - Disabled (`MF_GRAYED`) throughout — informational, never clickable
 
 A modeless window held these two lines before, opened from a "Usage" menu item.
@@ -1114,7 +1123,189 @@ sentence the menu can simply hold. The rows cost none of that and cannot fall
 out of step with the menu around them. What went with the window is the option
 to leave the instructions on screen while trying the keys.
 
-### 14. Single-Instance Guard
+### 14. Settings Window
+
+The tray menu's "Settings" item opens a native settings window instead of
+`config.json` in a text editor — the file stays reachable through the
+dialog's own "Open config file" footer link (see "Message flow" below). The
+window exposes every existing config option plus a "Start with Windows"
+toggle, applies changes live, and follows the system light/dark theme like
+the tray menu already does.
+
+**Own thread — load-bearing, not stylistic.** The window is spawned on a
+dedicated thread with its own `GetMessageW` loop, the same pattern the tray
+and power threads use. Ordinary interactions with a titled window — dragging
+it by the title bar, an Edit control's built-in right-click menu — enter
+OS-internal *modal* message loops that block the calling thread until the
+interaction ends. Run on the main thread, that block would stall controller
+ticks and the channel drain long enough to trip the refresh watchdog
+(`REFRESH_TIMEOUT`, §12) if it outlasted an in-flight refresh. On its own
+thread, a modal loop blocks only the dialog. The thread is spawned per open
+and exits when the window closes — no supervision needed; if it dies, the
+user reopens Settings. A second "Settings" click while the window already
+exists focuses it instead of spawning a duplicate.
+
+**Message flow.** The controller stays the sole owner of the runtime
+`Config`. Three new host-fakeable seams join `OsdSink`/`OverlaySink`/`DdcPort`
+in `core/controller.rs`:
+
+| Seam | Responsibility | Windows implementation |
+|---|---|---|
+| `SettingsSink` | open/focus the window with a config snapshot, refresh displayed values (restore defaults, reverts), show inline hotkey errors/notices, re-assert `HWND_TOPMOST` | `settings::SettingsSinkImpl` |
+| `HotkeyPort` | `rebind`/`suspend`/`resume` — posts an in-place operation to the live hotkey thread; results arrive async as `BrightnessMessage::HotkeyRebindResult` | posts to the hotkey thread |
+| `ConfigStore` | `save(&Config, &SettingsDirty, force) -> SaveResult` | `config_store::WindowsConfigStore` |
+
+`TrayOpenSettings` is handled in the controller, not intercepted in
+`main.rs`, matching the project's orchestration-lives-in-the-controller rule.
+Control edits in the dialog post `BrightnessMessage::SettingChanged(SettingChange)`
+into the existing MPSC channel — the same path the tray uses — one enum
+variant per setting, values pre-parsed (opacity as the UI's integer percent,
+converted to the config's `0.1–1.0` float in core). The window posts
+`SettingsClosed` on destruction so the controller can flush a pending save,
+and `OpenConfigFile` for its "Open config file" footer link (handled like
+`TrayOpenLogFolder`, a shell side effect outside the controller).
+
+**Instant apply, debounced saves.** Every change applies immediately —
+including hotkey rebinds, live on the hotkey thread — except the logging
+options, which only take effect after a restart (the `SettingsSink` shows a
+hint). Brightness step became controller-owned as part of this: hotkey
+events now carry a direction only (`AdjustStep`), and the controller
+multiplies by its live `config.brightness.step_percent`, so a changed step
+applies without the hotkey thread knowing about it. Saves are debounced
+(`SAVE_DEBOUNCE`, 500 ms, `core/reconcile.rs`) and dirty-gated: only fields a
+dialog session actually touched are marked dirty, and a run that never opens
+the dialog never rewrites `config.json`. Close and quit flush a pending save
+unconditionally.
+
+**Merge-on-external-change.** `WindowsConfigStore` tracks the config file's
+identity (length + modified time — cheap to stat, and any edit that matters
+also changes one of the two) as of its last read or write. A save that finds
+the file unchanged since then writes straight through. A save that finds it
+changed re-reads the file with a *raw* `serde_json` parse — deliberately
+**not** the loader's `validate_and_fix`/default-substitution repair path,
+because a file that only parses after repair counts as unparseable here and
+must not be silently discarded — then calls `Config::overlay_dirty` to copy
+only the fields this dialog session actually changed onto the disk config,
+and writes the merge. An external hand-edit of an untouched field therefore
+survives on disk. If the changed file no longer parses at all, the save
+result is `SaveResult::Deferred` (stays dirty, retried on the next change) —
+except with `force: true` (close/quit), which overwrites rather than losing
+the session's changes; an unparseable file would be default-substituted at
+next start anyway, and the `.bak` recovery path (§4) still applies.
+
+**Capture suspension protocol.** While `RegisterHotKey` owns a combination,
+pressing it delivers `WM_HOTKEY` to the hotkey thread instead of a keystroke
+to the focused control — so typing the default `Ctrl+Shift+Up` into the
+capture field would adjust brightness instead of being captured. Entering
+capture mode posts `HotkeyOp::Suspend` to the hotkey thread; every exit path
+(capture completes, Esc, focus loss, window destroyed) posts `Resume` or a
+`Rebind`. Suspension covers everything that intercepts keys: the primary
+combinations, the secondary plain `VK_BRIGHTNESS_UP/DOWN` registrations, and
+the low-level hook. `REBIND_TIMEOUT` (3 s, `core/reconcile.rs`) is an ack
+deadline **per posted round-trip** — each `Suspend`/`Resume`/`Rebind` gets its
+own ack — never a bound on capture itself, which is user-paced and
+unbounded: a user may sit in "Press a key combination…" for a minute without
+the controller silently re-registering hotkeys underneath the field or
+declaring hotkeys degraded. The controller reconciles the races: hotkey
+thread respawned while suspended → immediately re-post suspend to the new
+thread; settings window gone while suspended → post resume.
+
+**Two degraded hotkey states, now genuinely distinct.** `HealthWarnings`
+carries both `hotkeys_lost` (§12's permanent supervision give-up, ends only
+at restart) and the new `hotkeys_degraded` — set by a failed rebind, a failed
+suspend/resume, or a missed ack, and cleared by the next successful hotkey
+operation. A failed rebind is fixable by trying another combination in the
+still-open dialog, so it must never route through `set_hotkeys_lost()`: doing
+so would mean a recoverable dialog-level hiccup permanently disables hotkeys
+in the tray's eyes. Rebind itself stays optimistic with revert, mirroring the
+brightness pipeline's `apply_set_result`/`force_revert`: the controller
+applies a new binding to its config immediately and reverts it (notifying
+`SettingsSink`, which restores the previous binding in the capture field) if
+the ack reports failure or never arrives.
+
+**Sticky topmost, above the overlay.** The dimming overlay and the OSD are
+both `WS_EX_TOPMOST`, and re-assert `HWND_TOPMOST` on every update — that
+re-assertion, not the style alone, is what keeps them visible over each
+other. "My screen is dark, let me open Settings" is this app's headline
+scenario, so the settings window is `WS_EX_TOPMOST` too, and the controller
+calls `SettingsSink::assert_topmost()` after every overlay update while the
+window is open — otherwise one dim keypress after opening Settings would
+bury a one-shot-topmost dialog beneath the click-through black overlay,
+receiving input the user cannot see.
+
+**Dark mode.** Extends `theme.rs`'s existing uxtheme opt-in (§13) with a new
+`theme::system_prefers_dark()` (reads the `AppsUseLightTheme` registry value)
+and paints dark only when `theme::dark_ui_available() && system_prefers_dark()`
+both hold — where the uxtheme opt-in itself is unavailable (pre-18362, or a
+missing ordinal), the window paints light, full stop, because dark brushes
+under un-themed light controls would be dark-on-dark and unreadable. Within
+that gate: `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` for the
+title bar; `SetWindowTheme` plus `WM_CTLCOLOR*` handlers for buttons, edits
+and the combo's popup list; checkbox labels are custom-drawn via
+`NM_CUSTOMDRAW` (a plain checkbox control cannot recolour its own label
+text); the combo face (arrow + selected text) is drawn through
+`DrawThemeBackground`/`DrawThemeTextEx` against the `DarkMode_CFD::COMBOBOX`
+theme class, with a hand-drawn GDI fallback whenever `OpenThemeData` or the
+theme draw call fails — that fallback path is the one actually exercised on
+the dev machine used to build this feature, not a theoretical branch; the
+updown spinner and edit borders are hand-painted via per-child `WM_NCPAINT`
+requests (`RDW_FRAME` is required to actually trigger one). Group boxes were
+dropped from the design entirely: a spike found `BS_GROUPBOX`'s frame and
+caption unreadable in dark mode, so each group is a bold `STATIC` label plus
+an `SS_ETCHEDHORZ` separator instead — which also removes any z-order
+dependency between a frame and the controls inside it. The window handles
+live `WM_SETTINGCHANGE` (`"ImmersiveColorSet"`) and re-themes immediately;
+unlike the tray's popup menu (§13), this is a genuine top-level window and
+does receive the broadcast, so no per-open refresh trick is needed here.
+
+**DPI.** The window is created at the DPI of the monitor under the cursor
+(`MonitorFromPoint` + `GetDpiForMonitor`, computed before `CreateWindowExW`),
+reusing the scale-factor arithmetic `osd.rs` already has. `WM_DPICHANGED`
+resizes to Windows' suggested rect, rebuilds both fonts at the new size,
+swaps them into the window's state before re-sending `WM_SETFONT` to every
+control (so a paint reentered synchronously from that already sees the new
+font handle), and relayouts every control from the same baseline table
+`create_settings_window` used initially.
+
+**Focus save/restore.** A programmatic (non-template) `CreateWindowExW`
+window gets none of a real dialog's automatic keyboard-focus bookkeeping: a
+modal `MessageBoxW` closing, or Alt+Tab deactivation/reactivation, has
+nowhere to hand focus back to except the top-level window itself — which
+`IsDialogMessageW`'s Tab handling can then never move focus out of, because
+there is no dialog-manager state recording which control had it. This was
+found the hard way (focus stranding on the window after a message box
+closed) and is now handled by hand: `WM_ACTIVATE` saves the focused child on
+deactivate and restores it on reactivate, and `WM_SETFOCUS` self-heals
+whenever focus lands on the top level through some other path.
+
+**Autostart** (`platform/windows/autostart.rs`) is registry-backed, not a
+config field: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value
+name `darkbright-helper`, is the single source of truth. The checkbox reads
+the actual registry state when the dialog opens and writes it directly on
+toggle; nothing is mirrored into `config.json`, so there is no second store
+to drift. Because the app ships as a portable zip that can be moved or
+re-extracted, enabling always rewrites the value with the *current* exe path
+(self-healing a stale entry) and clears any `StartupApproved\Run` veto that
+Task Manager's Startup tab may have set — Task Manager disables an entry by
+writing that separate, undocumented key while leaving `Run` itself in place,
+so a Task-Manager-disabled entry reads as enabled here; toggling off and back
+on heals it. "Restore defaults" leaves autostart untouched — it is system
+integration, not a preference, and silently removing it would surprise. A
+failed registry write reverts the checkbox and shows an inline notice.
+
+**Module placement.** `src/platform/windows/settings/` is a directory
+module: `mod.rs` (module wiring, `pub use` re-exports), `layout.rs`
+(declarative control table + DPI geometry, no window logic), `window.rs`
+(window creation and the per-open `std::thread::spawn`, control wiring, the
+message loop, `SettingsSinkImpl`), `capture.rs` (the hotkey-capture control,
+its own subclassed window class), `dark.rs` (all dark-mode painting: custom
+draw, subclassing, the `WM_CTLCOLOR*` colour table). Two supporting pieces
+live outside the directory, alongside the platform module's other
+single-file seams: `platform/windows/autostart.rs` and
+`platform/windows/config_store.rs` (`WindowsConfigStore`, the `ConfigStore`
+implementation above).
+
+### 15. Single-Instance Guard
 
 At most one instance runs per logon session. Startup creates a named mutex **before** spawning any worker thread, window, or hotkey registration; a second launch detects the existing name, shows an informational message box, and exits without side effects (no duplicate tray icon, overlay, or failed hotkey registration).
 
@@ -1281,5 +1472,22 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
    - unresponsive worker (`DDC worker unresponsive`): tooltip "Brightness Control – monitor not responding", menu line "⚠ Monitor not responding — restart the app if this persists"
 4. Press a brightness hotkey
 5. **Expected**: after the *backoff* state, the log shows "Recovering from degraded DDC state" and the icon, tooltip and menu revert. After the *unresponsive* state, the warning deliberately stays — a keypress cannot unstick a blocked call. It clears on its own once the worker answers again ("DDC worker answered again"), on system resume, or if the stuck thread exits ("Unresponsive DDC worker has exited")
+
+#### Settings Window Test
+
+The controller's own logic (every `SettingChanged` variant, debounced save timing, rebind success/failure/revert, the capture-suspension reconciliation rules, restore-defaults, the merge-on-external-change save path) is covered by controller unit tests against fake seams. What remains — real window behaviour, real theming, real hardware timing — is manual, carried over from the settings-window design spec's Testing section:
+
+- Live light/dark switch with the dialog open
+- Dragging across monitors with different DPI
+- Hotkey capture, including a conflicting global hotkey
+- Rebinding repeatedly within a minute (the crash-loop gate must stay untouched)
+- Rebinding one action while the other keeps its combination
+- Rebind → kill the hotkey thread → verify the *new* binding survives the respawn
+- Open Settings on a monitor at 0% with the full black overlay (window must be visible above it) and then dim further (window must stay on top — the overlay re-asserts `HWND_TOPMOST` on every update)
+- Leave capture mode by every path (complete, Esc, click elsewhere, close the window) and verify hotkeys work again each time
+- Dragging the settings title bar during a refresh (main loop must be unaffected — own thread)
+- Autostart registry entry appears/disappears
+- Logging restart hint
+- Both footer links
 
 ---
