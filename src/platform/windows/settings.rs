@@ -47,13 +47,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
     CreateWindowExW, DC_HASDEFID, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW,
     EN_KILLFOCUS, GetCursorPos, GetDlgItem, GetMessageW, GetWindowTextLengthW, GetWindowTextW,
-    HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsDialogMessageW, LoadCursorW, MB_ICONWARNING,
-    MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_NOTIFY, WM_SETFONT,
-    WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE,
+    HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsDialogMessageW, LoadCursorW, MB_ICONERROR,
+    MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
+    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
+    WM_NOTIFY, WM_SETFONT, WNDCLASSEXW, WS_BORDER, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_GROUP,
+    WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -62,10 +62,7 @@ use crate::core::controller::SettingsSink;
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::error::{BrightnessError, Result};
 
-use super::{
-    autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error,
-    show_error_message_box,
-};
+use super::{autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Posted Messages
@@ -949,21 +946,25 @@ fn set_updown_accel(hwnd: HWND, id: u16, accel: &[UDACCEL]) {
     }
 }
 
-/// Applies every spinner's range (and, for the OSD timeout, its
-/// acceleration table), mirroring the accepted ranges `core/config.rs`'s
-/// validator enforces: step 1-50, timeout 100-10000, opacity 10-100,
-/// resync 1-3600, inactivity 1-600.
+/// Applies every spinner's range straight from [`NUMERIC_FIELDS`] — the
+/// single source of truth for those five ranges, which also mirror what
+/// `core/config.rs`'s validator accepts — plus, for the OSD timeout, its
+/// acceleration table; that one entry has no home in the table itself,
+/// since none of the other four spinners need one.
 fn configure_updowns(hwnd: HWND) {
-    set_updown_range(hwnd, ID_STEP_UPDOWN, 1, 50);
-    set_updown_range(hwnd, ID_OSD_TIMEOUT_UPDOWN, 100, 10_000);
+    for field in NUMERIC_FIELDS {
+        set_updown_range(
+            hwnd,
+            field.updown_id,
+            i32::try_from(field.min).unwrap_or(0),
+            i32::try_from(field.max).unwrap_or(i32::MAX),
+        );
+    }
     set_updown_accel(
         hwnd,
         ID_OSD_TIMEOUT_UPDOWN,
         &[UDACCEL { nSec: 0, nInc: 100 }],
     );
-    set_updown_range(hwnd, ID_OSD_OPACITY_UPDOWN, 10, 100);
-    set_updown_range(hwnd, ID_RESYNC_UPDOWN, 1, 3600);
-    set_updown_range(hwnd, ID_INACT_UPDOWN, 1, 600);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1060,23 +1061,28 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
         snap.refresh_inactivity_seconds,
         DEFAULT_REFRESH_INACTIVITY_SECONDS,
     );
+    let periodic_checked = snap.refresh_periodic_seconds != 0;
+    let inactivity_checked = snap.refresh_inactivity_seconds != 0;
 
-    set_checked(
-        state.hwnd,
-        ID_RESYNC_CHECK,
-        snap.refresh_periodic_seconds != 0,
-    );
+    set_checked(state.hwnd, ID_RESYNC_CHECK, periodic_checked);
     set_text(state.hwnd, ID_RESYNC_EDIT, &periodic_remembered.to_string());
-    set_checked(
-        state.hwnd,
-        ID_INACT_CHECK,
-        snap.refresh_inactivity_seconds != 0,
-    );
+    // Enabled state is display, exactly like the checkbox and the text next
+    // to it — it must come from the snapshot on every population, not only
+    // from a click. Left out originally, this let a disabled field survive
+    // a refresh (restore-defaults, a hotkey revert) as checked-but-dead
+    // (from a stale enabled state a click had set before the refresh) or
+    // unchecked-but-live (never disabled in the first place).
+    enable_control(state.hwnd, ID_RESYNC_EDIT, periodic_checked);
+    enable_control(state.hwnd, ID_RESYNC_UPDOWN, periodic_checked);
+
+    set_checked(state.hwnd, ID_INACT_CHECK, inactivity_checked);
     set_text(
         state.hwnd,
         ID_INACT_EDIT,
         &inactivity_remembered.to_string(),
     );
+    enable_control(state.hwnd, ID_INACT_EDIT, inactivity_checked);
+    enable_control(state.hwnd, ID_INACT_UPDOWN, inactivity_checked);
 
     set_text(state.hwnd, ID_HK_UP, &snap.hotkey_up);
     set_text(state.hwnd, ID_HK_DOWN, &snap.hotkey_down);
@@ -1084,6 +1090,7 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 
     set_checked(state.hwnd, ID_LOG_CHECK, snap.file_log_enabled);
     set_combo_selection(state.hwnd, ID_LOG_LEVEL, &snap.file_log_level);
+    enable_control(state.hwnd, ID_LOG_LEVEL, snap.file_log_enabled);
 
     set_checked(state.hwnd, ID_AUTOSTART, autostart::is_enabled());
 
@@ -1092,6 +1099,23 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
     // one left over from before the refresh.
     state.last_periodic.set(periodic_remembered);
     state.last_inactivity.set(inactivity_remembered);
+
+    // Seed "what was last posted" from what was just displayed, so a user
+    // who tabs through the dialog right after it opens or refreshes,
+    // without editing anything, is correctly seen as having changed
+    // nothing — the same invariant commit_numeric_field relies on for
+    // every later commit.
+    state
+        .last_posted_step
+        .set(Some(u32::from(snap.step_percent)));
+    state.last_posted_timeout.set(Some(snap.osd_timeout_ms));
+    state
+        .last_posted_opacity
+        .set(Some(u32::from(snap.osd_opacity_percent)));
+    state.last_posted_periodic.set(Some(periodic_remembered));
+    state
+        .last_posted_inactivity
+        .set(Some(inactivity_remembered));
 
     SUPPRESS_NOTIFICATIONS.with(|s| s.set(false));
 }
@@ -1199,13 +1223,14 @@ fn compute_placement() -> Result<Placement> {
 /// Lives in a thread-local because the window's own dedicated thread is the
 /// only thread that ever touches it, and a plain `extern "system"` wndproc
 /// has no other way to reach it — the same pattern `tray.rs`/`osd.rs` use
-/// for their thread-local render/sender state. Every field except the two
+/// for their thread-local render/sender state. Every field except the seven
 /// `Cell`s is written once (at construction) and only ever read afterward,
 /// which is what lets every reader below use `RefCell::borrow` (any number
 /// of these can be held at once) instead of `borrow_mut` (which panics if a
-/// second one is attempted while the first is still live); `last_periodic`
-/// and `last_inactivity` are mutated through that same shared borrow via
-/// their own interior mutability, so they don't need one either.
+/// second one is attempted while the first is still live); the `Cell`
+/// fields are mutated through that same shared borrow via their own
+/// interior mutability, so they don't need one either — see
+/// [`with_window_state`] for the invariant that keeps this sound.
 struct WindowState {
     hwnd: HWND,
     sender: Sender<BrightnessMessage>,
@@ -1217,6 +1242,20 @@ struct WindowState {
     last_periodic: Cell<u32>,
     /// Same session memory for "Resync after ... of inactivity".
     last_inactivity: Cell<u32>,
+    /// What `commit_numeric_field` last actually posted for each of the
+    /// five numeric fields — `None` until the first real post this session.
+    /// `apply_snapshot` seeds these from what it just displayed (so a
+    /// tab-through right after opening isn't a "change" either), and
+    /// `commit_numeric_field` compares its clamped value against the
+    /// matching cell to skip a redundant `SettingChange`: tabbing through
+    /// without editing, or the spurious `EN_KILLFOCUS` a spinner click
+    /// fires when it steals focus from the edit right before its own
+    /// `UDN_DELTAPOS`, would otherwise both post twice for one real change.
+    last_posted_step: Cell<Option<u32>>,
+    last_posted_timeout: Cell<Option<u32>>,
+    last_posted_opacity: Cell<Option<u32>>,
+    last_posted_periodic: Cell<Option<u32>>,
+    last_posted_inactivity: Cell<Option<u32>>,
 }
 
 thread_local! {
@@ -1237,10 +1276,29 @@ thread_local! {
 }
 
 /// Runs `f` with the open window's state, if any. The single choke point
-/// for reaching [`WINDOW_STATE`] from a control-wiring handler; callers
-/// must not do anything inside `f` that can re-enter `settings_wnd_proc`
-/// (`SetWindowTextW` on an edit, `MessageBoxW`, `DestroyWindow`, ...) —
-/// extract what's needed and make that call after `f` returns instead.
+/// for reaching [`WINDOW_STATE`] from a control-wiring handler.
+///
+/// `RefCell::borrow` (used here) allows any number of live shared borrows
+/// at once, so a Win32 call inside `f` that re-enters `settings_wnd_proc` —
+/// `SetWindowTextW` on an edit is the one this module actually exercises,
+/// via the `EN_CHANGE` it synchronously fires — is safe exactly because
+/// that re-entry only ever takes another shared `borrow()` in turn
+/// (`EN_CHANGE` is unwired, so the reentrant `WM_COMMAND` does nothing
+/// further). What is *not* safe is a `borrow_mut()` taken while any borrow
+/// — including one further up the very call stack a re-entrant path is
+/// on — is still live: that panics immediately. [`handle_destroy`] is the
+/// only place in this module that takes one, and it must stay that way; a
+/// second `borrow_mut` anywhere in this module's call graph would turn
+/// today's harmless nesting into a live panic the moment it executes.
+///
+/// `MessageBoxW`/`DestroyWindow` are still always called with no borrow
+/// held (see `confirm_restore_defaults`, `show_owned_error_message_box`) —
+/// not because a shared borrow across them would panic today, but because
+/// they pump the *entire* message queue rather than firing one synchronous
+/// notification, which is a much larger reentrant surface to keep
+/// reasoning about; callers should keep doing that for anything beyond a
+/// single synchronous control notification, even though it isn't the
+/// invariant that actually has to hold.
 fn with_window_state(f: impl FnOnce(&WindowState)) {
     WINDOW_STATE.with(|s| {
         if let Some(state) = s.borrow().as_ref() {
@@ -1312,6 +1370,10 @@ struct NumericField {
     checkbox_id: Option<u16>,
     to_change: fn(u32) -> SettingChange,
     remember: Option<fn(&WindowState, u32)>,
+    /// Selects this field's slot in `WindowState` for the "what did we last
+    /// actually post" comparison `commit_numeric_field` makes before
+    /// posting again — see that `Cell` group's doc comment on `WindowState`.
+    last_posted: fn(&WindowState) -> &Cell<Option<u32>>,
 }
 
 const NUMERIC_FIELDS: &[NumericField] = &[
@@ -1323,6 +1385,7 @@ const NUMERIC_FIELDS: &[NumericField] = &[
         checkbox_id: None,
         to_change: |v| SettingChange::StepPercent(to_u8(v)),
         remember: None,
+        last_posted: |state| &state.last_posted_step,
     },
     NumericField {
         edit_id: ID_OSD_TIMEOUT_EDIT,
@@ -1332,6 +1395,7 @@ const NUMERIC_FIELDS: &[NumericField] = &[
         checkbox_id: None,
         to_change: SettingChange::OsdTimeoutMs,
         remember: None,
+        last_posted: |state| &state.last_posted_timeout,
     },
     NumericField {
         edit_id: ID_OSD_OPACITY_EDIT,
@@ -1341,6 +1405,7 @@ const NUMERIC_FIELDS: &[NumericField] = &[
         checkbox_id: None,
         to_change: |v| SettingChange::OsdOpacityPercent(to_u8(v)),
         remember: None,
+        last_posted: |state| &state.last_posted_opacity,
     },
     NumericField {
         edit_id: ID_RESYNC_EDIT,
@@ -1350,6 +1415,7 @@ const NUMERIC_FIELDS: &[NumericField] = &[
         checkbox_id: Some(ID_RESYNC_CHECK),
         to_change: SettingChange::RefreshPeriodicSeconds,
         remember: Some(|state, v| state.last_periodic.set(v)),
+        last_posted: |state| &state.last_posted_periodic,
     },
     NumericField {
         edit_id: ID_INACT_EDIT,
@@ -1359,6 +1425,7 @@ const NUMERIC_FIELDS: &[NumericField] = &[
         checkbox_id: Some(ID_INACT_CHECK),
         to_change: SettingChange::RefreshInactivitySeconds,
         remember: Some(|state, v| state.last_inactivity.set(v)),
+        last_posted: |state| &state.last_posted_inactivity,
     },
 ];
 
@@ -1411,6 +1478,18 @@ fn remembered_seconds(snapshot_value: u32, default: u32) -> u32 {
     } else {
         snapshot_value
     }
+}
+
+/// Whether a numeric commit should actually post: yes unless `value` is
+/// exactly what was last posted for this field. `None` (nothing posted this
+/// session yet, right after population) always counts as a change — there
+/// is no prior post to compare against — so this only ever suppresses a
+/// genuine repeat: tabbing through a field without editing it, or the
+/// `EN_KILLFOCUS` a spinner click fires on its way to its own
+/// `UDN_DELTAPOS` (see `WindowState::last_posted_step` and friends).
+#[must_use]
+fn should_post_numeric(last_posted: Option<u32>, value: u32) -> bool {
+    last_posted != Some(value)
 }
 
 /// Reads `id`'s current window text. Empty if the control has no text or
@@ -1494,9 +1573,18 @@ fn field_enabled(hwnd: HWND, field: &NumericField) -> bool {
 }
 
 /// Records `value` in session memory (if `field` has any) and posts the
-/// change it maps to.
+/// change it maps to — unless `value` is exactly what this field last
+/// posted, in which case this is a no-op: the brief's "post if changed"
+/// rule for `EN_KILLFOCUS`, and what keeps a spinner click's `EN_KILLFOCUS`
+/// (fired when the click steals focus away from the edit) from applying
+/// alongside its own `UDN_DELTAPOS` for the same click.
 fn commit_numeric_field(field: &NumericField, value: u32) {
     with_window_state(|state| {
+        let last_posted = (field.last_posted)(state);
+        if !should_post_numeric(last_posted.get(), value) {
+            return;
+        }
+        last_posted.set(Some(value));
         if let Some(remember) = field.remember {
             remember(state, value);
         }
@@ -1624,8 +1712,13 @@ fn handle_autostart_click(hwnd: HWND) {
     };
     if let Err(e) = result {
         log::warn!(error:% = e; "Failed to update the Windows startup entry");
-        set_checked(hwnd, ID_AUTOSTART, !checked);
-        show_error_message_box(
+        // What the registry actually holds, not `!checked`: enable() can
+        // fail after partially succeeding (the Run value write can succeed
+        // while clearing the StartupApproved veto fails), and `!checked`
+        // would then show unchecked despite Run actually being set.
+        set_checked(hwnd, ID_AUTOSTART, autostart::is_enabled());
+        show_owned_error_message_box(
+            hwnd,
             "Brightness Control - Autostart",
             &format!("Couldn't update the Windows startup entry:\n{e}"),
         );
@@ -1658,6 +1751,26 @@ fn confirm_restore_defaults(hwnd: HWND) -> bool {
         )
     };
     result == IDOK
+}
+
+/// Blocking OK message box with an error icon, owned by `hwnd` so it stays
+/// in front of this `WS_EX_TOPMOST` window and disables it for the
+/// duration — a plain `MessageBoxW` call rather than
+/// `platform/windows/mod.rs`'s `show_error_message_box`, which is
+/// owner-less and would otherwise render in the normal window band
+/// (potentially behind this window) without disabling it, leaving room to
+/// click the same control again and stack a second modal box on top.
+fn show_owned_error_message_box(hwnd: HWND, title: &str, message: &str) {
+    let message_wide = wide(message);
+    let title_wide = wide(title);
+    unsafe {
+        MessageBoxW(
+            Some(hwnd),
+            PCWSTR(message_wide.as_ptr()),
+            PCWSTR(title_wide.as_ptr()),
+            MB_OK | MB_ICONERROR,
+        );
+    }
 }
 
 /// Routes a `WM_COMMAND`: a genuine click (`BN_CLICKED`) on Close, or
@@ -1734,6 +1847,16 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) {
 /// this window owns. Runs on `WM_DESTROY`, so every exit path (Esc,
 /// Enter-to-Close, the Close button, Alt+F4, the system-menu Close item)
 /// converges on it via `WM_CLOSE` -> `DestroyWindow` -> `WM_DESTROY`.
+///
+/// This is the only `WINDOW_STATE.borrow_mut()` anywhere in this module —
+/// see [`with_window_state`]'s doc comment for why every other reader gets
+/// away with a plain `borrow()`, nested or not. `WM_DESTROY` only ever
+/// arrives via the top-level `GetMessageW`/`DispatchMessageW` loop, never
+/// synchronously nested under a Win32 call this module makes while a
+/// `borrow()` from further up the stack is still live, so this `borrow_mut`
+/// never actually contends with one. If a second `borrow_mut` were ever
+/// added elsewhere in this module, that would stop being true and the
+/// first reentrant call to reach it would panic.
 fn handle_destroy() {
     WINDOW_STATE.with(|s| {
         if let Some(state) = s.borrow_mut().take() {
@@ -1879,11 +2002,16 @@ fn create_settings_window(
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular,
         font_bold,
-        // apply_snapshot (right below) overwrites both before the window is
-        // ever shown or focusable, so the placeholder value here never
-        // reaches a user-visible codepath.
+        // apply_snapshot (right below) overwrites every one of these before
+        // the window is ever shown or focusable, so the placeholder values
+        // here never reach a user-visible codepath.
         last_periodic: Cell::new(0),
         last_inactivity: Cell::new(0),
+        last_posted_step: Cell::new(None),
+        last_posted_timeout: Cell::new(None),
+        last_posted_opacity: Cell::new(None),
+        last_posted_periodic: Cell::new(None),
+        last_posted_inactivity: Cell::new(None),
     };
     apply_snapshot(&state, snapshot);
     WINDOW_STATE.with(|s| *s.borrow_mut() = Some(state));
@@ -2400,6 +2528,24 @@ mod tests {
     }
 
     #[test]
+    fn should_post_numeric_is_true_the_first_time_a_field_ever_commits() {
+        // No prior post to compare against (None) always counts as changed,
+        // regardless of the value — there is nothing to be "unchanged" from.
+        assert!(should_post_numeric(None, 0));
+        assert!(should_post_numeric(None, 30));
+    }
+
+    #[test]
+    fn should_post_numeric_is_false_when_the_value_matches_the_last_post() {
+        assert!(!should_post_numeric(Some(30), 30));
+    }
+
+    #[test]
+    fn should_post_numeric_is_true_when_the_value_differs_from_the_last_post() {
+        assert!(should_post_numeric(Some(30), 31));
+    }
+
+    #[test]
     fn to_u8_narrows_values_within_its_callers_ranges() {
         assert_eq!(to_u8(1), 1u8);
         assert_eq!(to_u8(50), 50u8);
@@ -2436,10 +2582,13 @@ mod tests {
 
     #[test]
     fn every_numeric_field_range_matches_the_spinner_range_it_names() {
-        // Guards STEP_RANGE/OSD_TIMEOUT_RANGE/... against drifting from the
-        // literal ranges configure_updowns gives the matching msctls_updown32,
-        // since NUMERIC_FIELDS and configure_updowns aren't a single source
-        // of truth (the latter also needs an accel table on one entry).
+        // configure_updowns now reads its ranges straight from
+        // NUMERIC_FIELDS (only its accel table is still hand-written), so
+        // there is no second copy left for this table to drift from — this
+        // pins STEP_RANGE/OSD_TIMEOUT_RANGE/... against a checked-in
+        // expectation instead, so an accidental edit to one of those
+        // constants shows up as a failing test rather than silently
+        // reaching every spinner and every EN_KILLFOCUS/UDN_DELTAPOS clamp.
         let expected: &[(u16, u32, u32)] = &[
             (ID_STEP_UPDOWN, 1, 50),
             (ID_OSD_TIMEOUT_UPDOWN, 100, 10_000),
