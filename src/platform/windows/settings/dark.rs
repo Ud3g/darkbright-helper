@@ -259,13 +259,15 @@ pub(super) fn set_class_background(hwnd: HWND, dark: bool, palette: &Palette) {
 /// Forces every pixel of the window and its children to repaint immediately
 /// with whatever theme [`apply_theme`] just applied.
 ///
-/// `RDW_FRAME` here only asks for a fresh `WM_NCPAINT` on the *window handle
-/// passed in* — `RDW_ALLCHILDREN` extends this call's client-area
-/// invalidation to every child, but a child's own non-client area still
-/// needs its own frame request. [`redraw_hand_painted_borders`] covers the
-/// controls that actually hand-paint one; every other child's non-client
-/// area (native `WS_BORDER`/theme chrome Windows itself draws) has nothing
-/// depending on `WM_NCPAINT` firing here.
+/// `RDW_FRAME` applies to the *window handle passed in* — here, the settings
+/// window's own caption and border. It earns its place because the dark
+/// title bar is switched by a window attribute that does not reliably repaint
+/// an already-visible frame on its own, so a live light↔dark switch would
+/// otherwise leave the caption in the old colour until the user moved or
+/// resized the window. It does nothing for the children: `RDW_ALLCHILDREN`
+/// extends only this call's client-area invalidation down the tree, and the
+/// controls that hand-paint their own border are refreshed separately by
+/// [`redraw_hand_painted_borders`].
 fn redraw_all(hwnd: HWND) {
     unsafe {
         let _ = RedrawWindow(
@@ -277,12 +279,26 @@ fn redraw_all(hwnd: HWND) {
     }
 }
 
-/// Forces a fresh `WM_NCPAINT` on every control whose border is hand-painted
-/// rather than left to `DefWindowProc`/`DefSubclassProc`: the five numeric
-/// edits (subclassed) and the two hotkey capture fields (their own window
-/// class's wndproc). `RedrawWindow`'s `RDW_FRAME` flag is per-window-handle,
-/// so [`redraw_all`]'s single call against the top level never reaches these
-/// — each needs its own call, addressed directly by its own `HWND`.
+/// Repaints the border of every control that draws one itself rather than
+/// leaving it to `DefWindowProc`/`DefSubclassProc`: the five numeric edits
+/// (via their subclass) and the two hotkey capture fields (via their own
+/// window class's wndproc).
+///
+/// A control's border lives in its non-client area, and asking for that
+/// through `RedrawWindow` does not reach these controls. `RDW_ALLCHILDREN`
+/// on the parent extends only the *client-area* invalidation down the tree,
+/// and even a per-child `RedrawWindow(child, …, RDW_FRAME | RDW_UPDATENOW)`
+/// produces no `WM_NCPAINT` for them in practice — the frame keeps whatever
+/// it was last painted with, so a border painted before the theme was known
+/// (or before a live theme switch) would never be corrected. Sending
+/// `WM_NCPAINT` to each control directly is what actually runs its paint
+/// code.
+///
+/// `wParam` 1 is the documented stand-in for "the entire frame is invalid".
+/// That is exactly what a dark control hand-paints, and in light mode the
+/// same value is forwarded on to the default frame painter, which restores
+/// the plain `WS_BORDER` look — so this call is correct in both themes and
+/// needs no theme check of its own.
 ///
 /// The capture fields do not strictly need this (their first real
 /// `WM_NCPAINT` already runs after `WINDOW_STATE` holds live state, since
@@ -299,12 +315,7 @@ fn redraw_hand_painted_borders(hwnd: HWND) {
             continue;
         };
         unsafe {
-            let _ = RedrawWindow(
-                Some(child),
-                None,
-                None,
-                RDW_FRAME | RDW_INVALIDATE | RDW_UPDATENOW,
-            );
+            SendMessageW(child, WM_NCPAINT, Some(WPARAM(1)), None);
         }
     }
 }
