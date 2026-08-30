@@ -19,18 +19,20 @@ use windows::Win32::UI::Controls::{
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NMHDR, NMUPDOWN, UDN_DELTAPOS,
     UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DM_GETDEFID, DefWindowProcW,
-    DestroyWindow, DispatchMessageW, EN_KILLFOCUS, GetDlgItem, GetMessageW, GetWindowTextLengthW,
-    GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsDialogMessageW, LoadCursorW,
-    MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
-    TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY,
-    WM_NOTIFY, WM_SETFONT, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU,
-    WS_VISIBLE,
+    DestroyWindow, DispatchMessageW, EN_KILLFOCUS, GetDlgItem, GetMessageW, GetNextDlgTabItem,
+    GetWindowTextLengthW, GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild,
+    IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG,
+    MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
+    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -471,7 +473,7 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// Lives in a thread-local because the window's own dedicated thread is the
 /// only thread that ever touches it, and a plain `extern "system"` wndproc
 /// has no other way to reach it — the same pattern `tray.rs`/`osd.rs` use
-/// for their thread-local render/sender state. Every field except the seven
+/// for their thread-local render/sender state. Every field except the eight
 /// `Cell`s is written once (at construction) and only ever read afterward,
 /// which is what lets every reader below use `RefCell::borrow` (any number
 /// of these can be held at once) instead of `borrow_mut` (which panics if a
@@ -485,6 +487,15 @@ pub(super) struct WindowState {
     hwnd_slot: Arc<AtomicIsize>,
     pub(super) font_regular: HFONT,
     font_bold: HFONT,
+    /// The child control that held keyboard focus the last time this window
+    /// was deactivated, as an `isize` handle (same crossing-the-callback
+    /// convention as `hwnd_slot`) — `0` for "none recorded yet". This window
+    /// is a plain top-level, not a real dialog, so nothing else remembers
+    /// which control the keyboard was in once activation moves away and
+    /// back; see `restore_focus` for how it is used and
+    /// `focusable_child` for why a stale or now-disabled handle here is
+    /// never trusted blindly.
+    last_focus: Cell<isize>,
     /// Last non-zero periodic-resync value the dialog has shown this
     /// session — what re-checking "Resync brightness every" restores.
     last_periodic: Cell<u32>,
@@ -555,6 +566,70 @@ pub(super) fn with_window_state(f: impl FnOnce(&WindowState)) {
             f(state);
         }
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Focus Bookkeeping (WM_ACTIVATE / WM_SETFOCUS)
+// ─────────────────────────────────────────────────────────────────────────────
+// This window is a plain CreateWindowExW top-level, not a real dialog, so
+// none of the automatic keyboard-focus bookkeeping a dialog manager gives
+// you for free (DefDlgProc) applies here: when a modal MessageBoxW child
+// closes, or the window is deactivated and reactivated (Alt+Tab), Windows'
+// only fallback is to hand focus to the top-level window itself, which
+// IsDialogMessageW's Tab handling then can never move out of again — there
+// is no dialog-manager state saying which control was last focused. The
+// functions below reimplement that bookkeeping by hand: save the focused
+// child on deactivate, restore it (or fall back to the first tab stop) on
+// reactivate, and self-heal on WM_SETFOCUS in case focus ever lands on the
+// top level through some other path.
+
+/// Whether `hwnd` is a live, focusable child of `state.hwnd` — still a real
+/// window, still a descendant, and not disabled. A handle saved earlier in
+/// the session can fail any of the three (the control was destroyed, or has
+/// since been disabled by a checkbox toggle), in which case restoring focus
+/// to it would either no-op or land on the wrong control.
+fn focusable_child(state: &WindowState, hwnd: HWND) -> bool {
+    !hwnd.is_invalid()
+        && unsafe { IsChild(state.hwnd, hwnd) }.as_bool()
+        && unsafe { IsWindowEnabled(hwnd) }.as_bool()
+}
+
+/// Restores keyboard focus to whichever child last had it, falling back to
+/// the first tab stop when there is none recorded or it is no longer a live,
+/// enabled child (see [`focusable_child`]). Used both when the window
+/// regains activation and, as a backstop, whenever focus lands on the
+/// top-level window itself.
+fn restore_focus(state: &WindowState) {
+    let saved = hwnd_from_isize(state.last_focus.get());
+    let target = if focusable_child(state, saved) {
+        Some(saved)
+    } else {
+        unsafe { GetNextDlgTabItem(state.hwnd, None, false) }.ok()
+    };
+    if let Some(target) = target {
+        unsafe {
+            let _ = SetFocus(Some(target));
+        }
+    }
+}
+
+/// `WM_ACTIVATE`: on deactivate, remember whichever child currently holds
+/// focus (nothing to remember if focus was already on the top level or
+/// outside this window entirely); on (re)activate, hand focus back via
+/// [`restore_focus`]. This is the canonical Win32 recipe for a non-dialog
+/// top-level window and covers both a modal `MessageBoxW` returning control
+/// to its owner and plain Alt+Tab reactivation — both are, from this
+/// window's point of view, just activation changing away and back.
+fn handle_activate(state: &WindowState, wparam: WPARAM) {
+    let state_word = u32::try_from(wparam.0 & 0xFFFF).unwrap_or(WA_INACTIVE);
+    if state_word == WA_INACTIVE {
+        let focused = unsafe { GetFocus() };
+        if focusable_child(state, focused) {
+            state.last_focus.set(hwnd_to_isize(focused));
+        }
+    } else {
+        restore_focus(state);
+    }
 }
 
 /// Reclaims ownership of `lparam`'s `Box<SettingsSnapshot>` and applies it.
@@ -974,6 +1049,14 @@ fn handle_restore_click(hwnd: HWND) {
 /// it stays in front of this topmost window; `true` iff the user chose OK.
 /// A bare `MessageBoxW` call rather than `platform/windows/mod.rs`'s
 /// helpers, which are OK-only and have no result to report.
+///
+/// No explicit focus save/restore wraps this call: a modal `MessageBoxW`
+/// owned by `hwnd` is a separate top-level window taking activation away
+/// from and back to its owner, so opening and closing it round-trips
+/// through `WM_ACTIVATE` like any other activation change — `handle_activate`
+/// already saves and restores focus for that. Even on the off chance
+/// activation alone left focus stranded on `hwnd`, `WM_SETFOCUS`'s own
+/// `restore_focus` call catches it immediately.
 fn confirm_restore_defaults(hwnd: HWND) -> bool {
     let message = wide("Reset all settings to their defaults? Hotkeys are applied immediately.");
     let title = wide("Brightness Control - Restore Defaults");
@@ -995,6 +1078,11 @@ fn confirm_restore_defaults(hwnd: HWND) -> bool {
 /// owner-less and would otherwise render in the normal window band
 /// (potentially behind this window) without disabling it, leaving room to
 /// click the same control again and stack a second modal box on top.
+///
+/// Same reasoning as [`confirm_restore_defaults`] for not wrapping this call
+/// in an explicit focus save/restore: `WM_ACTIVATE` already covers a modal
+/// child's open/close, and `WM_SETFOCUS` backstops the case where it
+/// doesn't.
 fn show_owned_error_message_box(hwnd: HWND, title: &str, message: &str) {
     let message_wide = wide(message);
     let title_wide = wide(title);
@@ -1149,6 +1237,14 @@ unsafe extern "system" fn settings_wnd_proc(
                 handle_command(hwnd, wparam);
                 LRESULT(0)
             }
+            WM_ACTIVATE => {
+                with_window_state(|state| handle_activate(state, wparam));
+                LRESULT(0)
+            }
+            WM_SETFOCUS => {
+                with_window_state(restore_focus);
+                LRESULT(0)
+            }
             WM_NOTIFY => {
                 handle_notify(hwnd, lparam);
                 LRESULT(0)
@@ -1252,6 +1348,9 @@ fn create_settings_window(
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular,
         font_bold,
+        // No control has ever had focus yet, so there is nothing to
+        // restore to until the first WM_ACTIVATE deactivate records one.
+        last_focus: Cell::new(0),
         // apply_snapshot (right below) overwrites every one of these before
         // the window is ever shown or focusable, so the placeholder values
         // here never reach a user-visible codepath.
