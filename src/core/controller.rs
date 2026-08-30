@@ -13,12 +13,12 @@ use crate::core::brightness::calculate_adjustment;
 use crate::core::config::{Config, SettingsDirty};
 use crate::core::reconcile::{
     HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REFRESH_TIMEOUT, RefreshTracker, RespawnOutcome,
-    SET_TIMEOUT,
+    SAVE_DEBOUNCE, SET_TIMEOUT,
 };
 use crate::core::state::{
     BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, HotkeyOp, MonitorId, MonitorState,
-    SetOutcome, SettingsSnapshot, TrayMenuData, TrayMonitorInfo, UNREAD_BRIGHTNESS_SEED,
-    generate_display_names,
+    SetOutcome, SettingChange, SettingsSnapshot, TrayMenuData, TrayMonitorInfo,
+    UNREAD_BRIGHTNESS_SEED, generate_display_names,
 };
 use crate::error::{BrightnessError, Result};
 
@@ -55,6 +55,13 @@ pub trait OsdSink {
 
     /// Whether the OSD is currently visible.
     fn is_visible(&self) -> bool;
+
+    /// Applies an appearance change from the settings dialog (opacity,
+    /// auto-hide timeout) as an immediate live preview, independent of the
+    /// per-adjustment `show`/`update`/`update_error` calls. Best-effort: a
+    /// platform failure here is a preview glitch, not an adjustment failure,
+    /// so it is logged rather than propagated.
+    fn set_appearance(&mut self, opacity: f32, timeout_ms: u32);
 }
 
 /// Seam for the per-monitor dimming overlay manager.
@@ -220,30 +227,25 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     file_log_failed: bool,
     /// Monitor whose state the OSD is currently showing (for error restyling).
     osd_monitor: Option<MonitorId>,
-    // The settings-dialog seams and session state below are wired into
-    // message handling by the controller logic that lands with the
-    // settings-window work; until then they are only ever set, never read.
     /// Settings dialog window.
-    #[allow(dead_code)]
     settings: Set,
+    // The in-place hotkey rebind/suspend/resume flow (and the two fields
+    // below it) is wired into message handling by the controller logic that
+    // lands with that work; until then it is only ever set, never read.
     /// Hotkey thread's in-place rebind/suspend/resume port.
     #[allow(dead_code)]
     hotkey_port: Hk,
     /// Config persistence.
-    #[allow(dead_code)]
     store: Store,
     /// Whether the settings window is currently open.
-    #[allow(dead_code)]
     settings_open: bool,
     /// Whether the hotkey capture field is currently capturing (interception
     /// suspended).
     #[allow(dead_code)]
     capture_active: bool,
     /// Settings fields changed since the last save.
-    #[allow(dead_code)]
     dirty: SettingsDirty,
     /// When the current debounce window for a pending save started.
-    #[allow(dead_code)]
     pending_save_since: Option<Instant>,
     /// The in-place hotkey operation currently awaiting its ack, and when it
     /// was posted (for the ack deadline).
@@ -253,7 +255,6 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     /// cleared by the next successful ack.
     hotkeys_degraded: bool,
     /// Hotkey bindings/intercept setting to revert to if a rebind fails.
-    #[allow(dead_code)]
     prev_hotkeys: Option<(String, String, bool)>,
 }
 
@@ -387,6 +388,186 @@ where
         if elapsed >= interval {
             log::debug!(elapsed_seconds = elapsed.as_secs(); "Periodic refresh triggered");
             self.handle_refresh(now);
+        }
+    }
+
+    /// Builds the current config values for the settings window.
+    ///
+    /// Maps `osd.opacity`'s `0.1-1.0` float range to the `10-100` percent
+    /// range the dialog displays, rounding to the nearest percent and
+    /// clamping into range (a value written outside it by hand-editing the
+    /// config file must still display sanely).
+    #[must_use]
+    pub fn settings_snapshot(&self) -> SettingsSnapshot {
+        let opacity_percent = (self.config.osd.opacity * 100.0).round().clamp(10.0, 100.0);
+        // The clamp above bounds this to 10.0..=100.0, well within u8 range.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let osd_opacity_percent = opacity_percent as u8;
+
+        SettingsSnapshot {
+            step_percent: self.config.brightness.step_percent,
+            osd_timeout_ms: self.config.osd.timeout_ms,
+            osd_opacity_percent,
+            refresh_periodic_seconds: self.config.refresh.periodic_seconds,
+            refresh_inactivity_seconds: self.config.refresh.inactivity_seconds,
+            hotkey_up: self.config.hotkeys.brightness_up.clone(),
+            hotkey_down: self.config.hotkeys.brightness_down.clone(),
+            intercept_brightness_keys: self.config.hotkeys.intercept_brightness_keys,
+            file_log_enabled: self.config.logging.file_enabled,
+            file_log_level: self.config.logging.file_level.clone(),
+        }
+    }
+
+    /// Flushes a debounced settings save once its window has elapsed.
+    ///
+    /// Called once per main-loop tick, alongside `check_periodic_refresh`.
+    /// A no-op when no save is pending.
+    pub fn check_pending_save(&mut self, now: Instant) {
+        let Some(since) = self.pending_save_since else {
+            return;
+        };
+        if now.saturating_duration_since(since) < SAVE_DEBOUNCE {
+            return;
+        }
+        self.flush_save(now, false);
+    }
+
+    /// Applies one dialog-originated setting change to the live config and
+    /// (re-)arms the debounced save.
+    ///
+    /// Every change lands in `config` immediately; only the OSD fields also
+    /// produce an immediate platform side effect (a live preview). The rest
+    /// take effect on the next timer tick (refresh interval fields, read
+    /// live) or on restart (logging, by design — its dialog hint says so).
+    fn handle_setting_changed(&mut self, change: SettingChange, now: Instant) {
+        match change {
+            SettingChange::StepPercent(pct) => {
+                self.config.brightness.step_percent = pct;
+                self.dirty.step_percent = true;
+            }
+            SettingChange::OsdTimeoutMs(ms) => {
+                self.config.osd.timeout_ms = ms;
+                self.dirty.osd_timeout_ms = true;
+                self.osd
+                    .set_appearance(self.config.osd.opacity, self.config.osd.timeout_ms);
+            }
+            SettingChange::OsdOpacityPercent(pct) => {
+                self.config.osd.opacity = f32::from(pct) / 100.0;
+                self.dirty.osd_opacity = true;
+                self.osd
+                    .set_appearance(self.config.osd.opacity, self.config.osd.timeout_ms);
+            }
+            SettingChange::RefreshPeriodicSeconds(secs) => {
+                self.config.refresh.periodic_seconds = secs;
+                self.dirty.refresh_periodic = true;
+            }
+            SettingChange::RefreshInactivitySeconds(secs) => {
+                self.config.refresh.inactivity_seconds = secs;
+                self.dirty.refresh_inactivity = true;
+            }
+            SettingChange::FileLogEnabled(enabled) => {
+                self.config.logging.file_enabled = enabled;
+                self.dirty.log_enabled = true;
+            }
+            SettingChange::FileLogLevel(level) => {
+                self.config.logging.file_level = level;
+                self.dirty.log_level = true;
+            }
+            SettingChange::RestoreDefaults => {
+                self.handle_restore_defaults(now);
+                return;
+            }
+            // Editing a hotkey binding or the intercept flag has to round-trip
+            // through the hotkey thread (rebind, wait for the ack, revert on
+            // failure) before it can be applied and marked dirty; that flow
+            // lands separately from the simple settings handled here.
+            SettingChange::HotkeyUp(_)
+            | SettingChange::HotkeyDown(_)
+            | SettingChange::InterceptBrightnessKeys(_) => {
+                log::debug!("Hotkey setting change received; rebind flow not wired up yet");
+                return;
+            }
+        }
+        self.pending_save_since = Some(now);
+    }
+
+    /// Resets the ten settings-dialog fields to their defaults and schedules
+    /// a save; also refreshes the open dialog so it shows the reset values.
+    ///
+    /// Rebinding the live hotkey thread when the reset changed the bindings
+    /// or the intercept flag is not implemented here yet — only the config
+    /// and dialog reflect the reset immediately; the live bindings catch up
+    /// on the next restart until that flow lands.
+    fn handle_restore_defaults(&mut self, now: Instant) {
+        let up_before = self.config.hotkeys.brightness_up.clone();
+        let down_before = self.config.hotkeys.brightness_down.clone();
+        let intercept_before = self.config.hotkeys.intercept_brightness_keys;
+        self.prev_hotkeys = Some((up_before, down_before, intercept_before));
+
+        self.config.restore_defaults();
+
+        self.dirty = SettingsDirty {
+            step_percent: true,
+            osd_timeout_ms: true,
+            osd_opacity: true,
+            refresh_periodic: true,
+            refresh_inactivity: true,
+            hotkey_up: true,
+            hotkey_down: true,
+            intercept: true,
+            log_enabled: true,
+            log_level: true,
+        };
+        self.pending_save_since = Some(now);
+
+        let snapshot = self.settings_snapshot();
+        self.settings.refresh(&snapshot);
+
+        let hotkeys_changed = self
+            .prev_hotkeys
+            .as_ref()
+            .is_some_and(|(up, down, intercept)| {
+                *up != self.config.hotkeys.brightness_up
+                    || *down != self.config.hotkeys.brightness_down
+                    || *intercept != self.config.hotkeys.intercept_brightness_keys
+            });
+        if hotkeys_changed {
+            log::debug!("Restore defaults changed hotkey bindings; live rebind not wired up yet");
+        }
+    }
+
+    /// Forces a save right now if the dialog session left unsaved changes.
+    ///
+    /// Called at the two points a debounce window would otherwise be
+    /// silently abandoned: the dialog closing and the app quitting. A
+    /// session with no changes must not touch the file at all.
+    fn flush_pending_settings(&mut self, now: Instant) {
+        if self.dirty.any() {
+            self.flush_save(now, true);
+        }
+    }
+
+    /// Runs one save attempt and reconciles `dirty`/`pending_save_since`
+    /// against its outcome.
+    ///
+    /// Only `SaveResult::Saved` clears the dirty set: `Deferred` (an
+    /// on-disk conflict) and `Failed` both keep it and re-arm the debounce
+    /// from `now`, so the next tick retries after another full window
+    /// instead of hammering the store every tick.
+    fn flush_save(&mut self, now: Instant, force: bool) {
+        match self.store.save(&self.config, &self.dirty, force) {
+            SaveResult::Saved => {
+                self.dirty = SettingsDirty::default();
+                self.pending_save_since = None;
+            }
+            SaveResult::Deferred(reason) => {
+                log::warn!(reason:% = reason; "Settings save deferred; will retry");
+                self.pending_save_since = Some(now);
+            }
+            SaveResult::Failed(reason) => {
+                log::error!(reason:% = reason; "Settings save failed; will retry");
+                self.pending_save_since = Some(now);
+            }
         }
     }
 
@@ -926,29 +1107,40 @@ where
                 self.handle_refresh(now);
             }
             // ── Tray Icon Messages ───────────────────────────────────────
-            BrightnessMessage::TrayOpenSettings
-            | BrightnessMessage::TrayOpenLogFolder
-            | BrightnessMessage::OpenConfigFile => {
-                // Shell side effects; the binary's loop handles them before
-                // forwarding. Reaching this arm means the binary failed to
-                // intercept the message, silently no-op'ing the menu/dialog item.
+            BrightnessMessage::TrayOpenLogFolder | BrightnessMessage::OpenConfigFile => {
+                // Shell side effects (Explorer / the default JSON editor);
+                // the binary's loop intercepts and handles them before this
+                // point. Reaching this arm means that interception was
+                // missed, silently no-op'ing the menu/dialog item.
                 log::warn!(
                     "Shell message reached core controller unhandled; wiring regression \
                      (menu/dialog item will silently no-op)"
                 );
             }
+            BrightnessMessage::TrayOpenSettings => {
+                self.settings_open = true;
+                let snapshot = self.settings_snapshot();
+                self.settings.open(&snapshot);
+            }
             // ── Settings Dialog Messages ─────────────────────────────────
-            // The settings window and its message handling are not wired up
-            // yet; these are inert until that work lands.
-            BrightnessMessage::SettingChanged(_)
-            | BrightnessMessage::HotkeyRebindResult { .. }
-            | BrightnessMessage::SettingsClosed
+            BrightnessMessage::SettingChanged(change) => {
+                self.handle_setting_changed(change, now);
+            }
+            BrightnessMessage::SettingsClosed => {
+                self.settings_open = false;
+                self.flush_pending_settings(now);
+            }
+            // The hotkey-thread ack and capture-focus messages are only
+            // meaningful once the in-place rebind flow exists; that lands
+            // separately from the simple-settings handling here.
+            BrightnessMessage::HotkeyRebindResult { .. }
             | BrightnessMessage::HotkeyCaptureStarted
             | BrightnessMessage::HotkeyCaptureEnded => {
                 log::debug!("Settings-dialog message received; no handling wired up yet");
             }
             BrightnessMessage::TrayRequestQuit => {
                 log::info!("Quit requested from tray menu");
+                self.flush_pending_settings(now);
                 return Ok(false);
             }
             BrightnessMessage::TrayMenuOpening { reply_tx } => {
@@ -974,7 +1166,10 @@ where
             } => {
                 self.handle_ddc_refresh_result(generation, monitors, enumerated, now);
             }
-            BrightnessMessage::Shutdown => return Ok(false),
+            BrightnessMessage::Shutdown => {
+                self.flush_pending_settings(now);
+                return Ok(false);
+            }
         }
         Ok(true)
     }
@@ -1020,6 +1215,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::{
+        DEFAULT_FILE_LOG_LEVEL, DEFAULT_HOTKEY_DOWN, DEFAULT_HOTKEY_UP, DEFAULT_OSD_OPACITY,
+        DEFAULT_OSD_TIMEOUT_MS, DEFAULT_REFRESH_INACTIVITY_SECONDS,
+        DEFAULT_REFRESH_PERIODIC_SECONDS, DEFAULT_STEP_PERCENT,
+    };
     use std::sync::mpsc;
 
     // ── Fakes ────────────────────────────────────────────────────────────
@@ -1030,6 +1230,7 @@ mod tests {
         shows: Vec<(MonitorHandle, u8)>,
         updates: Vec<u8>,
         error_updates: Vec<u8>,
+        appearance_calls: Vec<(f32, u32)>,
         fail: bool,
     }
 
@@ -1055,6 +1256,9 @@ mod tests {
         }
         fn is_visible(&self) -> bool {
             self.visible
+        }
+        fn set_appearance(&mut self, opacity: f32, timeout_ms: u32) {
+            self.appearance_calls.push((opacity, timeout_ms));
         }
     }
 
@@ -2225,11 +2429,11 @@ mod tests {
         let base = Instant::now();
         let mut c = test_controller(base);
         assert!(
-            c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            c.handle_message(BrightnessMessage::TrayOpenLogFolder, base)
                 .unwrap()
         );
         assert!(
-            c.handle_message(BrightnessMessage::TrayOpenLogFolder, base)
+            c.handle_message(BrightnessMessage::OpenConfigFile, base)
                 .unwrap()
         );
         assert!(c.ddc.sent.is_empty());
@@ -2387,5 +2591,400 @@ mod tests {
 
         assert_eq!(sent_refresh_count(&c), 1);
         assert!(c.refresh.in_progress());
+    }
+
+    // ── Settings dialog: simple settings, debounced save, open/close ──────
+
+    #[test]
+    fn setting_changed_step_percent_applies_live_and_debounces_a_save() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(c.config.brightness.step_percent, 30, "applies immediately");
+        assert!(c.dirty.step_percent);
+        assert_eq!(c.pending_save_since, Some(base));
+
+        c.check_pending_save(base + Duration::from_millis(499));
+        assert!(c.store.saves.is_empty(), "debounce window not elapsed yet");
+
+        c.check_pending_save(base + Duration::from_millis(500));
+        assert_eq!(c.store.saves.len(), 1, "exactly one save once debounced");
+        let (saved_config, saved_dirty, force) = &c.store.saves[0];
+        assert_eq!(saved_config.brightness.step_percent, 30);
+        assert!(saved_dirty.step_percent);
+        assert!(!force, "debounced save is never forced");
+        assert_eq!(
+            c.pending_save_since, None,
+            "cleared after a successful save"
+        );
+        assert_eq!(
+            c.dirty,
+            SettingsDirty::default(),
+            "dirty reset after a successful save"
+        );
+    }
+
+    #[test]
+    fn setting_changed_osd_fields_apply_a_live_preview() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::OsdTimeoutMs(2500)),
+            base,
+        )
+        .unwrap();
+        assert_eq!(c.config.osd.timeout_ms, 2500);
+        assert!(c.dirty.osd_timeout_ms);
+        assert_eq!(
+            c.osd.appearance_calls.last(),
+            Some(&(c.config.osd.opacity, 2500))
+        );
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::OsdOpacityPercent(34)),
+            base,
+        )
+        .unwrap();
+        assert!((c.config.osd.opacity - 0.34).abs() < f32::EPSILON);
+        assert!(c.dirty.osd_opacity);
+        assert_eq!(
+            c.osd.appearance_calls.last(),
+            Some(&(c.config.osd.opacity, 2500)),
+            "the live preview uses the config's current timeout too"
+        );
+    }
+
+    #[test]
+    fn setting_changed_refresh_fields_have_no_side_effect() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RefreshPeriodicSeconds(120)),
+            base,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RefreshInactivitySeconds(45)),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(c.config.refresh.periodic_seconds, 120);
+        assert_eq!(c.config.refresh.inactivity_seconds, 45);
+        assert!(c.dirty.refresh_periodic);
+        assert!(c.dirty.refresh_inactivity);
+        assert_eq!(c.pending_save_since, Some(base));
+        assert_eq!(sent_refresh_count(&c), 0, "the timers read config live");
+    }
+
+    #[test]
+    fn setting_changed_logging_fields_are_save_only() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::FileLogEnabled(true)),
+            base,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::FileLogLevel("debug".to_string())),
+            base,
+        )
+        .unwrap();
+
+        assert!(c.config.logging.file_enabled);
+        assert_eq!(c.config.logging.file_level, "debug");
+        assert!(c.dirty.log_enabled);
+        assert!(c.dirty.log_level);
+        assert!(
+            c.osd.appearance_calls.is_empty(),
+            "logging changes are restart-only; no live effect"
+        );
+        assert!(c.settings.refreshed.is_empty());
+    }
+
+    #[test]
+    fn setting_changed_coalesces_before_the_debounce_fires() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(10)),
+            base,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(20)),
+            base + Duration::from_millis(300),
+        )
+        .unwrap();
+
+        c.check_pending_save(base + Duration::from_millis(700));
+        assert!(
+            c.store.saves.is_empty(),
+            "second change re-stamped the debounce window"
+        );
+
+        c.check_pending_save(base + Duration::from_millis(800));
+        assert_eq!(c.store.saves.len(), 1, "still exactly one save");
+        assert_eq!(c.store.saves[0].0.brightness.step_percent, 20);
+    }
+
+    #[test]
+    fn restore_defaults_resets_all_fields_and_schedules_a_save() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.brightness.step_percent = 30;
+        c.config.osd.timeout_ms = 5000;
+        c.config.osd.opacity = 0.5;
+        c.config.refresh.periodic_seconds = 10;
+        c.config.refresh.inactivity_seconds = 10;
+        c.config.logging.file_enabled = true;
+        c.config.logging.file_level = "trace".to_string();
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(c.config.brightness.step_percent, DEFAULT_STEP_PERCENT);
+        assert_eq!(c.config.osd.timeout_ms, DEFAULT_OSD_TIMEOUT_MS);
+        assert!((c.config.osd.opacity - DEFAULT_OSD_OPACITY).abs() < f32::EPSILON);
+        assert_eq!(
+            c.config.refresh.periodic_seconds,
+            DEFAULT_REFRESH_PERIODIC_SECONDS
+        );
+        assert_eq!(
+            c.config.refresh.inactivity_seconds,
+            DEFAULT_REFRESH_INACTIVITY_SECONDS
+        );
+        assert!(!c.config.logging.file_enabled);
+        assert_eq!(c.config.logging.file_level, DEFAULT_FILE_LOG_LEVEL);
+
+        assert_eq!(
+            c.dirty,
+            SettingsDirty {
+                step_percent: true,
+                osd_timeout_ms: true,
+                osd_opacity: true,
+                refresh_periodic: true,
+                refresh_inactivity: true,
+                hotkey_up: true,
+                hotkey_down: true,
+                intercept: true,
+                log_enabled: true,
+                log_level: true,
+            },
+            "every field is marked dirty"
+        );
+        assert_eq!(c.pending_save_since, Some(base));
+        assert_eq!(
+            c.settings.refreshed.len(),
+            1,
+            "the dialog is told to redisplay every value"
+        );
+    }
+
+    #[test]
+    #[ignore = "rebind flow lands next"]
+    fn restore_defaults_rebinds_hotkeys_when_bindings_changed() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.hotkeys.brightness_up = "Ctrl+Alt+Up".to_string();
+        c.config.hotkeys.brightness_down = "Ctrl+Alt+Down".to_string();
+        c.config.hotkeys.intercept_brightness_keys = true;
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.hotkey_port.rebinds.last(),
+            Some(&(
+                DEFAULT_HOTKEY_UP.to_string(),
+                DEFAULT_HOTKEY_DOWN.to_string(),
+                false
+            )),
+            "changed hotkeys must be rebound in place, not just saved"
+        );
+    }
+
+    #[test]
+    fn settings_snapshot_maps_opacity_float_to_a_rounded_percent() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.osd.opacity = 0.335;
+
+        assert_eq!(c.settings_snapshot().osd_opacity_percent, 34);
+    }
+
+    #[test]
+    fn tray_open_settings_opens_the_dialog_with_current_values() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.brightness.step_percent = 12;
+
+        c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            .unwrap();
+
+        assert!(c.settings_open);
+        assert_eq!(c.settings.opened.len(), 1);
+        assert_eq!(c.settings.opened[0].step_percent, 12);
+    }
+
+    #[test]
+    fn settings_closed_forces_a_save_when_dirty() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::SettingsClosed,
+            base + Duration::from_millis(50),
+        )
+        .unwrap();
+
+        assert!(!c.settings_open);
+        assert_eq!(
+            c.store.saves.len(),
+            1,
+            "close flushes before the debounce fires"
+        );
+        assert!(c.store.saves[0].2, "close forces the save");
+        assert_eq!(c.pending_save_since, None);
+        assert_eq!(c.dirty, SettingsDirty::default());
+    }
+
+    #[test]
+    fn settings_closed_without_changes_saves_nothing() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            .unwrap();
+        c.handle_message(BrightnessMessage::SettingsClosed, base)
+            .unwrap();
+
+        assert!(
+            c.store.saves.is_empty(),
+            "nothing changed; the file must not be touched"
+        );
+    }
+
+    #[test]
+    fn quit_flushes_a_pending_save_when_dirty() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        assert!(
+            !c.handle_message(BrightnessMessage::TrayRequestQuit, base)
+                .unwrap()
+        );
+
+        assert_eq!(c.store.saves.len(), 1);
+        assert!(c.store.saves[0].2, "quit forces the save");
+    }
+
+    #[test]
+    fn quit_saves_nothing_when_not_dirty() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        assert!(
+            !c.handle_message(BrightnessMessage::TrayRequestQuit, base)
+                .unwrap()
+        );
+
+        assert!(c.store.saves.is_empty());
+    }
+
+    #[test]
+    fn shutdown_also_flushes_a_pending_save_when_dirty() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        assert!(!c.handle_message(BrightnessMessage::Shutdown, base).unwrap());
+
+        assert_eq!(
+            c.store.saves.len(),
+            1,
+            "Ctrl+C shutdown is as much an app quit as the tray Quit item"
+        );
+        assert!(c.store.saves[0].2, "shutdown forces the save");
+    }
+
+    #[test]
+    fn deferred_save_keeps_dirty_and_rearms_the_debounce() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.store.result = Some(SaveResult::Deferred("disk file changed".to_string()));
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        c.check_pending_save(base + SAVE_DEBOUNCE);
+
+        assert_eq!(c.store.saves.len(), 1);
+        assert!(
+            c.dirty.step_percent,
+            "stays dirty so the retry has something to save"
+        );
+        assert_eq!(
+            c.pending_save_since,
+            Some(base + SAVE_DEBOUNCE),
+            "re-armed from the tick that just ran, not the original change"
+        );
+
+        // A retry after another full debounce window saves again.
+        c.store.result = None;
+        c.check_pending_save(base + SAVE_DEBOUNCE + SAVE_DEBOUNCE);
+        assert_eq!(c.store.saves.len(), 2);
+        assert_eq!(c.pending_save_since, None);
+    }
+
+    #[test]
+    fn failed_save_keeps_dirty_and_rearms_the_debounce() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.store.result = Some(SaveResult::Failed("disk full".to_string()));
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        c.check_pending_save(base + SAVE_DEBOUNCE);
+
+        assert_eq!(c.store.saves.len(), 1);
+        assert!(c.dirty.step_percent);
+        assert_eq!(c.pending_save_since, Some(base + SAVE_DEBOUNCE));
     }
 }

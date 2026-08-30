@@ -116,8 +116,10 @@ unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
 }
 
 /// Opens the config file in the system default editor (shell side effect).
-fn open_settings() {
-    log::debug!("TrayOpenSettings received");
+///
+/// Used by the settings dialog's "Open config file" footer link.
+fn open_config_file() {
+    log::debug!("OpenConfigFile received");
     if let Some(path) = Config::default_path() {
         if let Err(e) = open_with_default_app(&path) {
             log::error!(error:% = e; "Failed to open config file");
@@ -643,6 +645,7 @@ fn main() {
 
         let now = Instant::now();
         controller.check_periodic_refresh(now);
+        controller.check_pending_save(now);
         controller.supervise_and_watchdog(now);
 
         if hotkey_handle.is_finished() {
@@ -707,8 +710,8 @@ fn main() {
                 log::debug!(message:? = msg; "Main loop received message");
                 match msg {
                     // Shell side effects stay out of the core controller.
-                    BrightnessMessage::TrayOpenSettings => open_settings(),
                     BrightnessMessage::TrayOpenLogFolder => open_log_folder(),
+                    BrightnessMessage::OpenConfigFile => open_config_file(),
                     other => match controller.handle_message(other, Instant::now()) {
                         Ok(should_continue) => {
                             if !should_continue {

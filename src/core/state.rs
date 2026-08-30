@@ -566,7 +566,8 @@ pub enum BrightnessMessage {
     // ── Tray Icon Messages ───────────────────────────────────────────────
     /// User clicked the "Settings" menu item in the tray menu.
     ///
-    /// The main thread should open the config file with the system default editor.
+    /// Routed to the controller, which opens the settings window with the
+    /// current config values.
     TrayOpenSettings,
 
     /// User clicked the "Open Log Folder" menu item in the tray menu.
