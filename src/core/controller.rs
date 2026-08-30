@@ -511,9 +511,9 @@ where
             SettingChange::HotkeyUp(up) => {
                 self.dirty.hotkey_up = true;
                 // A binding produced by the capture field implicitly ends
-                // capture; the rebind about to be posted doubles as the
-                // resume, so no separate resume() call goes out.
-                self.capture_active = false;
+                // capture; the rebind posted by apply_hotkey_change doubles
+                // as the resume (see post_hotkey_rebind), so no separate
+                // resume() call goes out.
                 let down = self.config.hotkeys.brightness_down.clone();
                 let intercept = self.config.hotkeys.intercept_brightness_keys;
                 self.apply_hotkey_change(up, down, intercept, now);
@@ -521,7 +521,6 @@ where
             }
             SettingChange::HotkeyDown(down) => {
                 self.dirty.hotkey_down = true;
-                self.capture_active = false;
                 let up = self.config.hotkeys.brightness_up.clone();
                 let intercept = self.config.hotkeys.intercept_brightness_keys;
                 self.apply_hotkey_change(up, down, intercept, now);
@@ -560,7 +559,15 @@ where
     /// thread (queue gone / thread dead), so no ack is ever coming — the
     /// revert to `prev_hotkeys` happens synchronously right here rather than
     /// waiting on one.
+    ///
+    /// Also clears `capture_active`: every caller of this method is a rebind
+    /// that re-registers the hotkey thread, and a re-registration always
+    /// doubles as the resume half of the capture-suspend cycle, whether it
+    /// came from the capture field itself (a `HotkeyUp`/`HotkeyDown` change)
+    /// or a Restore Defaults that happened to change a binding while capture
+    /// was active. Centralizing it here means no caller can forget it.
     fn post_hotkey_rebind(&mut self, now: Instant) {
+        self.capture_active = false;
         self.pending_hotkey_op = Some((HotkeyOp::Rebind, now));
         let up = self.config.hotkeys.brightness_up.clone();
         let down = self.config.hotkeys.brightness_down.clone();
@@ -3167,6 +3174,37 @@ mod tests {
     }
 
     #[test]
+    fn restore_defaults_that_changes_a_binding_clears_capture_active() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.hotkeys.brightness_up = "Ctrl+Alt+Up".to_string();
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+        assert!(c.capture_active);
+
+        let t2 = base + Duration::from_millis(100);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+            t2,
+        )
+        .unwrap();
+
+        assert!(
+            !c.capture_active,
+            "the rebind Restore Defaults just posted doubles as the resume"
+        );
+
+        // A respawn right after must not post a spurious suspend under a
+        // thread that was already un-suspended by the rebind above.
+        let t3 = t2 + Duration::from_millis(50);
+        c.hotkey_thread_respawned(t3);
+        assert_eq!(
+            c.hotkey_port.suspends, 1,
+            "only the original capture-start suspend; none from the stale flag"
+        );
+    }
+
+    #[test]
     fn restore_defaults_does_not_rebind_hotkeys_when_unchanged() {
         let base = Instant::now();
         let mut c = test_controller(base);
@@ -4031,6 +4069,13 @@ mod tests {
         let up_before = c.config.hotkeys.brightness_up.clone();
         c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
             .unwrap();
+        // A rebind's revert stash is parked while the suspend's own ack is
+        // still outstanding (the single-slot `pending_hotkey_op` limitation:
+        // a later op can be posted before an earlier one's ack lands). If
+        // the `op == HotkeyOp::Rebind` guard on the revert were ever
+        // dropped, this stash would get reverted by the suspend's failure
+        // below, which is exactly what this test exists to catch.
+        c.prev_hotkeys = Some(("Alt+F1".to_string(), "Alt+F2".to_string(), false));
 
         c.handle_message(
             BrightnessMessage::HotkeyRebindResult {
@@ -4047,7 +4092,15 @@ mod tests {
             c.config.hotkeys.brightness_up, up_before,
             "a suspend has no config change to revert"
         );
+        assert!(
+            c.prev_hotkeys.is_some(),
+            "a non-rebind failure must not consume or apply a parked rebind revert stash"
+        );
         assert!(c.hotkeys_degraded);
+        assert!(
+            !c.hotkeys_lost,
+            "a recoverable degraded warning must not touch the permanent give-up latch"
+        );
         assert!(c.pending_hotkey_op.is_none());
         assert_eq!(c.settings.errors, vec!["device busy".to_string()]);
     }
@@ -4061,12 +4114,23 @@ mod tests {
             .unwrap();
         c.handle_message(BrightnessMessage::HotkeyCaptureEnded, base)
             .unwrap();
+        // Same rationale as the suspend-failure test above: a parked rebind
+        // revert stash must survive a resume's ack timeout untouched.
+        c.prev_hotkeys = Some(("Alt+F1".to_string(), "Alt+F2".to_string(), false));
 
         let past_deadline = base + REBIND_TIMEOUT + Duration::from_millis(1);
         c.supervise_and_watchdog(past_deadline);
 
         assert_eq!(c.config.hotkeys.brightness_up, up_before);
+        assert!(
+            c.prev_hotkeys.is_some(),
+            "a non-rebind timeout must not consume or apply a parked rebind revert stash"
+        );
         assert!(c.hotkeys_degraded);
+        assert!(
+            !c.hotkeys_lost,
+            "a recoverable degraded warning must not touch the permanent give-up latch"
+        );
         assert!(c.pending_hotkey_op.is_none());
         assert_eq!(
             c.settings.errors,
