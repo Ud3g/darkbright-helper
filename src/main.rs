@@ -1,13 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::sync::{LazyLock, Mutex, OnceLock, mpsc};
+use std::collections::VecDeque;
+use std::sync::atomic::AtomicU32;
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use windows::Win32::System::Console::{CTRL_BREAK_EVENT, CTRL_C_EVENT, SetConsoleCtrlHandler};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::HOT_KEY_MODIFIERS;
 use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, MSG, PM_REMOVE, PeekMessageW, SW_SHOWNORMAL, TranslateMessage,
@@ -24,8 +25,7 @@ use darkbright_helper::core::reconcile::{
 use darkbright_helper::core::state::{BrightnessMessage, HealthWarnings};
 use darkbright_helper::platform::windows::CursorLocator;
 use darkbright_helper::platform::windows::hotkey::{
-    BRIGHTNESS_DOWN_ALT_ID, BRIGHTNESS_DOWN_ID, BRIGHTNESS_UP_ALT_ID, BRIGHTNESS_UP_ID,
-    HotkeyManager, HotkeyPortImpl, VK_BRIGHTNESS_DOWN, VK_BRIGHTNESS_UP, parse_hotkey,
+    HotkeyCommandQueue, HotkeyPortImpl, parse_hotkey, run_hotkey_thread,
 };
 use darkbright_helper::platform::windows::osd::OsdWindow;
 use darkbright_helper::platform::windows::overlay::OverlayManager;
@@ -367,104 +367,35 @@ fn spawn_tray_thread(
     });
 }
 
-/// Registers the dedicated brightness keys (`VK_BRIGHTNESS_UP/DOWN`) as
-/// plain hotkeys. Non-fatal: another app or the shell may already own them.
-fn register_secondary_brightness_hotkeys(hotkey_manager: &mut HotkeyManager) {
-    if let Err(e) =
-        hotkey_manager.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
-    {
-        log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
-    }
-
-    if let Err(e) = hotkey_manager.register_hotkey(
-        BRIGHTNESS_DOWN_ALT_ID,
-        HOT_KEY_MODIFIERS(0),
-        VK_BRIGHTNESS_DOWN,
-    ) {
-        log::debug!(error:% = e; "Secondary brightness down hotkey not registered");
-    }
-}
-
-/// Spawns the hotkey thread and returns its `JoinHandle` for liveness
-/// supervision. Blocks until the thread reports its registration result.
+/// Spawns the hotkey thread (running [`run_hotkey_thread`]) and returns its
+/// `JoinHandle` for liveness supervision. Blocks until the thread reports
+/// its registration result.
+///
+/// `thread_id`/`queue` are the shared cells [`HotkeyPortImpl`] posts through;
+/// the same pair is reused across every spawn (initial and every supervised
+/// respawn) so a rebind posted around a respawn either reaches the thread
+/// that is actually running or fails cleanly instead of talking to nothing.
 fn start_hotkey_thread(
-    config: &Config,
+    up: String,
+    down: String,
+    intercept: bool,
     tx: mpsc::Sender<BrightnessMessage>,
+    thread_id: Arc<AtomicU32>,
+    queue: HotkeyCommandQueue,
 ) -> Result<std::thread::JoinHandle<()>> {
-    // Parse the primary hotkeys before spawning the thread. Config loading
-    // already repaired invalid strings to defaults, so a failure here is a
-    // defensive guard, not an expected path.
-    let up_hotkey = parse_hotkey(&config.hotkeys.brightness_up)
-        .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_up", e.to_string()))?;
+    // Named for the post-registration log line below; `run_hotkey_thread`
+    // takes ownership of the originals.
+    let brightness_up = up.clone();
+    let brightness_down = down.clone();
 
-    let down_hotkey = parse_hotkey(&config.hotkeys.brightness_down)
-        .map_err(|e| BrightnessError::config_invalid("hotkeys.brightness_down", e.to_string()))?;
+    // Hotkeys MUST be registered on the same thread that runs the message
+    // loop, because WM_HOTKEY messages are sent to the registering thread's
+    // queue — hence the bounded rendezvous below instead of just spawning
+    // and moving on.
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
 
-    // Channel to receive registration result from the hotkey thread.
-    // Hotkeys MUST be registered on the same thread that runs the message loop,
-    // because WM_HOTKEY messages are sent to the registering thread's queue.
-    let (result_tx, result_rx) = mpsc::channel::<Result<()>>();
-
-    let config_clone = config.clone();
     let handle = std::thread::spawn(move || {
-        // Create hotkey manager on THIS thread (creates message window here)
-        let mut hotkey_manager = match HotkeyManager::new(tx) {
-            Ok(hm) => hm,
-            Err(e) => {
-                let _ = result_tx.send(Err(e));
-                return;
-            }
-        };
-
-        // Register primary hotkeys on THIS thread (fatal if they fail)
-        if let Err(e) =
-            hotkey_manager.register_hotkey(BRIGHTNESS_UP_ID, up_hotkey.modifiers, up_hotkey.vk_code)
-        {
-            let _ = result_tx.send(Err(BrightnessError::hotkey_registration(
-                config_clone.hotkeys.brightness_up.clone(),
-                e.to_string(),
-            )));
-            return;
-        }
-
-        if let Err(e) = hotkey_manager.register_hotkey(
-            BRIGHTNESS_DOWN_ID,
-            down_hotkey.modifiers,
-            down_hotkey.vk_code,
-        ) {
-            let _ = result_tx.send(Err(BrightnessError::hotkey_registration(
-                config_clone.hotkeys.brightness_down.clone(),
-                e.to_string(),
-            )));
-            return;
-        }
-
-        // Signal success to main thread
-        let _ = result_tx.send(Ok(()));
-
-        // Brightness key interception: preferably via low-level hook (catches
-        // the keys before the Shell); on hook failure fall back to plain
-        // RegisterHotKey so the keys degrade instead of silently doing nothing.
-        if config_clone.hotkeys.intercept_brightness_keys {
-            match hotkey_manager.install_brightness_hook() {
-                Ok(()) => {
-                    log::info!("Low-level keyboard hook installed for brightness keys");
-                }
-                Err(e) => {
-                    log::warn!(
-                        error:% = e;
-                        "Failed to install brightness key hook; falling back to plain registration"
-                    );
-                    register_secondary_brightness_hotkeys(&mut hotkey_manager);
-                }
-            }
-        } else {
-            log::debug!("Brightness key interception disabled by config");
-            register_secondary_brightness_hotkeys(&mut hotkey_manager);
-        }
-
-        // Run message loop (blocks until thread ends)
-        hotkey_manager.run_message_loop();
+        run_hotkey_thread(up, down, intercept, tx, thread_id, queue, ready_tx);
     });
 
     // Wait for the registration result, but bounded: a spawn hung inside
@@ -472,7 +403,7 @@ fn start_hotkey_thread(
     // especially not on a supervised restart. On timeout the thread is
     // abandoned (deliberate leak): if it ever wakes it either exits or its
     // held registrations make the next restart fail loudly.
-    match result_rx.recv_timeout(HOTKEY_START_TIMEOUT) {
+    match ready_rx.recv_timeout(HOTKEY_START_TIMEOUT) {
         Ok(result) => result?,
         Err(mpsc::RecvTimeoutError::Timeout) => {
             return Err(BrightnessError::HotkeyThreadUnresponsive);
@@ -484,8 +415,8 @@ fn start_hotkey_thread(
     // One info line naming the bound combos: the first thing to check on a
     // "hotkey does nothing" field report.
     log::info!(
-        brightness_up:% = config.hotkeys.brightness_up,
-        brightness_down:% = config.hotkeys.brightness_down;
+        brightness_up:% = brightness_up,
+        brightness_down:% = brightness_down;
         "Hotkeys registered"
     );
     Ok(handle)
@@ -564,6 +495,13 @@ fn main() {
             return;
         }
     };
+    // Shared with every hotkey thread spawn (initial and every supervised
+    // respawn below): thread_id is 0 until that thread signals ready, and
+    // reset to 0 when it exits, so a rebind posted through HotkeyPortImpl
+    // fails cleanly instead of talking to a thread that is not there.
+    let hotkey_thread_id: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
+    let hotkey_queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+
     let mut controller = Controller::new(
         config.clone(),
         osd,
@@ -571,7 +509,7 @@ fn main() {
         supervisor,
         CursorLocator,
         SettingsSinkImpl,
-        HotkeyPortImpl,
+        HotkeyPortImpl::new(hotkey_thread_id.clone(), hotkey_queue.clone()),
         WindowsConfigStore::new(Config::default_path()),
         Instant::now(),
     );
@@ -612,7 +550,14 @@ fn main() {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
     }
 
-    let mut hotkey_handle = match start_hotkey_thread(&config, tx.clone()) {
+    let mut hotkey_handle = match start_hotkey_thread(
+        config.hotkeys.brightness_up.clone(),
+        config.hotkeys.brightness_down.clone(),
+        config.hotkeys.intercept_brightness_keys,
+        tx.clone(),
+        hotkey_thread_id.clone(),
+        hotkey_queue.clone(),
+    ) {
         Ok(handle) => handle,
         Err(e) => {
             log::error!(error:% = e; "Fatal error during hotkey registration");
@@ -652,9 +597,22 @@ fn main() {
             match hotkey_gate.on_death(now) {
                 RespawnDecision::Attempt => {
                     log::error!("Hotkey thread died; attempting restart");
-                    match start_hotkey_thread(&config, tx.clone()) {
+                    // Live bindings, not the startup config: a rebind since
+                    // startup must survive a respawn instead of silently
+                    // reverting to what the process launched with. The
+                    // controller is the sole owner of the runtime config.
+                    let (up, down, intercept) = controller.hotkey_config();
+                    match start_hotkey_thread(
+                        up,
+                        down,
+                        intercept,
+                        tx.clone(),
+                        hotkey_thread_id.clone(),
+                        hotkey_queue.clone(),
+                    ) {
                         Ok(handle) => {
                             hotkey_handle = handle;
+                            controller.hotkey_thread_respawned(now);
                             log::info!("Hotkey thread restarted");
                         }
                         Err(e) => {
