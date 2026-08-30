@@ -373,8 +373,11 @@ fn spawn_tray_thread(
 ///
 /// `thread_id`/`queue` are the shared cells [`HotkeyPortImpl`] posts through;
 /// the same pair is reused across every spawn (initial and every supervised
-/// respawn) so a rebind posted around a respawn either reaches the thread
-/// that is actually running or fails cleanly instead of talking to nothing.
+/// respawn) so a rebind posted around a respawn ordinarily either reaches
+/// the thread that is actually running or fails cleanly. The one exception
+/// is a spawn abandoned on [`BrightnessError::HotkeyThreadUnresponsive`]
+/// (deliberately leaked rather than joined): if that thread later finishes
+/// registering on its own, it still publishes into these same cells.
 fn start_hotkey_thread(
     up: String,
     down: String,
@@ -498,7 +501,11 @@ fn main() {
     // Shared with every hotkey thread spawn (initial and every supervised
     // respawn below): thread_id is 0 until that thread signals ready, and
     // reset to 0 when it exits, so a rebind posted through HotkeyPortImpl
-    // fails cleanly instead of talking to a thread that is not there.
+    // ordinarily fails cleanly instead of talking to a thread that is not
+    // there. Not an absolute guarantee: a spawn abandoned after
+    // HOTKEY_START_TIMEOUT is deliberately leaked rather than joined, and if
+    // it later finishes registering on its own it still publishes into
+    // these same cells — see start_hotkey_thread's doc comment.
     let hotkey_thread_id: Arc<AtomicU32> = Arc::new(AtomicU32::new(0));
     let hotkey_queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
 

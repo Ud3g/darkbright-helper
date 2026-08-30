@@ -267,13 +267,19 @@ pub struct HotkeyManager {
     sender: Sender<BrightnessMessage>,
     /// Low-level keyboard hook for intercepting brightness keys (optional).
     keyboard_hook: Option<SafeHook>,
-    /// Bindings last successfully applied via [`Self::apply_bindings`].
-    /// `None` before the first successful apply. Restored on a failed
-    /// rebind, and reapplied verbatim on resume.
+    /// Bindings this manager is meant to have registered: the target that
+    /// [`Self::restore_previous_bindings`] restores to after a failed rebind
+    /// and that [`Self::resume`] reapplies. `None` before the first
+    /// successful apply. Not a live guarantee of what is actually
+    /// registered right now — if a restore attempt itself fails, these still
+    /// describe it (nothing else to fall back to), even though the OS-level
+    /// registration may be partial or absent; the next successful apply
+    /// (including the next resume, since `apply_bindings` always
+    /// unregisters before it registers) reconciles the two again.
     current_up: Option<ParsedHotkey>,
     /// See [`Self::current_up`].
     current_down: Option<ParsedHotkey>,
-    /// Intercept setting last successfully applied.
+    /// Intercept setting paired with [`Self::current_up`]/[`Self::current_down`].
     current_intercept: bool,
 }
 
@@ -466,12 +472,13 @@ impl HotkeyManager {
         self.register_hotkey(BRIGHTNESS_DOWN_ID, down.modifiers, down.vk_code)
             .map_err(|e| BrightnessError::hotkey_registration(down.to_string(), e.to_string()))?;
 
+        // Runs on every apply — startup, a live rebind, and a resume — not
+        // just once at process start, so the "installed" confirmation is
+        // left to install_brightness_hook's own debug-level log rather than
+        // repeated here at info on every call.
         let fallback_active = if intercept {
             match self.install_brightness_hook() {
-                Ok(()) => {
-                    log::info!("Low-level keyboard hook installed for brightness keys");
-                    false
-                }
+                Ok(()) => false,
                 Err(e) => {
                     log::warn!(
                         error:% = e;
@@ -482,7 +489,9 @@ impl HotkeyManager {
                 }
             }
         } else {
-            log::debug!("Brightness key interception disabled by config");
+            log::debug!(
+                "Brightness key interception disabled (starting up with it off, or a live setting change turned it off)"
+            );
             self.register_secondary_brightness_hotkeys();
             false
         };
@@ -505,13 +514,19 @@ impl HotkeyManager {
     ///
     /// # Errors
     ///
-    /// Returns `BrightnessError::ChannelSend` if nothing has ever been
+    /// Returns `BrightnessError::HotkeyRegistration` if nothing has ever been
     /// successfully applied yet (defensive; the thread always applies the
-    /// startup config before the message loop can receive a resume).
-    /// Otherwise propagates whatever [`Self::apply_bindings`] returns.
+    /// startup config before the message loop can receive a resume) — this
+    /// text ends up in the settings dialog's inline error, so it must
+    /// describe this condition rather than borrow a channel-closed message
+    /// that would misdescribe it. Otherwise propagates whatever
+    /// [`Self::apply_bindings`] returns.
     fn resume(&mut self) -> Result<bool> {
         let (Some(up), Some(down)) = (self.current_up, self.current_down) else {
-            return Err(BrightnessError::ChannelSend);
+            return Err(BrightnessError::hotkey_registration(
+                "brightness hotkeys",
+                "no previously applied bindings to resume (thread never completed its initial registration)",
+            ));
         };
         self.apply_bindings(up, down, self.current_intercept)
     }
@@ -785,7 +800,7 @@ pub fn run_hotkey_thread(
         return;
     }
 
-    // Safety: no preconditions; this reads the calling thread's own id.
+    // SAFETY: no preconditions; this reads the calling thread's own id.
     thread_id.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
 
     let _ = ready_tx.send(Ok(()));
@@ -818,14 +833,23 @@ impl HotkeyPortImpl {
     /// Creates a port over the given thread-id cell and command queue. Both
     /// are constructed once at startup and shared with every hotkey thread
     /// spawn (initial and every supervised respawn), so a rebind posted
-    /// mid-respawn either reaches the new thread or fails cleanly rather
-    /// than talking to a queue nobody drains anymore.
+    /// mid-respawn ordinarily either reaches the new thread or fails cleanly
+    /// rather than talking to a queue nobody drains anymore — except for a
+    /// spawn the main thread gave up waiting on and abandoned, which can
+    /// still finish registering later and publish into these same cells.
     #[must_use]
     pub const fn new(thread_id: Arc<AtomicU32>, queue: HotkeyCommandQueue) -> Self {
         Self { thread_id, queue }
     }
 
     /// Queues `command` and wakes the hotkey thread.
+    ///
+    /// If the wake itself fails, `command` is removed from the queue again
+    /// before returning: nobody is going to drain it now, and leaving it
+    /// behind would let a later, unrelated wake (or a supervised respawn
+    /// sharing this same queue) apply a command the caller has already
+    /// treated as failed — diverging silently from the config the caller
+    /// reverted to.
     ///
     /// # Errors
     ///
@@ -844,10 +868,19 @@ impl HotkeyPortImpl {
             Err(_) => return Err(BrightnessError::ChannelSend),
         }
 
-        unsafe {
-            PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)).map_err(|e| {
-                BrightnessError::windows_api("PostThreadMessageW", e.code().0.cast_unsigned())
-            })?;
+        let wake = unsafe { PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)) };
+        if let Err(e) = wake {
+            // The main thread is the only producer, so the tail is exactly
+            // the entry just pushed above; if something already drained the
+            // queue in between, this is a harmless no-op.
+            self.queue
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop_back();
+            return Err(BrightnessError::windows_api(
+                "PostThreadMessageW",
+                e.code().0.cast_unsigned(),
+            ));
         }
         Ok(())
     }
@@ -1328,11 +1361,16 @@ mod tests {
     fn hotkey_port_post_fails_for_a_thread_id_that_does_not_exist() {
         // A thread id that was never issued by the OS: PostThreadMessageW
         // must fail with ERROR_INVALID_THREAD_ID, and post() must surface
-        // that as an Err rather than silently succeeding.
+        // that as an Err rather than silently succeeding — and must not
+        // strand the command in the queue for some later wake to pick up.
         let thread_id = Arc::new(AtomicU32::new(u32::MAX));
         let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
-        let mut port = HotkeyPortImpl::new(thread_id, queue);
+        let mut port = HotkeyPortImpl::new(thread_id, queue.clone());
 
         assert!(port.resume().is_err());
+        assert!(
+            queue.lock().unwrap().is_empty(),
+            "a post whose wake failed must not leave a command behind for a later thread to pick up"
+        );
     }
 }

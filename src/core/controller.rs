@@ -629,16 +629,22 @@ where
     /// Handles an ack, or a deadline expiry treated exactly like one, for the
     /// hotkey thread's most recent posted operation.
     ///
-    /// An ack that arrives with nothing pending is stale — the watchdog's ack
-    /// deadline has already passed and either reverted the config (a failed
-    /// rebind) or simply moved on (suspend/resume), so the thread's actual
-    /// registration state is no longer knowable from here. Adopting a late
-    /// success as ground truth would leave `config` on the old binding while
-    /// the thread believes it registered the new one, silently diverged with
-    /// no warning left to say so; a late failure would show a second,
-    /// different error for an operation already resolved. Either way the
-    /// honest move is to change nothing and let the dialog's own next rebind
-    /// (which re-posts both bindings) resolve any divergence deterministically.
+    /// An ack that arrives with nothing pending, or whose `op` does not match
+    /// the operation actually pending, is stale — the watchdog's ack deadline
+    /// has already passed and either reverted the config (a failed rebind) or
+    /// simply moved on (suspend/resume), so the thread's actual registration
+    /// state is no longer knowable from here. Adopting a late success as
+    /// ground truth would leave `config` on the old binding while the thread
+    /// believes it registered the new one, silently diverged with no warning
+    /// left to say so; a late failure would show a second, different error
+    /// for an operation already resolved. Either way the honest move is to
+    /// change nothing and let the dialog's own next rebind (which re-posts
+    /// both bindings) resolve any divergence deterministically.
+    ///
+    /// The `op` check is defense in depth, not the primary guard against a
+    /// mismatched ack — the hotkey-thread side is responsible for never
+    /// posting one for an operation the main thread didn't ask for — but the
+    /// protocol should not depend on the producer being perfect either.
     ///
     /// A successful rebind is otherwise a recovery signal: it clears
     /// `hotkeys_degraded` even if an earlier attempt had set it, because a
@@ -656,9 +662,21 @@ where
         error: Option<String>,
         now: Instant,
     ) {
-        if self.pending_hotkey_op.is_none() {
-            log::debug!(op:? = op, success; "Ignoring hotkey ack with no operation pending (stale/late)");
-            return;
+        match self.pending_hotkey_op {
+            None => {
+                log::debug!(op:? = op, success; "Ignoring hotkey ack with no operation pending (stale/late)");
+                return;
+            }
+            Some((pending_op, _)) if pending_op != op => {
+                log::debug!(
+                    op:? = op,
+                    pending_op:? = pending_op,
+                    success;
+                    "Ignoring hotkey ack for a different operation than the one pending (stale/late)"
+                );
+                return;
+            }
+            Some(_) => {}
         }
         self.pending_hotkey_op = None;
 
@@ -3398,6 +3416,40 @@ mod tests {
         )
         .unwrap();
 
+        assert!(!c.hotkeys_degraded);
+        assert!(c.settings.refreshed.is_empty());
+        assert!(c.settings.errors.is_empty());
+        assert!(c.settings.notices.is_empty());
+    }
+
+    #[test]
+    fn hotkey_rebind_result_for_a_different_op_than_pending_is_ignored() {
+        // A Suspend is in flight; an ack claiming to be for a Rebind must not
+        // be consumed as if it resolved the Suspend — the protocol shouldn't
+        // depend on the hotkey thread never mislabeling an ack.
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+        assert_eq!(c.pending_hotkey_op, Some((HotkeyOp::Suspend, base)));
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.pending_hotkey_op,
+            Some((HotkeyOp::Suspend, base)),
+            "the mismatched ack must not clear the actually-pending op"
+        );
         assert!(!c.hotkeys_degraded);
         assert!(c.settings.refreshed.is_empty());
         assert!(c.settings.errors.is_empty());
