@@ -657,6 +657,16 @@ pub(super) fn font_height_for_dpi(point_size: i32, dpi: u32) -> i32 {
     -i32::try_from(scaled).unwrap_or(point_size)
 }
 
+/// Extracts the new DPI from a `WM_DPICHANGED` `wParam`: the low word is the
+/// X-axis DPI, the high word the Y-axis one — Windows always reports the
+/// same value in both for a system DPI change, so only the low word is
+/// read. Takes the raw `wParam.0` rather than a `WPARAM` so it stays plain
+/// arithmetic, testable without a live window.
+#[must_use]
+pub(super) fn dpi_from_wparam(wparam: usize) -> u32 {
+    u32::try_from(wparam & 0xFFFF).unwrap_or(96)
+}
+
 /// Positions every control in [`CONTROLS`] from its 96-DPI-baseline geometry
 /// scaled to `dpi`. Creation calls this once after all controls exist; a
 /// later DPI-change task reuses it for live relayout.
@@ -941,6 +951,15 @@ mod tests {
         assert_eq!(font_height_for_dpi(9, 96), -12);
         // 9pt at 144 DPI (150%): 9 * 144 / 72 = 18.
         assert_eq!(font_height_for_dpi(9, 144), -18);
+    }
+
+    #[test]
+    fn dpi_from_wparam_reads_the_low_word_only() {
+        // 120 = 125% DPI in the low word; a nonzero high word (Y-axis DPI,
+        // always equal in practice) must not leak into the result.
+        assert_eq!(dpi_from_wparam(0x0078_0078), 120);
+        assert_eq!(dpi_from_wparam(96), 96);
+        assert_eq!(dpi_from_wparam(144), 144);
     }
 
     /// Whether `class` is exempt from the overlap check: a combo box's `h`

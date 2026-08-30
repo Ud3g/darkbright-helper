@@ -484,7 +484,7 @@ pub(super) fn checkbox_custom_draw(cd: &NMCUSTOMDRAW) -> u32 {
     let mut font_regular = None;
     with_window_state(|state| {
         dark = state.dark.get();
-        font_regular = Some(state.font_regular);
+        font_regular = Some(state.font_regular.get());
     });
     if !dark || cd.dwDrawStage != CDDS_PREPAINT {
         return CDRF_DODEFAULT;
@@ -801,7 +801,7 @@ fn paint_combo(hwnd: HWND) {
             bottom: rect.bottom,
         };
         let mut font_regular = None;
-        with_window_state(|state| font_regular = Some(state.font_regular));
+        with_window_state(|state| font_regular = Some(state.font_regular.get()));
         paint_combo_text(
             hdc,
             htheme,
