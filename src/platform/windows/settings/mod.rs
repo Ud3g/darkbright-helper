@@ -33,13 +33,3 @@ mod layout;
 mod window;
 
 pub use window::SettingsSinkImpl;
-// Nothing elsewhere in the crate currently names these through this path —
-// `window` itself reaches them directly, being their defining module — but
-// they were `pub` before this module became a directory, so the path stays
-// live for whatever future caller (or external consumer, since `settings`
-// could widen past `pub(crate)` later) expects it.
-#[allow(unused_imports)]
-pub use window::{
-    WM_APP_SETTINGS_FOCUS, WM_APP_SETTINGS_HK_ERROR, WM_APP_SETTINGS_HK_NOTICE,
-    WM_APP_SETTINGS_REFRESH, WM_APP_SETTINGS_TOPMOST,
-};

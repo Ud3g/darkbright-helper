@@ -12,8 +12,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Controls::{UDACCEL, UDM_SETACCEL, UDM_SETRANGE32};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetDlgItem, SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetWindowPos, WS_BORDER,
-    WS_CAPTION, WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP,
+    CB_GETITEMHEIGHT, CB_SETITEMHEIGHT, GetCursorPos, GetDlgItem, GetWindowRect, SWP_NOACTIVATE,
+    SWP_NOZORDER, SendMessageW, SetWindowPos, WS_BORDER, WS_CAPTION, WS_EX_TOPMOST, WS_GROUP,
+    WS_SYSMENU, WS_TABSTOP,
 };
 
 use crate::error::{BrightnessError, Result};
@@ -538,12 +539,22 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         h: 20,
         text: "Write log file",
     },
+    // y is 3px below ID_LOG_CHECK's: a BUTTON checkbox vertically centers
+    // its label inside its box while an SS_LEFT static top-aligns, so at
+    // matching y/h the two would render with different text baselines.
+    // Measured for Segoe UI 9pt at 96 DPI (GetTextMetricsW): tmHeight=15,
+    // tmAscent=12, tmInternalLeading=3, against the checkbox's 20px-tall
+    // box. DT_VCENTER centers as rectHeight/2 - lineHeight/2 with each half
+    // truncated separately (10 - 7 = 3), not (rectHeight-lineHeight)/2
+    // (which would truncate to 2) — so the checkbox's line box starts 3px
+    // below its own box top, and the static needs the same 3px offset to
+    // land its (top-aligned) line box on the same baseline.
     ControlSpec {
         id: ID_LABEL_LOG_LEVEL,
         class: "STATIC",
         style: STYLE_LABEL,
         x: 170,
-        y: 482,
+        y: 485,
         w: 74,
         h: 20,
         text: "Level:",
@@ -643,12 +654,15 @@ pub(super) fn font_height_for_dpi(point_size: i32, dpi: u32) -> i32 {
 /// arithmetic, testable without a live window.
 #[must_use]
 pub(super) fn dpi_from_wparam(wparam: usize) -> u32 {
-    u32::try_from(wparam & 0xFFFF).unwrap_or(96)
+    // Masked to 0xFFFF, so this always fits a u32 regardless of usize's
+    // width — the conversion cannot fail.
+    u32::try_from(wparam & 0xFFFF).expect("value masked to 0xFFFF always fits in u32")
 }
 
 /// Positions every control in [`CONTROLS`] from its 96-DPI-baseline geometry
-/// scaled to `dpi`. Creation calls this once after all controls exist; a
-/// later DPI-change task reuses it for live relayout.
+/// scaled to `dpi`. Creation calls this once after all controls exist;
+/// `WM_DPICHANGED`'s handler calls it again, with the new DPI, for live
+/// relayout.
 pub(super) fn layout(hwnd: HWND, dpi: u32) {
     for spec in CONTROLS {
         let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(spec.id)) }) else {
@@ -765,6 +779,64 @@ pub(super) fn configure_updowns(hwnd: HWND) {
     );
 }
 
+/// Matches the log-level combo's closed (undropped) face height to the
+/// numeric edit rows' 22-logical-px height. Left alone, the combo's
+/// system-default closed face is 1-2px taller than an edit at the same
+/// font, a visible seam in that row.
+///
+/// `CB_SETITEMHEIGHT`'s index `-1` sets the closed-selection field only —
+/// the dropdown *list* row height (index `0`) is untouched, so the entries
+/// still lay out at their own default height when the list opens.
+///
+/// The relationship between item height and the resulting closed-face
+/// height is fixed chrome (borders/margins) added on top of the item
+/// height, not a ratio, so it is measured from the combo's own
+/// system-default sizing for the font just applied — `default_closed - default_item`
+/// — rather than assumed as a constant: that stays correct across DPI and
+/// visual-style versions instead of encoding today's measured pixel count.
+/// Call once after [`layout`] has positioned both controls (creation, and
+/// again after `WM_DPICHANGED` rebuilds the fonts) so the reference edit's
+/// rect already reflects the current DPI.
+pub(super) fn configure_combo_height(hwnd: HWND) {
+    let (Ok(combo), Ok(edit)) = (
+        unsafe { GetDlgItem(Some(hwnd), i32::from(ID_LOG_LEVEL)) },
+        unsafe { GetDlgItem(Some(hwnd), i32::from(ID_STEP_EDIT)) },
+    ) else {
+        return;
+    };
+
+    let default_item_height =
+        unsafe { SendMessageW(combo, CB_GETITEMHEIGHT, Some(WPARAM(usize::MAX)), None) }.0;
+    let Ok(default_item_height) = i32::try_from(default_item_height) else {
+        return;
+    };
+
+    let mut combo_rect = RECT::default();
+    let mut edit_rect = RECT::default();
+    let (Ok(()), Ok(())) = (
+        unsafe { GetWindowRect(combo, &raw mut combo_rect) },
+        unsafe { GetWindowRect(edit, &raw mut edit_rect) },
+    ) else {
+        return;
+    };
+
+    let default_closed_height = combo_rect.bottom - combo_rect.top;
+    let target_height = edit_rect.bottom - edit_rect.top;
+    let chrome = default_closed_height - default_item_height;
+    // At least 1px: a zero or negative item height would be nonsensical and
+    // CB_SETITEMHEIGHT rejects it outright.
+    let item_height = (target_height - chrome).max(1);
+
+    unsafe {
+        SendMessageW(
+            combo,
+            CB_SETITEMHEIGHT,
+            Some(WPARAM(usize::MAX)),
+            Some(LPARAM(isize::try_from(item_height).unwrap_or(0))),
+        );
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Placement
 // ─────────────────────────────────────────────────────────────────────────────
@@ -772,8 +844,8 @@ pub(super) fn configure_updowns(hwnd: HWND) {
 /// The settings window's outer rect (position + size, in screen
 /// coordinates) plus the DPI it was computed for. A named struct rather
 /// than a same-typed tuple: `x`/`y`/`w`/`h`/`dpi` all being `i32`/`u32`
-/// makes a positional tuple a transposition hazard for whatever calls this
-/// next (the DPI-change task reuses it).
+/// makes a positional tuple a transposition hazard worth avoiding even
+/// though [`compute_placement`] is currently its only call site.
 pub(super) struct Placement {
     pub(super) x: i32,
     pub(super) y: i32,

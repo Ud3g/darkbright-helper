@@ -16,12 +16,15 @@
 //!   custom-drawn via `NM_CUSTOMDRAW` — see [`checkbox_custom_draw`].
 //! - A themed `EDIT` renders white-on-white no matter what
 //!   `WM_CTLCOLOREDIT` returns (visual styles win over `WM_CTLCOLOR*` for a
-//!   themed edit), and repaints its own border on focus changes outside any
-//!   message a subclass can intercept — so dark mode detaches the five
-//!   numeric edits from visual styles outright (see [`apply_edit_theme`]).
-//!   An unthemed edit takes `WM_CTLCOLOREDIT` classically, and the frame
-//!   visual styles would otherwise have drawn is hand-painted on
-//!   `WM_NCPAINT` — see [`install_edit_border_subclass`].
+//!   themed edit's interior colours), so dark mode detaches the five numeric
+//!   edits from visual styles outright (see [`apply_edit_theme`]) — that
+//!   detachment is what lets `WM_CTLCOLOREDIT`'s colours apply at all. The
+//!   frame is a separate, only-partially-solved story:
+//!   [`install_edit_border_subclass`] hand-paints it correctly on
+//!   `WM_NCPAINT`, but comctl32 v6's edit still direct-paints its own
+//!   border on focus transitions and at first show regardless of the
+//!   detachment — see [`apply_edit_theme`]'s doc comment for the measured,
+//!   accepted 1px colour delta that leaves.
 //! - The combo's closed face and the `msctls_updown32` spinner buttons are
 //!   hand-painted outright — see [`install_combo_subclass`] and
 //!   [`install_updown_subclass`].
@@ -112,9 +115,11 @@ pub(super) struct Palette {
 impl Palette {
     /// Creates both brushes. Best-effort, matching the rest of this crate's
     /// GDI resource creation: a failed `CreateSolidBrush` yields an invalid
-    /// handle, logged and otherwise left alone (a `WM_CTLCOLOR*` handler
-    /// returning an invalid brush just falls back to `DefWindowProcW`'s
-    /// default painting for that one control, not a crash).
+    /// (null) handle, logged and otherwise left alone. The child control
+    /// receives that handle straight back as the `WM_CTLCOLOR*` return
+    /// value, and a null brush there means the control simply skips filling
+    /// its background — not a crash, and not a fallback to
+    /// `DefWindowProcW`'s painting (nothing calls that for this case).
     pub(super) fn new() -> Self {
         let window_bg = unsafe { CreateSolidBrush(COLORREF(DARK_WINDOW_BG)) };
         let control_bg = unsafe { CreateSolidBrush(COLORREF(DARK_CONTROL_BG)) };
@@ -162,6 +167,11 @@ pub(super) fn apply_theme(state: &WindowState) {
     let hwnd = state.hwnd;
     let dark = state.dark.get();
 
+    // Unconditional even on the light branch: this only grants the window
+    // *eligibility* for dark mode, it does not paint anything dark itself.
+    // Every actual visual — title bar, buttons, combo, edit, class
+    // background below — takes `dark` and decides light vs. dark itself, so
+    // granting eligibility while `dark` is false has no visible effect.
     theme::allow_dark_mode_for_window(hwnd);
     theme::enable_dark_title_bar(hwnd, dark);
 
@@ -206,15 +216,21 @@ fn apply_window_theme(hwnd: HWND, dark: bool) {
 /// Strips (or restores) the visual-styles theme on one of the five numeric
 /// edits.
 ///
-/// A themed `EDIT` paints its own border from the visual style, and it does
-/// so on its own schedule — a focus change repaints that frame directly,
-/// outside `WM_NCPAINT` — so a hand-painted dark border is overwritten the
-/// first time the field is tabbed into or out of, no matter how often
-/// `WM_NCPAINT` is sent. Passing an empty sub-app *and* sub-id name detaches
-/// the control from visual styles altogether, which removes that internal
-/// painter: the classic `WS_BORDER` frame is then drawn only from
-/// `WM_NCPAINT`, which [`install_edit_border_subclass`]'s subclass owns and
-/// paints in the dark palette.
+/// The strip's real job is the edit's *interior* colours: a themed `EDIT`
+/// ignores whatever `WM_CTLCOLOREDIT` returns and paints white-on-white
+/// regardless, so detaching from visual styles (an empty sub-app *and*
+/// sub-id name) is what lets [`ctlcolor_edit`] take effect at all.
+///
+/// The border is a separate, only-partially-solved problem, recorded here
+/// so a future maintainer does not re-chase it: [`install_edit_border_subclass`]
+/// hand-paints the frame on `WM_NCPAINT` in the correct dark grey (BGR 90,
+/// 90, 90), and that paint is correct immediately after every theme
+/// application. But comctl32 v6's edit control still direct-paints its own
+/// `COLOR_WINDOWFRAME` border (BGR 100, 100, 100) on every focus transition
+/// and at first show, regardless of the detachment above — there is no
+/// message the subclass can intercept ahead of that direct paint. Measured
+/// on hardware: a 1px colour delta between the two greys, judged
+/// imperceptible, and accepted rather than chased further.
 ///
 /// Light mode passes `PCWSTR::null()` for both names — the documented way to
 /// reset a window to its class default theme — putting the ordinary themed
@@ -488,8 +504,8 @@ pub(super) fn ctlcolor_edit(state: &WindowState, wparam: WPARAM) -> Option<LRESU
 /// `WM_CTLCOLORBTN`: dark-only. Checkboxes fully bypass this via
 /// `NM_CUSTOMDRAW`'s `CDRF_SKIPDEFAULT`, and push buttons paint themselves
 /// via `DarkMode_Explorer` regardless of what this returns (confirmed in
-/// the dark-mode spike); implemented anyway for parity with the brief and
-/// as a defensive fallback for any button state that isn't fully custom-drawn.
+/// the dark-mode spike); implemented anyway as a defensive fallback for any
+/// button state that isn't fully custom-drawn.
 pub(super) fn ctlcolor_btn(state: &WindowState, wparam: WPARAM) -> Option<LRESULT> {
     if !state.dark.get() {
         return None;
@@ -1353,6 +1369,16 @@ mod tests {
     #[test]
     fn a_null_lparam_is_not_a_theme_change() {
         assert!(!is_immersive_color_set_change(LPARAM(0)));
+    }
+
+    #[test]
+    fn immersive_color_set_string_is_recognized_as_a_theme_change() {
+        // Same provenance route the message path uses: a raw pointer,
+        // exposed and carried as a plain integer through LPARAM, read back
+        // as a NUL-terminated UTF-16 string on the other side.
+        let text: Vec<u16> = "ImmersiveColorSet\0".encode_utf16().collect();
+        let lparam = LPARAM(text.as_ptr().expose_provenance().cast_signed());
+        assert!(is_immersive_color_set_change(lparam));
     }
 
     // ── arrow_half_width ─────────────────────────────────────────────────

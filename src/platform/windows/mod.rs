@@ -20,7 +20,7 @@ use crate::error::{BrightnessError, Result};
 // load-bearing, not tidiness: everything `pub` in a `pub mod` counts as
 // externally reachable, so rustc reports no unused items inside one. Keeping
 // the surface at its true width is what lets `dead_code` see this crate at all.
-pub mod autostart;
+pub(crate) mod autostart;
 pub(crate) mod config_store;
 pub mod ddc;
 pub(crate) mod ddc_worker;
