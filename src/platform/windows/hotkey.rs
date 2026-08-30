@@ -4,12 +4,14 @@
 //! and register them as global hotkeys using the Windows `RegisterHotKey` API.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::collections::{HashMap, VecDeque};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, LazyLock, Mutex};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey, UnregisterHotKey,
     VIRTUAL_KEY, VK_BACK, VK_DELETE, VK_DOWN, VK_END, VK_ESCAPE, VK_F1, VK_F2, VK_F3, VK_F4, VK_F5,
@@ -26,14 +28,14 @@ pub const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 const HC_ACTION: i32 = 0;
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GetMessageW, HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, RegisterClassW,
-    SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_HOTKEY,
-    WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
+    DispatchMessageW, GetMessageW, HHOOK, HWND_MESSAGE, KBDLLHOOKSTRUCT, MSG, PostThreadMessageW,
+    RegisterClassW, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
+    WM_APP, WM_HOTKEY, WM_KEYDOWN, WM_SYSKEYDOWN, WNDCLASSW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
 
 use crate::core::controller::HotkeyPort;
-use crate::core::state::BrightnessMessage;
+use crate::core::state::{BrightnessMessage, HotkeyOp};
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
 
@@ -52,6 +54,55 @@ pub const BRIGHTNESS_UP_ALT_ID: i32 = 3;
 
 /// Hotkey ID for the secondary (dedicated key) brightness down command.
 pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
+
+/// Thread message posted to wake the hotkey message loop and make it drain
+/// [`HotkeyCommandQueue`]. Delivered via `PostThreadMessageW`, so it always
+/// arrives with `MSG::hwnd` null — that is what distinguishes it from a
+/// window message in `run_message_loop`.
+pub const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// In-Place Rebind Command Queue
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// One in-place operation posted to the hotkey thread.
+///
+/// Carries plain strings (not `ParsedHotkey`) because the queue crosses a
+/// thread boundary and the hotkey thread is the one place equipped to parse
+/// and act on them; a string that fails to parse is reported back as a
+/// failed [`BrightnessMessage::HotkeyRebindResult`] rather than panicking.
+#[derive(Debug, Clone)]
+pub enum HotkeyThreadCommand {
+    /// Re-register with new bindings and/or a new intercept setting.
+    Rebind {
+        /// New brightness-up hotkey string.
+        up: String,
+        /// New brightness-down hotkey string.
+        down: String,
+        /// New low-level-hook interception setting.
+        intercept: bool,
+    },
+    /// Stop delivering brightness hotkeys (capture field has focus).
+    Suspend,
+    /// Resume delivering brightness hotkeys (capture field lost focus).
+    Resume,
+}
+
+/// Queue of pending [`HotkeyThreadCommand`]s, shared between [`HotkeyPortImpl`]
+/// (producer, on the main thread) and the hotkey thread's message loop
+/// (consumer). Commands are drained out of the lock before being acted on,
+/// since applying one can call into Win32 (`RegisterHotKey`,
+/// `SetWindowsHookExW`) and must never do so while holding the mutex.
+pub type HotkeyCommandQueue = Arc<Mutex<VecDeque<HotkeyThreadCommand>>>;
+
+/// Drains every command currently queued, releasing the lock before the
+/// caller acts on any of them.
+fn drain_commands(queue: &HotkeyCommandQueue) -> Vec<HotkeyThreadCommand> {
+    let mut guard = queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    guard.drain(..).collect()
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Low-Level Keyboard Hook Support
@@ -216,6 +267,14 @@ pub struct HotkeyManager {
     sender: Sender<BrightnessMessage>,
     /// Low-level keyboard hook for intercepting brightness keys (optional).
     keyboard_hook: Option<SafeHook>,
+    /// Bindings last successfully applied via [`Self::apply_bindings`].
+    /// `None` before the first successful apply. Restored on a failed
+    /// rebind, and reapplied verbatim on resume.
+    current_up: Option<ParsedHotkey>,
+    /// See [`Self::current_up`].
+    current_down: Option<ParsedHotkey>,
+    /// Intercept setting last successfully applied.
+    current_intercept: bool,
 }
 
 impl HotkeyManager {
@@ -270,6 +329,9 @@ impl HotkeyManager {
             registered_ids: Vec::new(),
             sender,
             keyboard_hook: None,
+            current_up: None,
+            current_down: None,
+            current_intercept: false,
         })
     }
 
@@ -331,10 +393,213 @@ impl HotkeyManager {
         Ok(())
     }
 
+    /// Unregisters every currently registered hotkey id and uninstalls the
+    /// keyboard hook (if installed), leaving nothing registered.
+    ///
+    /// `UnregisterHotKey` failures are logged, not propagated: whatever
+    /// happens, `registered_ids` is cleared and the hook handle is dropped,
+    /// so the manager's own bookkeeping never disagrees with reality even if
+    /// the OS call itself failed (e.g. the id was already gone).
+    fn unregister_all(&mut self) {
+        for id in self.registered_ids.drain(..) {
+            unsafe {
+                if let Err(e) = UnregisterHotKey(Some(self.hwnd), id) {
+                    log::debug!(hotkey_id = id, error:% = e; "UnregisterHotKey failed");
+                }
+            }
+        }
+        // Dropping the hook here (rather than only in HotkeyManager's own
+        // Drop) is what lets suspend/rebind stop key interception without
+        // tearing down the whole manager.
+        self.keyboard_hook = None;
+    }
+
+    /// Registers the dedicated brightness keys (`VK_BRIGHTNESS_UP/DOWN`) as
+    /// plain hotkeys. Non-fatal: another app or the shell may already own
+    /// them, or the low-level hook may already be handling them instead.
+    fn register_secondary_brightness_hotkeys(&mut self) {
+        if let Err(e) =
+            self.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
+        {
+            log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
+        }
+
+        if let Err(e) = self.register_hotkey(
+            BRIGHTNESS_DOWN_ALT_ID,
+            HOT_KEY_MODIFIERS(0),
+            VK_BRIGHTNESS_DOWN,
+        ) {
+            log::debug!(error:% = e; "Secondary brightness down hotkey not registered");
+        }
+    }
+
+    /// Replaces whatever is currently registered with `up`/`down`/`intercept`,
+    /// used for the initial startup registration, every live rebind, and to
+    /// restore the previous bindings after a failed rebind.
+    ///
+    /// Always starts from a clean slate (`unregister_all`), so re-applying
+    /// the same combination the manager already holds can never collide with
+    /// itself — the same thread that owns a `RegisterHotKey` registration is
+    /// the only one allowed to replace it, and it always unregisters first.
+    ///
+    /// Returns `Ok(true)` when `intercept` was requested but the low-level
+    /// hook could not be installed and the dedicated keys fall back to plain
+    /// registration instead (a notice, not a failure); `Ok(false)` when the
+    /// requested mode was applied exactly as asked.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::HotkeyRegistration` if either primary
+    /// combination fails to register. Nothing further is attempted in that
+    /// case: whichever primary registered stays registered, and the caller
+    /// decides whether to try restoring a previous, known-good binding.
+    fn apply_bindings(
+        &mut self,
+        up: ParsedHotkey,
+        down: ParsedHotkey,
+        intercept: bool,
+    ) -> Result<bool> {
+        self.unregister_all();
+
+        self.register_hotkey(BRIGHTNESS_UP_ID, up.modifiers, up.vk_code)
+            .map_err(|e| BrightnessError::hotkey_registration(up.to_string(), e.to_string()))?;
+        self.register_hotkey(BRIGHTNESS_DOWN_ID, down.modifiers, down.vk_code)
+            .map_err(|e| BrightnessError::hotkey_registration(down.to_string(), e.to_string()))?;
+
+        let fallback_active = if intercept {
+            match self.install_brightness_hook() {
+                Ok(()) => {
+                    log::info!("Low-level keyboard hook installed for brightness keys");
+                    false
+                }
+                Err(e) => {
+                    log::warn!(
+                        error:% = e;
+                        "Failed to install brightness key hook; falling back to plain registration"
+                    );
+                    self.register_secondary_brightness_hotkeys();
+                    true
+                }
+            }
+        } else {
+            log::debug!("Brightness key interception disabled by config");
+            self.register_secondary_brightness_hotkeys();
+            false
+        };
+
+        self.current_up = Some(up);
+        self.current_down = Some(down);
+        self.current_intercept = intercept;
+        Ok(fallback_active)
+    }
+
+    /// Unregisters everything (primaries, secondaries, hook) without
+    /// changing `current_up`/`current_down`/`current_intercept`, so a later
+    /// resume knows what to re-apply.
+    fn suspend_all(&mut self) {
+        self.unregister_all();
+    }
+
+    /// Re-applies `current_up`/`current_down`/`current_intercept`, i.e. what
+    /// resume means: undo a suspend without changing the configured bindings.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::ChannelSend` if nothing has ever been
+    /// successfully applied yet (defensive; the thread always applies the
+    /// startup config before the message loop can receive a resume).
+    /// Otherwise propagates whatever [`Self::apply_bindings`] returns.
+    fn resume(&mut self) -> Result<bool> {
+        let (Some(up), Some(down)) = (self.current_up, self.current_down) else {
+            return Err(BrightnessError::ChannelSend);
+        };
+        self.apply_bindings(up, down, self.current_intercept)
+    }
+
+    /// After a failed rebind, tries to put back the bindings that were
+    /// active before the attempt. Returns `None` on success, or `Some`
+    /// describing why the restore itself also failed (there is nothing left
+    /// to fall back to at that point; the caller reports both failures and
+    /// leaves the thread alive with whatever partial state resulted).
+    fn restore_previous_bindings(&mut self) -> Option<String> {
+        let (Some(up), Some(down)) = (self.current_up, self.current_down) else {
+            return Some("no previous bindings to restore".to_string());
+        };
+        self.apply_bindings(up, down, self.current_intercept)
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    /// Sends the ack the controller's [`crate::core::controller::HotkeyPort`]
+    /// side waits for. Errors (channel closed) are dropped: if the main
+    /// thread is gone there is nothing left to notify.
+    fn send_ack(&self, op: HotkeyOp, success: bool, fallback_active: bool, error: Option<String>) {
+        let _ = self.sender.send(BrightnessMessage::HotkeyRebindResult {
+            op,
+            success,
+            fallback_active,
+            error,
+        });
+    }
+
+    /// Applies one posted command and sends its ack.
+    ///
+    /// A `Rebind` with an unparseable string is reported as a failure with
+    /// no restore attempt (nothing was unregistered yet, so there is nothing
+    /// to put back) — this should not happen in practice since the dialog
+    /// validates strings before posting, but the thread must never trust
+    /// that from across a channel.
+    fn handle_command(&mut self, command: HotkeyThreadCommand) {
+        match command {
+            HotkeyThreadCommand::Rebind {
+                up,
+                down,
+                intercept,
+            } => {
+                let parsed = parse_hotkey(&up).and_then(|u| parse_hotkey(&down).map(|d| (u, d)));
+                match parsed {
+                    Ok((up, down)) => match self.apply_bindings(up, down, intercept) {
+                        Ok(fallback_active) => {
+                            self.send_ack(HotkeyOp::Rebind, true, fallback_active, None);
+                        }
+                        Err(e) => {
+                            let message = match self.restore_previous_bindings() {
+                                Some(restore_err) => {
+                                    format!("{e}; restore also failed: {restore_err}")
+                                }
+                                None => e.to_string(),
+                            };
+                            self.send_ack(HotkeyOp::Rebind, false, false, Some(message));
+                        }
+                    },
+                    Err(e) => {
+                        self.send_ack(HotkeyOp::Rebind, false, false, Some(e.to_string()));
+                    }
+                }
+            }
+            HotkeyThreadCommand::Suspend => {
+                self.suspend_all();
+                self.send_ack(HotkeyOp::Suspend, true, false, None);
+            }
+            HotkeyThreadCommand::Resume => match self.resume() {
+                Ok(fallback_active) => {
+                    self.send_ack(HotkeyOp::Resume, true, fallback_active, None);
+                }
+                Err(e) => {
+                    self.send_ack(HotkeyOp::Resume, false, false, Some(e.to_string()));
+                }
+            },
+        }
+    }
+
     /// Runs the message loop to process hotkey events.
     ///
     /// This method blocks until the message loop is terminated (e.g. by `WM_QUIT`).
-    pub fn run_message_loop(&self) {
+    /// `queue` carries in-place rebind/suspend/resume commands, woken by
+    /// [`WM_APP_HOTKEY_WAKE`] — recognizable among the loop's other messages
+    /// because a thread-posted message always arrives with a null `hwnd`,
+    /// unlike the window messages `GetMessageW` also returns here.
+    pub fn run_message_loop(&mut self, queue: &HotkeyCommandQueue) {
         let mut msg = MSG::default();
         unsafe {
             // GetMessageW returns:
@@ -378,6 +643,10 @@ impl HotkeyManager {
                             .sender
                             .send(BrightnessMessage::AdjustStep { direction });
                     }
+                } else if msg.hwnd.is_invalid() && msg.message == WM_APP_HOTKEY_WAKE {
+                    for command in drain_commands(queue) {
+                        self.handle_command(command);
+                    }
                 }
 
                 let _ = TranslateMessage(&raw const msg);
@@ -389,11 +658,7 @@ impl HotkeyManager {
 
 impl Drop for HotkeyManager {
     fn drop(&mut self) {
-        for &id in &self.registered_ids {
-            unsafe {
-                let _ = UnregisterHotKey(Some(self.hwnd), id);
-            }
-        }
+        self.unregister_all();
         if !self.hwnd.is_invalid() {
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
@@ -448,35 +713,161 @@ impl std::fmt::Display for ParsedHotkey {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HotkeyPort Seam (stub)
+// Hotkey Thread Entry Point
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Placeholder [`HotkeyPort`]: posting a rebind/suspend/resume to the hotkey
-/// thread is not wired up yet, so every call logs and succeeds trivially.
+/// Body of the dedicated hotkey thread: creates the manager, applies the
+/// startup bindings, signals readiness, then runs the message loop until
+/// `WM_QUIT` or a fatal `GetMessageW` error.
 ///
-/// A later change replaces this unit struct with one carrying the hotkey
-/// thread's id and a command queue.
-pub struct HotkeyPortImpl;
+/// `up`/`down`/`intercept` are the bindings to start with — the startup
+/// config on first spawn, or [`crate::core::controller::Controller::hotkey_config`]
+/// on a supervised respawn, so a respawn after a live rebind re-registers
+/// what is actually configured now rather than reverting to stale bindings.
+///
+/// `thread_id` is populated with `GetCurrentThreadId()` right before the
+/// ready signal: `RegisterHotKey`/`WM_HOTKEY` delivery is tied to the
+/// registering thread, so [`HotkeyPortImpl`] needs this thread's id to
+/// address it, and must never see a non-zero id before this thread is
+/// actually ready to receive `WM_APP_HOTKEY_WAKE`. It is reset to 0 when the
+/// loop exits, so a post to a dead thread fails cleanly instead of silently
+/// vanishing.
+///
+/// A registration failure here is fatal — reported once through `ready_tx`,
+/// exactly like every other constructor/registration failure — and the
+/// thread exits without ever running the loop.
+// Every non-Copy parameter is owned rather than borrowed on purpose: this
+// is the spawned thread's entry point (`thread::spawn(move || run_hotkey_thread(...))`),
+// so the caller hands over the shared cells and the startup values outright
+// instead of keeping borrows alive across the thread boundary, even though
+// the body itself only ever reads through most of them afterward.
+#[allow(clippy::needless_pass_by_value)]
+pub fn run_hotkey_thread(
+    up: String,
+    down: String,
+    intercept: bool,
+    tx: Sender<BrightnessMessage>,
+    thread_id: Arc<AtomicU32>,
+    queue: HotkeyCommandQueue,
+    ready_tx: Sender<Result<()>>,
+) {
+    let up_hotkey = match parse_hotkey(&up) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = ready_tx.send(Err(BrightnessError::config_invalid(
+                "hotkeys.brightness_up",
+                e.to_string(),
+            )));
+            return;
+        }
+    };
+    let down_hotkey = match parse_hotkey(&down) {
+        Ok(h) => h,
+        Err(e) => {
+            let _ = ready_tx.send(Err(BrightnessError::config_invalid(
+                "hotkeys.brightness_down",
+                e.to_string(),
+            )));
+            return;
+        }
+    };
+
+    let mut manager = match HotkeyManager::new(tx) {
+        Ok(m) => m,
+        Err(e) => {
+            let _ = ready_tx.send(Err(e));
+            return;
+        }
+    };
+
+    if let Err(e) = manager.apply_bindings(up_hotkey, down_hotkey, intercept) {
+        let _ = ready_tx.send(Err(e));
+        return;
+    }
+
+    // Safety: no preconditions; this reads the calling thread's own id.
+    thread_id.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+
+    let _ = ready_tx.send(Ok(()));
+
+    manager.run_message_loop(&queue);
+
+    thread_id.store(0, Ordering::SeqCst);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HotkeyPort Seam
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// [`HotkeyPort`] backed by the real hotkey thread: posts a command to
+/// [`HotkeyCommandQueue`] and wakes the thread's message loop with
+/// `PostThreadMessageW(WM_APP_HOTKEY_WAKE)`. The result of the operation
+/// itself always arrives later, asynchronously, as
+/// `BrightnessMessage::HotkeyRebindResult` — a successful post here only
+/// means the command was queued and the thread was woken.
+pub struct HotkeyPortImpl {
+    /// The hotkey thread's id, or 0 before it is ready / after it exits.
+    /// Shared with [`run_hotkey_thread`], which is the only writer.
+    thread_id: Arc<AtomicU32>,
+    /// Shared with the hotkey thread's message loop, which is the only
+    /// consumer (drains it after waking on `WM_APP_HOTKEY_WAKE`).
+    queue: HotkeyCommandQueue,
+}
+
+impl HotkeyPortImpl {
+    /// Creates a port over the given thread-id cell and command queue. Both
+    /// are constructed once at startup and shared with every hotkey thread
+    /// spawn (initial and every supervised respawn), so a rebind posted
+    /// mid-respawn either reaches the new thread or fails cleanly rather
+    /// than talking to a queue nobody drains anymore.
+    #[must_use]
+    pub const fn new(thread_id: Arc<AtomicU32>, queue: HotkeyCommandQueue) -> Self {
+        Self { thread_id, queue }
+    }
+
+    /// Queues `command` and wakes the hotkey thread.
+    ///
+    /// # Errors
+    ///
+    /// Returns `BrightnessError::ChannelSend` if no thread is currently
+    /// ready (id is 0) or the queue's lock is poisoned, and
+    /// `BrightnessError::WindowsApi` if `PostThreadMessageW` itself fails
+    /// (e.g. the thread died between the id check and the post).
+    fn post(&mut self, command: HotkeyThreadCommand) -> Result<()> {
+        let tid = self.thread_id.load(Ordering::SeqCst);
+        if tid == 0 {
+            return Err(BrightnessError::ChannelSend);
+        }
+
+        match self.queue.lock() {
+            Ok(mut guard) => guard.push_back(command),
+            Err(_) => return Err(BrightnessError::ChannelSend),
+        }
+
+        unsafe {
+            PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)).map_err(|e| {
+                BrightnessError::windows_api("PostThreadMessageW", e.code().0.cast_unsigned())
+            })?;
+        }
+        Ok(())
+    }
+}
 
 impl HotkeyPort for HotkeyPortImpl {
     fn rebind(&mut self, up: &str, down: &str, intercept: bool) -> Result<()> {
-        log::debug!(
-            up = up,
-            down = down,
-            intercept = intercept;
-            "HotkeyPort::rebind (stub, no hotkey thread wiring yet)"
-        );
-        Ok(())
+        self.post(HotkeyThreadCommand::Rebind {
+            up: up.to_string(),
+            down: down.to_string(),
+            intercept,
+        })
     }
 
     fn suspend(&mut self) -> Result<()> {
-        log::debug!("HotkeyPort::suspend (stub, no hotkey thread wiring yet)");
-        Ok(())
+        self.post(HotkeyThreadCommand::Suspend)
     }
 
     fn resume(&mut self) -> Result<()> {
-        log::debug!("HotkeyPort::resume (stub, no hotkey thread wiring yet)");
-        Ok(())
+        self.post(HotkeyThreadCommand::Resume)
     }
 }
 
@@ -869,5 +1260,79 @@ mod tests {
         assert!(bindings_conflict("Ctrl+B", "ctrl+b"));
         assert!(!bindings_conflict("Ctrl+Shift+Up", "Ctrl+Shift+Down"));
         assert!(!bindings_conflict("garbage", "Ctrl+Shift+Up"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // In-place rebind machinery: pure/host-testable parts only. Anything
+    // that needs a live message loop (apply_bindings, suspend/resume against
+    // a real HotkeyManager) is exercised manually — see the task report.
+    // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn wake_message_id_does_not_collide_with_wm_hotkey() {
+        assert_ne!(WM_APP_HOTKEY_WAKE, WM_HOTKEY);
+    }
+
+    #[test]
+    fn drain_commands_removes_everything_in_fifo_order() {
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        queue
+            .lock()
+            .unwrap()
+            .push_back(HotkeyThreadCommand::Suspend);
+        queue
+            .lock()
+            .unwrap()
+            .push_back(HotkeyThreadCommand::Rebind {
+                up: "Ctrl+Up".to_string(),
+                down: "Ctrl+Down".to_string(),
+                intercept: true,
+            });
+        queue.lock().unwrap().push_back(HotkeyThreadCommand::Resume);
+
+        let drained = drain_commands(&queue);
+
+        assert_eq!(drained.len(), 3);
+        assert!(matches!(drained[0], HotkeyThreadCommand::Suspend));
+        assert!(matches!(drained[1], HotkeyThreadCommand::Rebind { .. }));
+        assert!(matches!(drained[2], HotkeyThreadCommand::Resume));
+        assert!(
+            queue.lock().unwrap().is_empty(),
+            "drain must remove everything it returns"
+        );
+    }
+
+    #[test]
+    fn drain_commands_on_empty_queue_returns_empty_vec() {
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        assert!(drain_commands(&queue).is_empty());
+    }
+
+    #[test]
+    fn hotkey_port_post_fails_when_no_thread_is_ready() {
+        // thread_id == 0 means "no thread ready" (startup not finished, or
+        // the thread has already exited); post() must reject the command
+        // without touching the queue or calling PostThreadMessageW at all.
+        let thread_id = Arc::new(AtomicU32::new(0));
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let mut port = HotkeyPortImpl::new(thread_id, queue.clone());
+
+        assert!(port.suspend().is_err());
+        assert!(
+            queue.lock().unwrap().is_empty(),
+            "a rejected post must not leave a command behind for a later thread to pick up"
+        );
+    }
+
+    #[test]
+    fn hotkey_port_post_fails_for_a_thread_id_that_does_not_exist() {
+        // A thread id that was never issued by the OS: PostThreadMessageW
+        // must fail with ERROR_INVALID_THREAD_ID, and post() must surface
+        // that as an Err rather than silently succeeding.
+        let thread_id = Arc::new(AtomicU32::new(u32::MAX));
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let mut port = HotkeyPortImpl::new(thread_id, queue);
+
+        assert!(port.resume().is_err());
     }
 }
