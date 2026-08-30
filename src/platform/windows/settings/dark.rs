@@ -16,10 +16,12 @@
 //!   custom-drawn via `NM_CUSTOMDRAW` — see [`checkbox_custom_draw`].
 //! - A themed `EDIT` renders white-on-white no matter what
 //!   `WM_CTLCOLOREDIT` returns (visual styles win over `WM_CTLCOLOR*` for a
-//!   themed edit), so the five numeric edits are never themed at all; an
-//!   *unthemed* edit takes `WM_CTLCOLOREDIT` correctly, and the sunken
-//!   frame visual styles would otherwise have drawn is hand-painted back in
-//!   on `WM_NCPAINT` — see [`install_edit_border_subclass`].
+//!   themed edit), and repaints its own border on focus changes outside any
+//!   message a subclass can intercept — so dark mode detaches the five
+//!   numeric edits from visual styles outright (see [`apply_edit_theme`]).
+//!   An unthemed edit takes `WM_CTLCOLOREDIT` classically, and the frame
+//!   visual styles would otherwise have drawn is hand-painted on
+//!   `WM_NCPAINT` — see [`install_edit_border_subclass`].
 //! - The combo's closed face and the `msctls_updown32` spinner buttons are
 //!   hand-painted outright — see [`install_combo_subclass`] and
 //!   [`install_updown_subclass`].
@@ -171,10 +173,10 @@ pub(super) fn apply_theme(state: &WindowState) {
             // Checkboxes and push buttons; SysLink scrollbars/chrome.
             "BUTTON" | "SysLink" => apply_window_theme(child, dark),
             "COMBOBOX" => apply_combo_theme(child, dark),
-            // EDIT is deliberately never themed — see the module doc
-            // comment. msctls_updown32 is fully hand-painted by its own
-            // subclass, so no visual-style association is needed either.
-            // HOTKEY_CAPTURE and STATIC have no theme name to apply.
+            "EDIT" => apply_edit_theme(child, dark),
+            // msctls_updown32 is fully hand-painted by its own subclass, so
+            // no visual-style association is needed. HOTKEY_CAPTURE and
+            // STATIC have no theme name to apply.
             _ => {}
         }
     }
@@ -198,6 +200,33 @@ fn apply_window_theme(hwnd: HWND, dark: bool) {
     };
     unsafe {
         let _ = SetWindowTheme(hwnd, name, PCWSTR::null());
+    }
+}
+
+/// Strips (or restores) the visual-styles theme on one of the five numeric
+/// edits.
+///
+/// A themed `EDIT` paints its own border from the visual style, and it does
+/// so on its own schedule — a focus change repaints that frame directly,
+/// outside `WM_NCPAINT` — so a hand-painted dark border is overwritten the
+/// first time the field is tabbed into or out of, no matter how often
+/// `WM_NCPAINT` is sent. Passing an empty sub-app *and* sub-id name detaches
+/// the control from visual styles altogether, which removes that internal
+/// painter: the classic `WS_BORDER` frame is then drawn only from
+/// `WM_NCPAINT`, which [`install_edit_border_subclass`]'s subclass owns and
+/// paints in the dark palette.
+///
+/// Light mode passes `PCWSTR::null()` for both names — the documented way to
+/// reset a window to its class default theme — putting the ordinary themed
+/// edge back.
+fn apply_edit_theme(hwnd: HWND, dark: bool) {
+    let (sub_app, sub_id) = if dark {
+        (w!(""), w!(""))
+    } else {
+        (PCWSTR::null(), PCWSTR::null())
+    };
+    unsafe {
+        let _ = SetWindowTheme(hwnd, sub_app, sub_id);
     }
 }
 
