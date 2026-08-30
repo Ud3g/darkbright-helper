@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use crate::core::brightness::calculate_adjustment;
 use crate::core::config::{Config, SettingsDirty};
 use crate::core::reconcile::{
-    HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REFRESH_TIMEOUT, RefreshTracker, RespawnOutcome,
-    SAVE_DEBOUNCE, SET_TIMEOUT,
+    HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REBIND_TIMEOUT, REFRESH_TIMEOUT, RefreshTracker,
+    RespawnOutcome, SAVE_DEBOUNCE, SET_TIMEOUT,
 };
 use crate::core::state::{
     BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, HotkeyOp, MonitorId, MonitorState,
@@ -248,18 +248,15 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     osd_monitor: Option<MonitorId>,
     /// Settings dialog window.
     settings: Set,
-    // The in-place hotkey rebind/suspend/resume flow (and the two fields
-    // below it) is wired into message handling by the controller logic that
-    // lands with that work; until then it is only ever set, never read.
     /// Hotkey thread's in-place rebind/suspend/resume port.
-    #[allow(dead_code)]
     hotkey_port: Hk,
     /// Config persistence.
     store: Store,
     /// Whether the settings window is currently open.
     settings_open: bool,
     /// Whether the hotkey capture field is currently capturing (interception
-    /// suspended).
+    /// suspended). Set and read by the capture-focus handling that lands
+    /// separately from the rebind flow; always `false` until then.
     #[allow(dead_code)]
     capture_active: bool,
     /// Settings fields changed since the last save.
@@ -272,7 +269,6 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     consecutive_save_failures: u32,
     /// The in-place hotkey operation currently awaiting its ack, and when it
     /// was posted (for the ack deadline).
-    #[allow(dead_code)]
     pending_hotkey_op: Option<(HotkeyOp, Instant)>,
     /// True while a hotkey rebind/suspend/resume has failed or timed out;
     /// cleared by the next successful ack.
@@ -509,32 +505,166 @@ where
                 self.handle_restore_defaults(now);
                 return;
             }
-            // Editing a hotkey binding or the intercept flag has to round-trip
+            // Editing a hotkey binding or the intercept flag round-trips
             // through the hotkey thread (rebind, wait for the ack, revert on
-            // failure) before it can be applied and marked dirty; that flow
-            // lands separately from the simple settings handled here.
-            SettingChange::HotkeyUp(_)
-            | SettingChange::HotkeyDown(_)
-            | SettingChange::InterceptBrightnessKeys(_) => {
-                log::debug!("Hotkey setting change received; rebind flow not wired up yet");
+            // failure) instead of being marked dirty unconditionally here.
+            SettingChange::HotkeyUp(up) => {
+                self.dirty.hotkey_up = true;
+                let down = self.config.hotkeys.brightness_down.clone();
+                let intercept = self.config.hotkeys.intercept_brightness_keys;
+                self.apply_hotkey_change(up, down, intercept, now);
+                return;
+            }
+            SettingChange::HotkeyDown(down) => {
+                self.dirty.hotkey_down = true;
+                let up = self.config.hotkeys.brightness_up.clone();
+                let intercept = self.config.hotkeys.intercept_brightness_keys;
+                self.apply_hotkey_change(up, down, intercept, now);
+                return;
+            }
+            SettingChange::InterceptBrightnessKeys(intercept) => {
+                self.dirty.intercept = true;
+                let up = self.config.hotkeys.brightness_up.clone();
+                let down = self.config.hotkeys.brightness_down.clone();
+                self.apply_hotkey_change(up, down, intercept, now);
                 return;
             }
         }
         self.pending_save_since = Some(now);
     }
 
+    /// Applies one hotkey-binding or intercept-flag change from the dialog:
+    /// stashes the live triple for a possible revert, writes the new values
+    /// into the config, arms the debounced save, and posts the rebind. The
+    /// caller has already marked the one dirty field that changed.
+    fn apply_hotkey_change(&mut self, up: String, down: String, intercept: bool, now: Instant) {
+        self.prev_hotkeys = Some((
+            self.config.hotkeys.brightness_up.clone(),
+            self.config.hotkeys.brightness_down.clone(),
+            self.config.hotkeys.intercept_brightness_keys,
+        ));
+        self.config.hotkeys.brightness_up = up;
+        self.config.hotkeys.brightness_down = down;
+        self.config.hotkeys.intercept_brightness_keys = intercept;
+        self.pending_save_since = Some(now);
+        self.post_hotkey_rebind(now);
+    }
+
+    /// Posts the live hotkey thread's bindings/intercept flag to match the
+    /// config just applied. Errors mean the post itself never reached the
+    /// thread (queue gone / thread dead), so no ack is ever coming — the
+    /// revert to `prev_hotkeys` happens synchronously right here rather than
+    /// waiting on one.
+    fn post_hotkey_rebind(&mut self, now: Instant) {
+        self.pending_hotkey_op = Some((HotkeyOp::Rebind, now));
+        let up = self.config.hotkeys.brightness_up.clone();
+        let down = self.config.hotkeys.brightness_down.clone();
+        let intercept = self.config.hotkeys.intercept_brightness_keys;
+
+        if self.hotkey_port.rebind(&up, &down, intercept).is_err() {
+            log::error!("Failed to post hotkey rebind; hotkey thread unreachable");
+            self.pending_hotkey_op = None;
+            if let Some((prev_up, prev_down, prev_intercept)) = self.prev_hotkeys.take() {
+                self.config.hotkeys.brightness_up = prev_up;
+                self.config.hotkeys.brightness_down = prev_down;
+                self.config.hotkeys.intercept_brightness_keys = prev_intercept;
+            }
+            self.dirty.hotkey_up = false;
+            self.dirty.hotkey_down = false;
+            self.dirty.intercept = false;
+            self.hotkeys_degraded = true;
+            self.settings
+                .hotkey_error("Could not reach the hotkey thread");
+            let snapshot = self.settings_snapshot();
+            self.settings.refresh(&snapshot);
+        }
+    }
+
+    /// Handles an ack, or a deadline expiry treated exactly like one, for the
+    /// hotkey thread's most recent posted operation.
+    ///
+    /// A successful rebind is a recovery signal: it clears `hotkeys_degraded`
+    /// even if an earlier attempt had set it, because a working binding right
+    /// now is what "recoverable" means for this warning. A hook-install
+    /// fallback is reported as a notice, not an error — the rebind itself
+    /// still succeeded. A failure reverts the config if the op was a rebind
+    /// (the only op with a config change to undo) and re-arms the save so
+    /// the revert reaches disk even when the optimistic value was already
+    /// written there.
+    fn handle_hotkey_rebind_result(
+        &mut self,
+        op: HotkeyOp,
+        success: bool,
+        fallback_active: bool,
+        error: Option<String>,
+        now: Instant,
+    ) {
+        self.pending_hotkey_op = None;
+
+        if success {
+            self.prev_hotkeys = None;
+            self.hotkeys_degraded = false;
+            if fallback_active {
+                self.settings.hotkey_notice(
+                    "Brightness-key interception unavailable; using plain key registration",
+                );
+            }
+            return;
+        }
+
+        self.fail_hotkey_op(
+            op,
+            &error.unwrap_or_else(|| "unknown error".to_string()),
+            now,
+        );
+    }
+
+    /// Reverts a failed rebind's config change (if one is pending), marks the
+    /// hotkey subsystem degraded, and tells the dialog. Shared by the ack
+    /// path and the ack-timeout watchdog.
+    fn fail_hotkey_op(&mut self, op: HotkeyOp, message: &str, now: Instant) {
+        if op == HotkeyOp::Rebind
+            && let Some((up, down, intercept)) = self.prev_hotkeys.take()
+        {
+            self.config.hotkeys.brightness_up = up;
+            self.config.hotkeys.brightness_down = down;
+            self.config.hotkeys.intercept_brightness_keys = intercept;
+            self.dirty.hotkey_up = true;
+            self.dirty.hotkey_down = true;
+            self.dirty.intercept = true;
+            self.pending_save_since = Some(now);
+        }
+        self.hotkeys_degraded = true;
+        self.settings.hotkey_error(message);
+        let snapshot = self.settings_snapshot();
+        self.settings.refresh(&snapshot);
+    }
+
+    /// Returns the currently live hotkey bindings and intercept setting.
+    ///
+    /// Used by the respawn path so a freshly spawned hotkey thread
+    /// re-registers what is actually configured right now, not the bindings
+    /// the process started with.
+    #[must_use]
+    pub fn hotkey_config(&self) -> (String, String, bool) {
+        (
+            self.config.hotkeys.brightness_up.clone(),
+            self.config.hotkeys.brightness_down.clone(),
+            self.config.hotkeys.intercept_brightness_keys,
+        )
+    }
+
     /// Resets the ten settings-dialog fields to their defaults and schedules
     /// a save; also refreshes the open dialog so it shows the reset values.
     ///
-    /// Rebinding the live hotkey thread when the reset changed the bindings
-    /// or the intercept flag is not implemented here yet — only the config
-    /// and dialog reflect the reset immediately; the live bindings catch up
-    /// on the next restart until that flow lands.
+    /// Rebinds the live hotkey thread too, but only when the reset actually
+    /// changed a binding or the intercept flag — an unconditional rebind
+    /// would post a no-op round-trip (and a real chance of the ack-timeout
+    /// path firing) on every restore that never touched hotkeys at all.
     fn handle_restore_defaults(&mut self, now: Instant) {
         let up_before = self.config.hotkeys.brightness_up.clone();
         let down_before = self.config.hotkeys.brightness_down.clone();
         let intercept_before = self.config.hotkeys.intercept_brightness_keys;
-        self.prev_hotkeys = Some((up_before, down_before, intercept_before));
 
         self.config.restore_defaults();
 
@@ -555,16 +685,12 @@ where
         let snapshot = self.settings_snapshot();
         self.settings.refresh(&snapshot);
 
-        let hotkeys_changed = self
-            .prev_hotkeys
-            .as_ref()
-            .is_some_and(|(up, down, intercept)| {
-                *up != self.config.hotkeys.brightness_up
-                    || *down != self.config.hotkeys.brightness_down
-                    || *intercept != self.config.hotkeys.intercept_brightness_keys
-            });
+        let hotkeys_changed = up_before != self.config.hotkeys.brightness_up
+            || down_before != self.config.hotkeys.brightness_down
+            || intercept_before != self.config.hotkeys.intercept_brightness_keys;
         if hotkeys_changed {
-            log::debug!("Restore defaults changed hotkey bindings; live rebind not wired up yet");
+            self.prev_hotkeys = Some((up_before, down_before, intercept_before));
+            self.post_hotkey_rebind(now);
         }
     }
 
@@ -1154,6 +1280,14 @@ where
             log::error!("DDC refresh timed out with no result; aborting");
             self.refresh.abort();
         }
+
+        if let Some((op, since)) = self.pending_hotkey_op
+            && now.saturating_duration_since(since) >= REBIND_TIMEOUT
+        {
+            log::error!(op:? = op; "Hotkey thread did not respond to posted operation");
+            self.pending_hotkey_op = None;
+            self.fail_hotkey_op(op, "Hotkey thread did not respond", now);
+        }
     }
 
     /// Force-reverts every pending set (used after a worker respawn).
@@ -1218,12 +1352,18 @@ where
                 self.settings_open = false;
                 self.flush_pending_settings(now);
             }
-            // The hotkey-thread ack and capture-focus messages are only
-            // meaningful once the in-place rebind flow exists; that lands
-            // separately from the simple-settings handling here.
-            BrightnessMessage::HotkeyRebindResult { .. }
-            | BrightnessMessage::HotkeyCaptureStarted
-            | BrightnessMessage::HotkeyCaptureEnded => {
+            BrightnessMessage::HotkeyRebindResult {
+                op,
+                success,
+                fallback_active,
+                error,
+            } => {
+                self.handle_hotkey_rebind_result(op, success, fallback_active, error, now);
+            }
+            // The capture-focus messages are only meaningful once the
+            // suspend/resume-during-capture flow exists; that lands
+            // separately from the rebind flow handled here.
+            BrightnessMessage::HotkeyCaptureStarted | BrightnessMessage::HotkeyCaptureEnded => {
                 log::debug!("Settings-dialog message received; no handling wired up yet");
             }
             BrightnessMessage::TrayRequestQuit => {
@@ -2897,7 +3037,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "rebind flow lands next"]
     fn restore_defaults_rebinds_hotkeys_when_bindings_changed() {
         let base = Instant::now();
         let mut c = test_controller(base);
@@ -2919,6 +3058,326 @@ mod tests {
                 false
             )),
             "changed hotkeys must be rebound in place, not just saved"
+        );
+    }
+
+    #[test]
+    fn restore_defaults_does_not_rebind_hotkeys_when_unchanged() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        // Hotkeys are already at their defaults; only an unrelated field changes.
+        c.config.brightness.step_percent = 30;
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+            base,
+        )
+        .unwrap();
+
+        assert!(
+            c.hotkey_port.rebinds.is_empty(),
+            "unchanged hotkeys must not trigger a live rebind"
+        );
+        assert!(c.prev_hotkeys.is_none());
+    }
+
+    #[test]
+    fn restore_defaults_rebind_failure_reverts_only_hotkey_fields() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.hotkeys.brightness_up = "Ctrl+Alt+Up".to_string();
+        c.config.hotkeys.brightness_down = "Ctrl+Alt+Down".to_string();
+        c.config.hotkeys.intercept_brightness_keys = true;
+        c.config.brightness.step_percent = 30;
+        c.hotkey_port.fail_next = true;
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.config.hotkeys.brightness_up, "Ctrl+Alt+Up",
+            "hotkeys revert to what was live when the post fails"
+        );
+        assert_eq!(c.config.hotkeys.brightness_down, "Ctrl+Alt+Down");
+        assert!(c.config.hotkeys.intercept_brightness_keys);
+        assert_eq!(
+            c.config.brightness.step_percent, DEFAULT_STEP_PERCENT,
+            "the unrelated reset still applies"
+        );
+        assert!(!c.dirty.hotkey_up);
+        assert!(!c.dirty.hotkey_down);
+        assert!(!c.dirty.intercept);
+        assert!(
+            c.dirty.step_percent,
+            "the unrelated reset stays dirty and still saves"
+        );
+        assert!(c.hotkeys_degraded);
+        assert_eq!(
+            c.settings.errors,
+            vec!["Could not reach the hotkey thread".to_string()]
+        );
+    }
+
+    // ── Hotkey rebind flow ──────────────────────────────────────────────
+
+    #[test]
+    fn setting_changed_hotkey_up_stashes_prev_and_posts_a_rebind() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(c.config.hotkeys.brightness_up, "Alt+Up");
+        assert!(c.dirty.hotkey_up);
+        assert_eq!(c.pending_save_since, Some(base));
+        assert_eq!(c.pending_hotkey_op, Some((HotkeyOp::Rebind, base)));
+        assert_eq!(
+            c.hotkey_port.rebinds,
+            vec![("Alt+Up".to_string(), DEFAULT_HOTKEY_DOWN.to_string(), false)]
+        );
+        assert_eq!(
+            c.prev_hotkeys,
+            Some((
+                DEFAULT_HOTKEY_UP.to_string(),
+                DEFAULT_HOTKEY_DOWN.to_string(),
+                false
+            ))
+        );
+    }
+
+    #[test]
+    fn setting_changed_hotkey_reverts_synchronously_when_the_post_itself_fails() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.hotkey_port.fail_next = true;
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.config.hotkeys.brightness_up, DEFAULT_HOTKEY_UP,
+            "reverted because the post never reached the hotkey thread"
+        );
+        assert!(!c.dirty.hotkey_up);
+        assert!(!c.dirty.hotkey_down);
+        assert!(!c.dirty.intercept);
+        assert!(c.hotkeys_degraded);
+        assert!(c.prev_hotkeys.is_none());
+        assert!(c.pending_hotkey_op.is_none());
+        assert_eq!(
+            c.settings.errors,
+            vec!["Could not reach the hotkey thread".to_string()]
+        );
+        assert_eq!(c.settings.refreshed.len(), 1);
+    }
+
+    #[test]
+    fn hotkey_rebind_result_success_clears_pending_and_prev_hotkeys() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+        assert!(c.pending_hotkey_op.is_some());
+        assert!(c.prev_hotkeys.is_some());
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base + Duration::from_millis(50),
+        )
+        .unwrap();
+
+        assert!(c.pending_hotkey_op.is_none());
+        assert!(c.prev_hotkeys.is_none());
+        assert!(!c.hotkeys_degraded);
+        assert!(c.settings.notices.is_empty());
+    }
+
+    #[test]
+    fn hotkey_rebind_result_fallback_active_shows_a_notice() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::InterceptBrightnessKeys(true)),
+            base,
+        )
+        .unwrap();
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: true,
+                error: None,
+            },
+            base + Duration::from_millis(50),
+        )
+        .unwrap();
+
+        assert!(c.pending_hotkey_op.is_none());
+        assert!(c.prev_hotkeys.is_none());
+        assert!(!c.hotkeys_degraded, "the rebind still succeeded");
+        assert_eq!(
+            c.settings.notices,
+            vec![
+                "Brightness-key interception unavailable; using plain key registration".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn hotkey_rebind_result_failure_reverts_and_reschedules_the_save() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        // The debounced save already fired with the (wrong) optimistic value
+        // before the NAK arrives.
+        c.check_pending_save(base + SAVE_DEBOUNCE);
+        assert_eq!(c.store.saves.len(), 1);
+        assert_eq!(c.dirty, SettingsDirty::default());
+        assert_eq!(c.pending_save_since, None);
+
+        let nak_time = base + SAVE_DEBOUNCE + Duration::from_millis(100);
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: false,
+                fallback_active: false,
+                error: Some("device busy".to_string()),
+            },
+            nak_time,
+        )
+        .unwrap();
+
+        assert_eq!(c.config.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
+        assert!(c.dirty.hotkey_up, "the revert must be re-saved");
+        assert!(c.hotkeys_degraded);
+        assert_eq!(c.settings.errors, vec!["device busy".to_string()]);
+        assert_eq!(c.settings.refreshed.len(), 1);
+        assert_eq!(c.pending_save_since, Some(nak_time));
+        assert!(c.prev_hotkeys.is_none());
+        assert!(c.pending_hotkey_op.is_none());
+
+        // The reverted value actually reaches disk.
+        c.check_pending_save(nak_time + SAVE_DEBOUNCE);
+        assert_eq!(c.store.saves.len(), 2);
+        assert_eq!(c.store.saves[1].0.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
+    }
+
+    #[test]
+    fn pending_hotkey_op_ack_timeout_reverts_like_a_failure() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        let past_deadline = base + REBIND_TIMEOUT + Duration::from_millis(1);
+        c.supervise_and_watchdog(past_deadline);
+
+        assert_eq!(c.config.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
+        assert!(c.hotkeys_degraded);
+        assert!(c.pending_hotkey_op.is_none());
+        assert_eq!(
+            c.settings.errors,
+            vec!["Hotkey thread did not respond".to_string()]
+        );
+    }
+
+    #[test]
+    fn pending_hotkey_op_within_the_deadline_is_left_alone() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        let just_under_deadline = REBIND_TIMEOUT
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        c.supervise_and_watchdog(base + just_under_deadline);
+
+        assert_eq!(c.config.hotkeys.brightness_up, "Alt+Up");
+        assert!(!c.hotkeys_degraded);
+        assert!(c.pending_hotkey_op.is_some());
+        assert!(c.settings.errors.is_empty());
+    }
+
+    #[test]
+    fn hotkeys_degraded_clears_on_a_later_successful_rebind() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        // A first rebind whose post fails outright leaves the warning latched.
+        c.hotkey_port.fail_next = true;
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+        assert!(c.hotkeys_degraded);
+
+        // A later rebind posts fine and acks success.
+        let t2 = base + Duration::from_secs(1);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Down".to_string())),
+            t2,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            t2 + Duration::from_millis(50),
+        )
+        .unwrap();
+
+        assert!(
+            !c.health_warnings().hotkeys_degraded,
+            "a later successful ack clears the degraded warning"
+        );
+    }
+
+    #[test]
+    fn hotkey_config_returns_current_bindings() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.config.hotkeys.brightness_up = "Alt+Up".to_string();
+        c.config.hotkeys.brightness_down = "Alt+Down".to_string();
+        c.config.hotkeys.intercept_brightness_keys = true;
+
+        assert_eq!(
+            c.hotkey_config(),
+            ("Alt+Up".to_string(), "Alt+Down".to_string(), true)
         );
     }
 
