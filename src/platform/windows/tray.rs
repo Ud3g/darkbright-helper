@@ -111,7 +111,7 @@ fn compose_tooltip(warnings: HealthWarnings) -> String {
         parts.push("hotkeys stopped");
     }
     if warnings.hotkeys_degraded {
-        parts.push("hotkey rebind failed");
+        parts.push("hotkey change failed");
     }
     if warnings.file_log_failed {
         parts.push("file logging off");
@@ -145,7 +145,7 @@ fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
     if warnings.hotkeys_degraded {
         // Unlike hotkeys_lost, this clears on the next successful rebind —
         // no restart needed.
-        lines.push("⚠ Hotkey change failed — check Settings");
+        lines.push("⚠ Hotkey change failed — try another combination");
     }
     if warnings.file_log_failed {
         // "Open Log Folder" sits a few items below in this same menu, which is
@@ -179,10 +179,13 @@ fn usage_menu_lines(hotkey_up: &str, hotkey_down: &str) -> [String; 3] {
 
 /// Whether the tray icon should carry the amber warning badge.
 ///
-/// Deliberately excludes a failed file log. The badge says the app cannot do
-/// its job; a missing diagnostic log does not stop a single adjustment, and
-/// letting it light the badge would weaken the signal for the two conditions
-/// that genuinely mean something is broken.
+/// Covers both a permanently lost hotkey thread (`hotkeys_lost`, latched
+/// until restart) and a degraded one (`hotkeys_degraded`, cleared by the next
+/// successful rebind/resume): either way the app is not responding to
+/// hotkeys right now, and that must never sit behind a healthy-looking icon.
+/// Deliberately excludes a failed file log — a missing diagnostic log does
+/// not stop a single adjustment, and letting it light the badge would weaken
+/// the signal for the conditions that genuinely mean something is broken.
 fn wants_warning_badge(warnings: HealthWarnings) -> bool {
     warnings.ddc.is_degraded() || warnings.hotkeys_lost || warnings.hotkeys_degraded
 }
@@ -1158,6 +1161,18 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_names_a_failed_hotkey_change() {
+        let degraded = HealthWarnings {
+            hotkeys_degraded: true,
+            ..HealthWarnings::default()
+        };
+        assert_eq!(
+            compose_tooltip(degraded),
+            "Brightness Control – hotkey change failed"
+        );
+    }
+
+    #[test]
     fn tooltip_says_not_responding_for_a_hung_worker() {
         assert_eq!(
             compose_tooltip(ddc_only(DdcHealth::WorkerHung)),
@@ -1184,14 +1199,15 @@ mod tests {
         let all = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
             hotkeys_lost: true,
-            hotkeys_degraded: false,
+            hotkeys_degraded: true,
             file_log_failed: true,
         };
         let lines = warning_menu_lines(all);
-        assert_eq!(lines.len(), 3);
+        assert_eq!(lines.len(), 4);
         assert!(lines[0].contains("DDC"));
         assert!(lines[1].contains("Hotkeys"));
-        assert!(lines[2].contains("logging"));
+        assert!(lines[2].contains("try another combination"));
+        assert!(lines[3].contains("logging"));
     }
 
     #[test]
