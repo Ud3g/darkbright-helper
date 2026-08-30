@@ -254,10 +254,10 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     store: Store,
     /// Whether the settings window is currently open.
     settings_open: bool,
-    /// Whether the hotkey capture field is currently capturing (interception
-    /// suspended). Set and read by the capture-focus handling that lands
-    /// separately from the rebind flow; always `false` until then.
-    #[allow(dead_code)]
+    /// Whether the hotkey capture field is currently capturing. While `true`,
+    /// hotkey interception is suspended so the combination being captured
+    /// (which may match a currently registered brightness hotkey) reaches
+    /// the capture field as keystrokes instead of being intercepted.
     capture_active: bool,
     /// Settings fields changed since the last save.
     dirty: SettingsDirty,
@@ -510,6 +510,10 @@ where
             // failure) instead of being marked dirty unconditionally here.
             SettingChange::HotkeyUp(up) => {
                 self.dirty.hotkey_up = true;
+                // A binding produced by the capture field implicitly ends
+                // capture; the rebind about to be posted doubles as the
+                // resume, so no separate resume() call goes out.
+                self.capture_active = false;
                 let down = self.config.hotkeys.brightness_down.clone();
                 let intercept = self.config.hotkeys.intercept_brightness_keys;
                 self.apply_hotkey_change(up, down, intercept, now);
@@ -517,6 +521,7 @@ where
             }
             SettingChange::HotkeyDown(down) => {
                 self.dirty.hotkey_down = true;
+                self.capture_active = false;
                 let up = self.config.hotkeys.brightness_up.clone();
                 let intercept = self.config.hotkeys.intercept_brightness_keys;
                 self.apply_hotkey_change(up, down, intercept, now);
@@ -580,6 +585,37 @@ where
                 .hotkey_error("Could not reach the hotkey thread");
             let snapshot = self.settings_snapshot();
             self.settings.refresh(&snapshot);
+        }
+    }
+
+    /// Posts a suspend so the hotkey thread stops delivering brightness
+    /// hotkeys while the capture field has focus. A failed post means the
+    /// thread is unreachable, so no ack is ever coming: there is no config
+    /// change to revert (unlike a rebind), so this only raises the degraded
+    /// warning.
+    fn post_hotkey_suspend(&mut self, now: Instant) {
+        self.pending_hotkey_op = Some((HotkeyOp::Suspend, now));
+        if self.hotkey_port.suspend().is_err() {
+            log::error!("Failed to post hotkey suspend; hotkey thread unreachable");
+            self.pending_hotkey_op = None;
+            self.hotkeys_degraded = true;
+            self.settings
+                .hotkey_error("Could not reach the hotkey thread");
+        }
+    }
+
+    /// Posts a resume so the hotkey thread goes back to delivering brightness
+    /// hotkeys after the capture field loses focus. Same failure handling as
+    /// [`Self::post_hotkey_suspend`]: nothing to revert, just the degraded
+    /// warning.
+    fn post_hotkey_resume(&mut self, now: Instant) {
+        self.pending_hotkey_op = Some((HotkeyOp::Resume, now));
+        if self.hotkey_port.resume().is_err() {
+            log::error!("Failed to post hotkey resume; hotkey thread unreachable");
+            self.pending_hotkey_op = None;
+            self.hotkeys_degraded = true;
+            self.settings
+                .hotkey_error("Could not reach the hotkey thread");
         }
     }
 
@@ -658,6 +694,18 @@ where
         self.settings.hotkey_error(message);
         let snapshot = self.settings_snapshot();
         self.settings.refresh(&snapshot);
+    }
+
+    /// Reacts to a hotkey thread respawn (dead worker thread replaced).
+    ///
+    /// A fresh thread starts with nothing registered, so if the capture
+    /// field currently has focus, interception must be suspended on it too —
+    /// otherwise the new thread would deliver brightness hotkeys straight
+    /// into what should be a suspended capture session.
+    pub fn hotkey_thread_respawned(&mut self, now: Instant) {
+        if self.capture_active {
+            self.post_hotkey_suspend(now);
+        }
     }
 
     /// Returns the currently live hotkey bindings and intercept setting.
@@ -991,6 +1039,28 @@ where
         self.consecutive_set_timeouts = 0;
     }
 
+    /// Updates a monitor's overlay window, then re-asserts the settings
+    /// window's topmost position if it is open.
+    ///
+    /// The overlay re-asserts `HWND_TOPMOST` on every update it makes, so a
+    /// settings dialog that only asserted its own topmost position once, at
+    /// open time, would be buried under it by the very next dim keypress —
+    /// defeating the "my screen went dark, let me open Settings" scenario
+    /// this exists for. Every overlay update in the controller must go
+    /// through this wrapper rather than the seam directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the platform overlay window cannot be created or
+    /// updated.
+    fn overlay_update(&mut self, id: &MonitorId, handle: MonitorHandle, opacity: u8) -> Result<()> {
+        self.overlay.update(id, handle, opacity)?;
+        if self.settings_open {
+            self.settings.assert_topmost();
+        }
+        Ok(())
+    }
+
     /// Applies a relative brightness adjustment.
     ///
     /// Determines the target monitor (mouse position), calculates new values,
@@ -1108,7 +1178,7 @@ where
         // update cannot leave the state claiming an opacity the window never
         // received.
         if new_overlay != old_overlay
-            && let Err(e) = self.overlay.update(&target_id, handle, new_overlay)
+            && let Err(e) = self.overlay_update(&target_id, handle, new_overlay)
         {
             log::error!(error:% = e; "Overlay update failed; reverting optimistic value");
             if let Some(state) = self.states.get_mut(&target_id) {
@@ -1117,6 +1187,15 @@ where
             self.show_error_on_visible_osd();
             return Err(e);
         }
+
+        // Re-borrow: `overlay_update` needs `&mut self` (it may also touch
+        // `self.settings`), which the borrow checker cannot prove disjoint
+        // from the `state` borrow taken above, so it is refreshed here
+        // rather than held live across that call. Nothing removes monitor
+        // states between the lookup above and here, so this always succeeds.
+        let Some(state) = self.states.get_mut(&target_id) else {
+            return Ok(());
+        };
         state.overlay_opacity = new_overlay;
 
         // 6. Show or update OSD with optimistic values. An OSD failure is
@@ -1370,6 +1449,10 @@ where
             }
             BrightnessMessage::SettingsClosed => {
                 self.settings_open = false;
+                if self.capture_active {
+                    self.capture_active = false;
+                    self.post_hotkey_resume(now);
+                }
                 self.flush_pending_settings(now);
             }
             BrightnessMessage::HotkeyRebindResult {
@@ -1380,11 +1463,13 @@ where
             } => {
                 self.handle_hotkey_rebind_result(op, success, fallback_active, error, now);
             }
-            // The capture-focus messages are only meaningful once the
-            // suspend/resume-during-capture flow exists; that lands
-            // separately from the rebind flow handled here.
-            BrightnessMessage::HotkeyCaptureStarted | BrightnessMessage::HotkeyCaptureEnded => {
-                log::debug!("Settings-dialog message received; no handling wired up yet");
+            BrightnessMessage::HotkeyCaptureStarted => {
+                self.capture_active = true;
+                self.post_hotkey_suspend(now);
+            }
+            BrightnessMessage::HotkeyCaptureEnded => {
+                self.capture_active = false;
+                self.post_hotkey_resume(now);
             }
             BrightnessMessage::TrayRequestQuit => {
                 log::info!("Quit requested from tray menu");
@@ -3840,5 +3925,224 @@ mod tests {
         assert_eq!(c.pending_save_since, None);
         assert_eq!(c.dirty, SettingsDirty::default());
         assert_eq!(c.consecutive_save_failures, 0);
+    }
+
+    // ── Capture suspension & sticky topmost ──────────────────────────────
+
+    #[test]
+    fn hotkey_capture_started_suspends_interception() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        assert!(c.capture_active);
+        assert_eq!(c.hotkey_port.suspends, 1);
+        assert_eq!(c.pending_hotkey_op, Some((HotkeyOp::Suspend, base)));
+    }
+
+    #[test]
+    fn hotkey_capture_started_post_failure_marks_degraded() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.hotkey_port.fail_next = true;
+
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        assert!(
+            c.capture_active,
+            "the capture field still has focus even though the suspend post failed"
+        );
+        assert!(c.hotkeys_degraded);
+        assert!(c.pending_hotkey_op.is_none());
+        assert_eq!(
+            c.settings.errors,
+            vec!["Could not reach the hotkey thread".to_string()]
+        );
+    }
+
+    #[test]
+    fn hotkey_capture_ended_resumes_interception() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        let t2 = base + Duration::from_millis(500);
+        c.handle_message(BrightnessMessage::HotkeyCaptureEnded, t2)
+            .unwrap();
+
+        assert!(!c.capture_active);
+        assert_eq!(c.hotkey_port.resumes, 1);
+        assert_eq!(c.pending_hotkey_op, Some((HotkeyOp::Resume, t2)));
+    }
+
+    #[test]
+    fn hotkey_up_during_capture_implicitly_ends_capture_and_the_rebind_serves_as_resume() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        let t2 = base + Duration::from_millis(500);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            t2,
+        )
+        .unwrap();
+
+        assert!(!c.capture_active);
+        assert_eq!(c.hotkey_port.suspends, 1);
+        assert_eq!(c.hotkey_port.rebinds.len(), 1);
+        assert_eq!(
+            c.hotkey_port.resumes, 0,
+            "the rebind itself doubles as the resume; no separate resume() call"
+        );
+    }
+
+    #[test]
+    fn suspend_ack_success_clears_pending_op() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Suspend,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base + Duration::from_millis(20),
+        )
+        .unwrap();
+
+        assert!(c.pending_hotkey_op.is_none());
+        assert!(!c.hotkeys_degraded);
+    }
+
+    #[test]
+    fn suspend_ack_failure_marks_degraded_without_reverting_config() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let up_before = c.config.hotkeys.brightness_up.clone();
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Suspend,
+                success: false,
+                fallback_active: false,
+                error: Some("device busy".to_string()),
+            },
+            base + Duration::from_millis(20),
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.config.hotkeys.brightness_up, up_before,
+            "a suspend has no config change to revert"
+        );
+        assert!(c.hotkeys_degraded);
+        assert!(c.pending_hotkey_op.is_none());
+        assert_eq!(c.settings.errors, vec!["device busy".to_string()]);
+    }
+
+    #[test]
+    fn resume_ack_timeout_marks_degraded_without_reverting_config() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        let up_before = c.config.hotkeys.brightness_up.clone();
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+        c.handle_message(BrightnessMessage::HotkeyCaptureEnded, base)
+            .unwrap();
+
+        let past_deadline = base + REBIND_TIMEOUT + Duration::from_millis(1);
+        c.supervise_and_watchdog(past_deadline);
+
+        assert_eq!(c.config.hotkeys.brightness_up, up_before);
+        assert!(c.hotkeys_degraded);
+        assert!(c.pending_hotkey_op.is_none());
+        assert_eq!(
+            c.settings.errors,
+            vec!["Hotkey thread did not respond".to_string()]
+        );
+    }
+
+    #[test]
+    fn hotkey_thread_respawned_resuspends_when_capture_is_active() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+        assert_eq!(c.hotkey_port.suspends, 1);
+
+        let t2 = base + Duration::from_secs(1);
+        c.hotkey_thread_respawned(t2);
+
+        assert_eq!(
+            c.hotkey_port.suspends, 2,
+            "the fresh thread registered everything and must be resuspended"
+        );
+        assert_eq!(c.pending_hotkey_op, Some((HotkeyOp::Suspend, t2)));
+    }
+
+    #[test]
+    fn hotkey_thread_respawned_is_a_no_op_without_active_capture() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.hotkey_thread_respawned(base);
+
+        assert_eq!(c.hotkey_port.suspends, 0);
+        assert!(c.pending_hotkey_op.is_none());
+    }
+
+    #[test]
+    fn settings_closed_while_capturing_ends_capture_and_resumes() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            .unwrap();
+        c.handle_message(BrightnessMessage::HotkeyCaptureStarted, base)
+            .unwrap();
+
+        let t2 = base + Duration::from_millis(300);
+        c.handle_message(BrightnessMessage::SettingsClosed, t2)
+            .unwrap();
+
+        assert!(!c.capture_active);
+        assert_eq!(c.hotkey_port.resumes, 1);
+        assert!(!c.settings_open);
+    }
+
+    #[test]
+    fn overlay_update_reasserts_topmost_while_settings_is_open() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 0);
+        c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            .unwrap();
+
+        // Hardware already at 0; dimming further only touches the overlay.
+        c.handle_adjust(None, -10, base).unwrap();
+
+        assert!(c.settings.topmost_asserts >= 1);
+    }
+
+    #[test]
+    fn overlay_update_does_not_touch_settings_when_it_is_closed() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        seed(&mut c, test_id(), 0);
+
+        c.handle_adjust(None, -10, base).unwrap();
+
+        assert_eq!(c.settings.topmost_asserts, 0);
     }
 }
