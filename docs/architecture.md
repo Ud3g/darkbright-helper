@@ -1167,15 +1167,16 @@ and `OpenConfigFile` for its "Open config file" footer link (handled like
 
 **Instant apply, debounced saves.** Every change applies immediately —
 including hotkey rebinds, live on the hotkey thread — except the logging
-options, which only take effect after a restart (the `SettingsSink` shows a
-hint). Brightness step became controller-owned as part of this: hotkey
-events now carry a direction only (`AdjustStep`), and the controller
+options, which only take effect after a restart (a static label in the
+dialog says so). Brightness step became controller-owned as part of this:
+hotkey events now carry a direction only (`AdjustStep`), and the controller
 multiplies by its live `config.brightness.step_percent`, so a changed step
 applies without the hotkey thread knowing about it. Saves are debounced
 (`SAVE_DEBOUNCE`, 500 ms, `core/reconcile.rs`) and dirty-gated: only fields a
 dialog session actually touched are marked dirty, and a run that never opens
 the dialog never rewrites `config.json`. Close and quit flush a pending save
-unconditionally.
+immediately regardless of the debounce window — the flush itself is still
+dirty-gated, so a session with nothing to save still writes nothing.
 
 **Merge-on-external-change.** `WindowsConfigStore` tracks the config file's
 identity (length + modified time — cheap to stat, and any edit that matters
@@ -1208,7 +1209,11 @@ unbounded: a user may sit in "Press a key combination…" for a minute without
 the controller silently re-registering hotkeys underneath the field or
 declaring hotkeys degraded. The controller reconciles the races: hotkey
 thread respawned while suspended → immediately re-post suspend to the new
-thread; settings window gone while suspended → post resume.
+thread; settings window gone while suspended → post resume. Known
+unverified: killing the hotkey thread while a capture is suspended, to
+confirm the respawn-then-re-suspend race above end to end, is not something
+that can be staged safely against a live thread — `RespawnGate` itself is
+unit-tested instead.
 
 **Two degraded hotkey states, now genuinely distinct.** `HealthWarnings`
 carries both `hotkeys_lost` (§12's permanent supervision give-up, ends only
@@ -1247,16 +1252,36 @@ text); the combo face (arrow + selected text) is drawn through
 `DrawThemeBackground`/`DrawThemeTextEx` against the `DarkMode_CFD::COMBOBOX`
 theme class, with a hand-drawn GDI fallback whenever `OpenThemeData` or the
 theme draw call fails — that fallback path is the one actually exercised on
-the dev machine used to build this feature, not a theoretical branch; the
-updown spinner and edit borders are hand-painted via per-child `WM_NCPAINT`
-requests (`RDW_FRAME` is required to actually trigger one). Group boxes were
-dropped from the design entirely: a spike found `BS_GROUPBOX`'s frame and
-caption unreadable in dark mode, so each group is a bold `STATIC` label plus
-an `SS_ETCHEDHORZ` separator instead — which also removes any z-order
-dependency between a frame and the controls inside it. The window handles
-live `WM_SETTINGCHANGE` (`"ImmersiveColorSet"`) and re-themes immediately;
-unlike the tray's popup menu (§13), this is a genuine top-level window and
-does receive the broadcast, so no per-open refresh trick is needed here.
+the dev machine used to build this feature, not a theoretical branch. The
+five numeric edits are stripped of their visual-styles theme association
+entirely (empty sub-app/sub-id name) — not to disable painting, but because
+a themed edit ignores `WM_CTLCOLOREDIT`'s colours outright, so detachment is
+what lets that handler's interior colours apply at all; their border is then
+hand-painted on a direct, per-child `WM_NCPAINT` message the window sends
+itself (neither `RDW_FRAME` nor `RDW_ALLCHILDREN` reaches a child's
+non-client area, so nothing shorter actually triggers one), correct
+immediately after every theme application but overwritten by comctl32 v6's
+own direct-painted `COLOR_WINDOWFRAME` border on every focus transition and
+at first show regardless of the detachment — measured on hardware as a 1px
+colour delta and accepted rather than chased further. The updown spinner is
+a different case: hand-painted from its own `WM_PAINT`/`WM_ERASEBKGND`
+subclass as ordinary client-area content, covered by the general
+`RDW_ALLCHILDREN` client-area invalidation rather than needing the edits'
+direct-message treatment. Group boxes were dropped from the design entirely:
+a spike found `BS_GROUPBOX`'s frame and caption unreadable in dark mode, so
+each group is a bold `STATIC` label plus an `SS_ETCHEDHORZ` separator
+instead — which also removes any z-order dependency between a frame and the
+controls inside it. The window handles live `WM_SETTINGCHANGE`
+(`"ImmersiveColorSet"`) and re-themes immediately; unlike the tray's popup
+menu (§13), this is a genuine top-level window and does receive the
+broadcast, so no per-open refresh trick is needed here.
+
+The footer's merged SysLink also needed its own keyboard-activation
+subclass, unrelated to theming: past the first embedded link, the control's
+native `NM_RETURN` delivery on Enter proved unreliable (mouse clicks on
+either link were never affected), so the subclass tracks link focus itself
+and dispatches Enter directly instead of waiting on a notification that
+might never arrive.
 
 **DPI.** The window is created at the DPI of the monitor under the cursor
 (`MonitorFromPoint` + `GetDpiForMonitor`, computed before `CreateWindowExW`),
@@ -1265,7 +1290,11 @@ resizes to Windows' suggested rect, rebuilds both fonts at the new size,
 swaps them into the window's state before re-sending `WM_SETFONT` to every
 control (so a paint reentered synchronously from that already sees the new
 font handle), and relayouts every control from the same baseline table
-`create_settings_window` used initially.
+`create_settings_window` used initially. Known unverified: dragging the
+window across two monitors at different DPIs has not been exercised on real
+hardware — the development machine has one monitor — so `WM_DPICHANGED` has
+only been confirmed through a live per-monitor scale-factor change on that
+single monitor instead.
 
 **Focus save/restore.** A programmatic (non-template) `CreateWindowExW`
 window gets none of a real dialog's automatic keyboard-focus bookkeeping: a
