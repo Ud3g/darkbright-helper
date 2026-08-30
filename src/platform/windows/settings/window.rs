@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, OnceLock};
 
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_WINDOW, CreateFontIndirectW, DEFAULT_CHARSET,
     DEFAULT_QUALITY, DeleteObject, FF_SWISS, FONT_WEIGHT, FW_BOLD, FW_NORMAL, GetSysColorBrush,
@@ -29,11 +29,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowTextLengthW, GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild,
     IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG,
     MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT, WM_SETTINGCHANGE,
-    WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_VISIBLE,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
+    SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT,
+    WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_NOTIFY, WM_SETFOCUS,
+    WM_SETFONT, WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU,
+    WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -50,7 +51,7 @@ use super::layout::{
     ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LINK_LOGS, ID_LOG_CHECK,
     ID_LOG_LEVEL, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK,
     ID_RESYNC_EDIT, ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement,
-    configure_updowns, font_height_for_dpi, is_section_header, layout,
+    configure_updowns, dpi_from_wparam, font_height_for_dpi, is_section_header, layout,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -499,8 +500,19 @@ pub(super) struct WindowState {
     pub(super) hwnd: HWND,
     sender: Sender<BrightnessMessage>,
     hwnd_slot: Arc<AtomicIsize>,
-    pub(super) font_regular: HFONT,
-    font_bold: HFONT,
+    /// The current-DPI regular-weight font, read live by every paint path
+    /// that draws text with it (the hotkey capture fields, the combo's
+    /// custom paint, `dark.rs`'s checkbox custom-draw) — a `Cell` so
+    /// [`handle_dpichanged`] can swap it in through the same shared borrow
+    /// every other reader here uses, no `borrow_mut` required.
+    pub(super) font_regular: Cell<HFONT>,
+    /// Same rationale as [`WindowState::font_regular`], for the four
+    /// section-header labels' bold font.
+    font_bold: Cell<HFONT>,
+    /// The DPI every control is currently laid out and sized for — the
+    /// window's creation DPI until the first `WM_DPICHANGED`, updated by
+    /// [`handle_dpichanged`] on every one after that.
+    dpi: Cell<u32>,
     /// Whether the window is currently painting dark — recomputed on
     /// `WM_SETTINGCHANGE`'s `"ImmersiveColorSet"` broadcast (see
     /// [`dark::apply_theme`]) and read by every custom-draw path and
@@ -652,6 +664,80 @@ fn handle_activate(state: &WindowState, wparam: WPARAM) {
     } else {
         restore_focus(state);
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DPI Change (WM_DPICHANGED)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// `WM_DPICHANGED`: the window moved to a monitor with a different DPI (or,
+/// on a single monitor, its scale factor changed live). `wparam`'s low word
+/// is the new DPI; `lparam` points at Windows' suggested new window rect,
+/// already sized and positioned for that DPI on the target monitor.
+///
+/// Resizes to the suggested rect, rebuilds both fonts at the new size, swaps
+/// them into [`WindowState`] (so a paint reentered synchronously from the
+/// `WM_SETFONT`/redraw below — the checkbox custom-draw, the combo, the
+/// capture fields, all of which read the `WindowState` font directly rather
+/// than a control's own stored one — already sees the new handle, never a
+/// stale one), then re-sends `WM_SETFONT` to every control. The old font
+/// handles are freed only after that loop finishes: GDI requires a font stay
+/// alive as long as any control still has it selected, and by that point
+/// nothing does — every reader has already moved on to the new handle.
+/// Finally, [`layout`] repositions every control at the new DPI from the
+/// same baseline table `create_settings_window` used.
+fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    let dpi = dpi_from_wparam(wparam.0);
+
+    let suggested_ptr: *const RECT = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+    if let Some(suggested) = unsafe { suggested_ptr.as_ref() } {
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                suggested.left,
+                suggested.top,
+                suggested.right - suggested.left,
+                suggested.bottom - suggested.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    with_window_state(|state| {
+        state.dpi.set(dpi);
+
+        let new_regular = build_font(dpi, FW_NORMAL);
+        let new_bold = build_font(dpi, FW_BOLD);
+        let old_regular = state.font_regular.replace(new_regular);
+        let old_bold = state.font_bold.replace(new_bold);
+
+        for spec in CONTROLS {
+            let Ok(child) = (unsafe { GetDlgItem(Some(state.hwnd), i32::from(spec.id)) }) else {
+                continue;
+            };
+            let font = if is_section_header(spec.id) {
+                new_bold
+            } else {
+                new_regular
+            };
+            unsafe {
+                SendMessageW(
+                    child,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0.expose_provenance())),
+                    Some(LPARAM(1)),
+                );
+            }
+        }
+
+        unsafe {
+            let _ = DeleteObject(old_regular.into());
+            let _ = DeleteObject(old_bold.into());
+        }
+    });
+
+    layout(hwnd, dpi);
 }
 
 /// Reclaims ownership of `lparam`'s `Box<SettingsSnapshot>` and applies it.
@@ -1253,8 +1339,8 @@ fn handle_destroy() {
                 log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
             }
             unsafe {
-                let _ = DeleteObject(state.font_regular.into());
-                let _ = DeleteObject(state.font_bold.into());
+                let _ = DeleteObject(state.font_regular.get().into());
+                let _ = DeleteObject(state.font_bold.get().into());
             }
             // Puts the window class's background brush back on the system
             // default before freeing the brushes it might currently point
@@ -1314,6 +1400,10 @@ unsafe extern "system" fn settings_wnd_proc(
             WM_CTLCOLORLISTBOX => ctlcolor_reply(hwnd, msg, wparam, lparam, |s| {
                 dark::ctlcolor_listbox(s, wparam)
             }),
+            WM_DPICHANGED => {
+                handle_dpichanged(hwnd, wparam, lparam);
+                LRESULT(0)
+            }
             WM_SETTINGCHANGE => {
                 if dark::is_immersive_color_set_change(lparam) {
                     with_window_state(|state| {
@@ -1420,8 +1510,9 @@ fn create_settings_window(
         hwnd,
         sender: tx.clone(),
         hwnd_slot: Arc::clone(hwnd_slot),
-        font_regular,
-        font_bold,
+        font_regular: Cell::new(font_regular),
+        font_bold: Cell::new(font_bold),
+        dpi: Cell::new(placement.dpi),
         dark: Cell::new(dark::initial_dark_flag()),
         palette: dark::Palette::new(),
         // No control has ever had focus yet, so there is nothing to

@@ -540,7 +540,7 @@ fn paint_capture(hwnd: HWND, hdc: HDC) {
     let has_focus = unsafe { GetFocus() } == hwnd;
 
     with_window_state(|state| unsafe {
-        let old_font = SelectObject(hdc, state.font_regular.into());
+        let old_font = SelectObject(hdc, state.font_regular.get().into());
         SetBkMode(hdc, TRANSPARENT);
         let color = if state.dark.get() {
             if is_placeholder {
