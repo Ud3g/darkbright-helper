@@ -34,19 +34,21 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, S
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_BTNFACE, COLOR_GRAYTEXT, CreatePen, CreateSolidBrush, DT_LEFT, DT_NOPREFIX,
     DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect,
-    GetStockObject, GetSysColor, GetSysColorBrush, GetWindowDC, HBRUSH, HDC, NULL_PEN, PAINTSTRUCT,
-    PS_SOLID, Polygon, RDW_ALLCHILDREN, RDW_ERASE, RDW_INVALIDATE, RDW_UPDATENOW, RedrawWindow,
-    ReleaseDC, RoundRect, SelectObject, SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
+    GetStockObject, GetSysColor, GetSysColorBrush, GetWindowDC, HBRUSH, HDC, HFONT, NULL_PEN,
+    PAINTSTRUCT, PS_SOLID, Polygon, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
+    RDW_UPDATENOW, RedrawWindow, ReleaseDC, RoundRect, SelectObject, SetBkColor, SetBkMode,
+    SetTextColor, TRANSPARENT,
 };
 use windows::Win32::UI::Controls::{
-    BP_CHECKBOX, BST_CHECKED, CBRO_NORMAL, CBS_CHECKEDDISABLED, CBS_CHECKEDHOT, CBS_CHECKEDNORMAL,
-    CBS_CHECKEDPRESSED, CBS_UNCHECKEDDISABLED, CBS_UNCHECKEDHOT, CBS_UNCHECKEDNORMAL,
-    CBS_UNCHECKEDPRESSED, CBXSR_NORMAL, CDDS_PREPAINT, CDIS_DISABLED, CDIS_HOT, CDIS_SELECTED,
-    CDRF_DODEFAULT, CDRF_SKIPDEFAULT, CHECKBOXSTATES, COMBOBOXINFO, CP_DROPDOWNBUTTONRIGHT,
-    CP_DROPDOWNITEM, CloseThemeData, DTT_TEXTCOLOR, DTTOPTS, DrawThemeBackground, DrawThemeTextEx,
-    GetComboBoxInfo, GetThemePartSize, HTHEME, NMCUSTOMDRAW, NMCUSTOMDRAW_DRAW_STATE_FLAGS,
-    OpenThemeData, SetWindowTheme, TS_DRAW,
+    BP_CHECKBOX, BST_CHECKED, CBRO_DISABLED, CBRO_NORMAL, CBS_CHECKEDDISABLED, CBS_CHECKEDHOT,
+    CBS_CHECKEDNORMAL, CBS_CHECKEDPRESSED, CBS_UNCHECKEDDISABLED, CBS_UNCHECKEDHOT,
+    CBS_UNCHECKEDNORMAL, CBS_UNCHECKEDPRESSED, CBXSR_DISABLED, CBXSR_NORMAL, CDDS_PREPAINT,
+    CDIS_DISABLED, CDIS_HOT, CDIS_SELECTED, CDRF_DODEFAULT, CDRF_SKIPDEFAULT, CHECKBOXSTATES,
+    COMBOBOXINFO, CP_DROPDOWNBUTTONRIGHT, CP_DROPDOWNITEM, CloseThemeData, DTT_TEXTCOLOR, DTTOPTS,
+    DrawThemeBackground, DrawThemeTextEx, GetComboBoxInfo, GetThemePartSize, HTHEME, NMCUSTOMDRAW,
+    NMCUSTOMDRAW_DRAW_STATE_FLAGS, OpenThemeData, SetWindowTheme, TS_DRAW,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::IsWindowEnabled;
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, GCLP_HBRBACKGROUND, GetClientRect, GetDlgCtrlID, GetDlgItem, GetWindowRect,
@@ -261,7 +263,12 @@ fn redraw_all(hwnd: HWND) {
             Some(hwnd),
             None,
             None,
-            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            // RDW_FRAME is what actually asks for a fresh WM_NCPAINT — without
+            // it RDW_INVALIDATE only covers the client area, so a border a
+            // subclass hand-paints there (the numeric edits, the hotkey
+            // capture fields) would never get repainted on a live theme
+            // switch, staying whatever DefWindowProc drew the first time.
+            RDW_INVALIDATE | RDW_FRAME | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW,
         );
     }
 }
@@ -768,6 +775,12 @@ fn paint_combo(hwnd: HWND) {
             }
         }
 
+        // EnableWindow only gates input, never painting, but a disabled
+        // combo still has to read as disabled: grayed text and arrow, not
+        // full-contrast ones a user would read as still editable.
+        let enabled = unsafe { IsWindowEnabled(hwnd) }.as_bool();
+        let text_color = if enabled { DARK_TEXT } else { DARK_GRAY_TEXT };
+
         let mut cbi = COMBOBOXINFO {
             cbSize: u32::try_from(std::mem::size_of::<COMBOBOXINFO>()).unwrap_or(0),
             ..Default::default()
@@ -777,55 +790,30 @@ fn paint_combo(hwnd: HWND) {
             .then_some(cbi.rcButton);
 
         let htheme = open_combo_arrow_theme(hwnd);
-        if !htheme.is_invalid() {
-            if let Some(button_rect) = button_rect {
-                unsafe {
-                    let _ = DrawThemeBackground(
-                        htheme,
-                        hdc,
-                        CP_DROPDOWNBUTTONRIGHT.0,
-                        CBXSR_NORMAL.0,
-                        &raw const button_rect,
-                        None,
-                    );
-                }
-            }
+        paint_combo_arrow(hdc, htheme, button_rect, enabled, text_color);
 
-            let text = window_text(hwnd);
-            let text_right = button_rect.map_or(rect.right, |b| b.left);
-            let mut text_rect = RECT {
-                left: rect.left + COMBO_TEXT_INSET,
-                top: rect.top,
-                right: text_right - COMBO_TEXT_INSET,
-                bottom: rect.bottom,
-            };
-            let wide_text = wide_for_theme_draw(&text);
-            let opts = DTTOPTS {
-                dwSize: u32::try_from(std::mem::size_of::<DTTOPTS>()).unwrap_or(0),
-                dwFlags: DTT_TEXTCOLOR,
-                crText: COLORREF(DARK_TEXT),
-                ..Default::default()
-            };
-            let mut font_regular = None;
-            with_window_state(|state| font_regular = Some(state.font_regular));
+        let text = window_text(hwnd);
+        let text_right = button_rect.map_or(rect.right, |b| b.left);
+        let text_rect = RECT {
+            left: rect.left + COMBO_TEXT_INSET,
+            top: rect.top,
+            right: text_right - COMBO_TEXT_INSET,
+            bottom: rect.bottom,
+        };
+        let mut font_regular = None;
+        with_window_state(|state| font_regular = Some(state.font_regular));
+        paint_combo_text(
+            hdc,
+            htheme,
+            enabled,
+            text_rect,
+            &text,
+            text_color,
+            font_regular,
+        );
+
+        if !htheme.is_invalid() {
             unsafe {
-                // BeginPaint's DC starts with the stock system font, not
-                // this control's own — select it before drawing text, same
-                // as every other control's paint path in this window.
-                let old_font = font_regular.map(|f| SelectObject(hdc, f.into()));
-                let _ = DrawThemeTextEx(
-                    htheme,
-                    hdc,
-                    CP_DROPDOWNITEM.0,
-                    CBRO_NORMAL.0,
-                    &wide_text,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-                    &raw mut text_rect,
-                    Some(&raw const opts),
-                );
-                if let Some(old_font) = old_font {
-                    SelectObject(hdc, old_font);
-                }
                 let _ = CloseThemeData(htheme);
             }
         }
@@ -833,6 +821,105 @@ fn paint_combo(hwnd: HWND) {
 
     unsafe {
         let _ = EndPaint(hwnd, &raw const ps);
+    }
+}
+
+/// Draws the combo's dropdown arrow via `htheme`
+/// (`DrawThemeBackground(CP_DROPDOWNBUTTONRIGHT, …)`), or hand-draws it
+/// (see [`draw_combo_arrow_fallback`]) if the theme is unavailable or the
+/// draw call fails. Either failure is logged at `debug` — never a
+/// user-facing error, just a trail so a blank-looking combo can be
+/// diagnosed later.
+fn paint_combo_arrow(
+    hdc: HDC,
+    htheme: HTHEME,
+    button_rect: Option<RECT>,
+    enabled: bool,
+    fallback_color: u32,
+) {
+    let arrow_state = if enabled {
+        CBXSR_NORMAL
+    } else {
+        CBXSR_DISABLED
+    };
+    let mut drawn = false;
+    if htheme.is_invalid() {
+        log::debug!("OpenThemeData failed for the combo arrow theme; hand-drawing it instead");
+    } else if let Some(button_rect) = button_rect {
+        let result = unsafe {
+            DrawThemeBackground(
+                htheme,
+                hdc,
+                CP_DROPDOWNBUTTONRIGHT.0,
+                arrow_state.0,
+                &raw const button_rect,
+                None,
+            )
+        };
+        if let Err(e) = result {
+            log::debug!(error:% = e; "DrawThemeBackground failed for the combo arrow; hand-drawing it instead");
+        } else {
+            drawn = true;
+        }
+    }
+    if !drawn && let Some(button_rect) = button_rect {
+        draw_combo_arrow_fallback(hdc, button_rect, fallback_color);
+    }
+}
+
+/// Draws the combo's selected-item text via `htheme` (`DrawThemeTextEx`
+/// with an explicit `crText`), or hand-draws it (see
+/// [`draw_combo_text_fallback`]) if the theme is unavailable or the draw
+/// call fails. Same logging rationale as [`paint_combo_arrow`].
+fn paint_combo_text(
+    hdc: HDC,
+    htheme: HTHEME,
+    enabled: bool,
+    text_rect: RECT,
+    text: &str,
+    color: u32,
+    font: Option<HFONT>,
+) {
+    let item_state = if enabled { CBRO_NORMAL } else { CBRO_DISABLED };
+    let mut drawn = false;
+    if htheme.is_invalid() {
+        log::debug!("OpenThemeData failed for the combo text theme; hand-drawing it instead");
+    } else {
+        let wide_text = wide_for_theme_draw(text);
+        let opts = DTTOPTS {
+            dwSize: u32::try_from(std::mem::size_of::<DTTOPTS>()).unwrap_or(0),
+            dwFlags: DTT_TEXTCOLOR,
+            crText: COLORREF(color),
+            ..Default::default()
+        };
+        let mut rect = text_rect;
+        unsafe {
+            // BeginPaint's DC starts with the stock system font, not this
+            // control's own — select it before drawing text, same as
+            // every other control's paint path in this window.
+            let old_font = font.map(|f| SelectObject(hdc, f.into()));
+            let result = DrawThemeTextEx(
+                htheme,
+                hdc,
+                CP_DROPDOWNITEM.0,
+                item_state.0,
+                &wide_text,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                &raw mut rect,
+                Some(&raw const opts),
+            );
+            if let Some(old_font) = old_font {
+                SelectObject(hdc, old_font);
+            }
+            if let Err(e) = result {
+                log::debug!(error:% = e; "DrawThemeTextEx failed for the combo's text; hand-drawing it instead");
+            } else {
+                drawn = true;
+            }
+        }
+    }
+    if !drawn {
+        draw_combo_text_fallback(hdc, text_rect, text, color, font);
     }
 }
 
@@ -850,6 +937,68 @@ fn open_combo_arrow_theme(hwnd: HWND) -> HTHEME {
         return dark_theme;
     }
     unsafe { OpenThemeData(Some(hwnd), w!("CFD::COMBOBOX")) }
+}
+
+/// Hand-drawn downward arrow glyph for the combo's dropdown button, used
+/// whenever the theme-drawn one (`DrawThemeBackground(CP_DROPDOWNBUTTONRIGHT,
+/// …)`) is unavailable or fails — the same triangle shape
+/// [`draw_spin_button`] draws for the updown spinner, so the combo never
+/// renders with no visible affordance to open its list.
+fn draw_combo_arrow_fallback(hdc: HDC, rect: RECT, color: u32) {
+    let cx = i32::midpoint(rect.left, rect.right);
+    let cy = i32::midpoint(rect.top, rect.bottom);
+    let half = arrow_half_width(rect);
+    let points = [
+        POINT {
+            x: cx - half,
+            y: cy - half / 2,
+        },
+        POINT {
+            x: cx + half,
+            y: cy - half / 2,
+        },
+        POINT {
+            x: cx,
+            y: cy + half / 2,
+        },
+    ];
+    let brush = unsafe { CreateSolidBrush(COLORREF(color)) };
+    if !brush.is_invalid() {
+        unsafe {
+            let old_brush = SelectObject(hdc, brush.into());
+            let old_pen = SelectObject(hdc, GetStockObject(NULL_PEN));
+            let _ = Polygon(hdc, &points);
+            SelectObject(hdc, old_brush);
+            SelectObject(hdc, old_pen);
+            let _ = DeleteObject(brush.into());
+        }
+    }
+}
+
+/// Plain `SetTextColor` + `DrawTextW` fallback for the combo's
+/// selected-item text, used whenever `DrawThemeTextEx` is unavailable or
+/// fails — same reasoning as [`draw_combo_arrow_fallback`]. A no-op for
+/// empty text (nothing selected yet), matching `DrawThemeTextEx`'s own
+/// behaviour on an empty string.
+fn draw_combo_text_fallback(hdc: HDC, mut rect: RECT, text: &str, color: u32, font: Option<HFONT>) {
+    if text.is_empty() {
+        return;
+    }
+    let mut wide_text = wide_for_theme_draw(text);
+    unsafe {
+        let old_font = font.map(|f| SelectObject(hdc, f.into()));
+        SetBkMode(hdc, TRANSPARENT);
+        SetTextColor(hdc, COLORREF(color));
+        DrawTextW(
+            hdc,
+            &mut wide_text,
+            &raw mut rect,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        if let Some(old_font) = old_font {
+            SelectObject(hdc, old_font);
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

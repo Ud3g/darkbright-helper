@@ -1439,8 +1439,14 @@ fn create_settings_window(
         last_posted_inactivity: Cell::new(None),
     };
     apply_snapshot(&state, snapshot);
-    dark::apply_theme(&state);
+    // Store state before applying the theme, not after: apply_theme's
+    // RedrawWindow call synchronously re-enters every child's paint path,
+    // and each of those reads the live dark flag through
+    // with_window_state — which sees nothing at all while WINDOW_STATE is
+    // still empty, so the very first repaint would silently fall back to
+    // light regardless of what dark actually holds.
     WINDOW_STATE.with(|s| *s.borrow_mut() = Some(state));
+    with_window_state(dark::apply_theme);
 
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
