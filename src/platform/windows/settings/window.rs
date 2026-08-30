@@ -16,8 +16,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, ICC_LINK_CLASS, ICC_STANDARD_CLASSES, ICC_UPDOWN_CLASS,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
-    NMLINK, NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NM_CUSTOMDRAW, NM_RETURN, NMCUSTOMDRAW,
+    NMHDR, NMLINK, NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK,
     WC_STATIC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -1249,15 +1249,15 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
 }
 
 /// Routes a `WM_NOTIFY`: a spinner's `UDN_DELTAPOS` commits its delta,
-/// `NM_CLICK` on the footer `SysLink` posts the shell side effect matching
-/// whichever of its two embedded links was clicked, and `NM_CUSTOMDRAW` on
-/// one of the five checkboxes hand-paints its label
-/// (see [`dark::checkbox_custom_draw`]) — the one notification code here
-/// whose return value the caller must actually use, since it tells the
-/// checkbox whether to skip its own default paint. Every other notification
-/// code (including the `SysLink`'s own `NM_RETURN`, unreachable from a mouse
-/// click) is ignored and answers `0` (`CDRF_DODEFAULT`, though it is only
-/// ever inspected for `NM_CUSTOMDRAW`).
+/// `NM_CLICK` (mouse) or `NM_RETURN` (keyboard Enter while focused) on the
+/// footer `SysLink` posts the shell side effect matching whichever of its
+/// two embedded links fired, and `NM_CUSTOMDRAW` on one of the five
+/// checkboxes hand-paints its label (see [`dark::checkbox_custom_draw`]) —
+/// the one notification code here whose return value the caller must
+/// actually use, since it tells the checkbox whether to skip its own
+/// default paint. Every other notification code is ignored and answers `0`
+/// (`CDRF_DODEFAULT`, though it is only ever inspected for
+/// `NM_CUSTOMDRAW`).
 fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
     let hdr_ptr: *const NMHDR = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
     let Some(hdr) = (unsafe { hdr_ptr.as_ref() }) else {
@@ -1274,9 +1274,11 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
             0
         }
         // The footer SysLink carries both links as one control; which one
-        // was clicked comes from NMLINK's embedded-link index, not the
-        // control id (there is only one id now).
-        NM_CLICK if id == ID_LINK_CONFIG => {
+        // fired comes from NMLINK's embedded-link index, not the control id
+        // (there is only one id now). A mouse click sends NM_CLICK; Enter
+        // while the link is keyboard-focused sends NM_RETURN instead — both
+        // carry the same NMLINK payload, so both are handled here.
+        NM_CLICK | NM_RETURN if id == ID_LINK_CONFIG => {
             let nmlink_ptr: *const NMLINK = hdr_ptr.cast();
             let message =
                 unsafe { nmlink_ptr.as_ref() }.and_then(|nmlink| match nmlink.item.iLink {
