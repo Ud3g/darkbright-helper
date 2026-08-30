@@ -543,10 +543,13 @@ pub enum BrightnessMessage {
     },
     /// Adjust brightness by a relative delta.
     Adjust {
-        /// Target monitor (None = monitor under cursor). Every current
-        /// producer sends None; the targeted form is kept for future
-        /// per-monitor adjustment (tray/CLI) and is exercised by the
-        /// controller tests.
+        /// Target monitor (None = monitor under cursor). Nothing in the app
+        /// constructs this message today — the hotkey and tray paths both
+        /// send [`Self::AdjustStep`] instead — but the variant, and the
+        /// targeted-monitor case in its handler, stay: this is the shape a
+        /// future per-monitor adjustment entry point (tray/CLI) needs, and
+        /// removing it now would mean re-adding the same handler logic
+        /// later instead of just wiring a producer to what already exists.
         monitor_id: Option<MonitorId>,
         /// Brightness change (-100 to +100).
         delta: i8,

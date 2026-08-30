@@ -893,8 +893,9 @@ mod tests {
 
     #[test]
     fn evaluate_candidate_rejects_a_duplicate_in_a_different_canonical_spelling() {
-        // The scenario the brief calls out by name: a hand-edited
-        // config.json spelling must still be caught as the same binding.
+        // A hand-edited config.json can spell the same binding with its
+        // modifiers in a different order; that must still be caught as the
+        // same duplicate, not missed on a literal-string comparison.
         let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "shift+ctrl+up");
         assert_eq!(outcome, CaptureOutcome::Rejected(REJECT_DUPLICATE));
     }
