@@ -16,8 +16,8 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, ICC_LINK_CLASS, ICC_STANDARD_CLASSES, ICC_UPDOWN_CLASS,
-    INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NMHDR, NMUPDOWN, UDN_DELTAPOS,
-    UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
+    INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
+    NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
@@ -31,7 +31,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
     SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowPos,
     SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_DESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
+    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT, WM_SETTINGCHANGE,
     WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
@@ -43,6 +44,7 @@ use crate::error::{BrightnessError, Result};
 
 use super::super::{autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
 use super::capture::capture_wnd_proc;
+use super::dark;
 use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_INACT_CHECK,
     ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LINK_LOGS, ID_LOG_CHECK,
@@ -309,6 +311,18 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
                 }
             }
         }
+
+        // Dark-mode paint subclasses, installed once here regardless of the
+        // window's current theme — each subclass proc reads the live dark
+        // flag itself on every paint, so nothing needs reinstalling when
+        // WM_SETTINGCHANGE flips it later. See dark.rs's module doc comment
+        // for why these three classes are hand-painted instead of themed.
+        match spec.class {
+            "EDIT" => dark::install_edit_border_subclass(child),
+            "COMBOBOX" => dark::install_combo_subclass(child),
+            "msctls_updown32" => dark::install_updown_subclass(child),
+            _ => {}
+        }
     }
 }
 
@@ -487,6 +501,14 @@ pub(super) struct WindowState {
     hwnd_slot: Arc<AtomicIsize>,
     pub(super) font_regular: HFONT,
     font_bold: HFONT,
+    /// Whether the window is currently painting dark — recomputed on
+    /// `WM_SETTINGCHANGE`'s `"ImmersiveColorSet"` broadcast (see
+    /// [`dark::apply_theme`]) and read by every custom-draw path and
+    /// `WM_CTLCOLOR*` handler this window has.
+    pub(super) dark: Cell<bool>,
+    /// The dark-mode background brushes, created once at window creation and
+    /// freed on `WM_DESTROY` — see [`dark::Palette`].
+    pub(super) palette: dark::Palette,
     /// The child control that held keyboard focus the last time this window
     /// was deactivated, as an `isize` handle (same crossing-the-callback
     /// convention as `hwnd_slot`) — `0` for "none recorded yet". This window
@@ -661,9 +683,9 @@ fn handle_hotkey_message_text(lparam: LPARAM) {
 // defaults" and "Close". The hotkey capture fields (`ID_HK_UP`/`ID_HK_DOWN`)
 // are wired separately, in the "Hotkey Capture Control" section below (their
 // own custom-drawn window class, not one of the controls this section
-// applies to). All `WM_CTLCOLOR*` handling (graying the explainer statics,
-// dark mode) is later work too — the two explainer statics below are
-// created with their text and left at the system's default colour.
+// applies to). The two explainer statics below are created with just their
+// text; their colour (grayed, or red for an error) comes from `dark.rs`'s
+// `WM_CTLCOLORSTATIC` handling, in both light and dark mode.
 
 /// One spinner+edit control pair wired to instant apply: its edit id, valid
 /// range (a [`RangeSpec`] from the layout table, keyed by the matching
@@ -1139,14 +1161,19 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
     }
 }
 
-/// Routes a `WM_NOTIFY`: a spinner's `UDN_DELTAPOS` commits its delta, and
-/// `NM_CLICK` on a footer `SysLink` posts the matching shell side effect.
-/// Every other notification code (including the `SysLink`'s own
-/// `NM_RETURN`, unreachable from a mouse click) is ignored.
-fn handle_notify(hwnd: HWND, lparam: LPARAM) {
+/// Routes a `WM_NOTIFY`: a spinner's `UDN_DELTAPOS` commits its delta,
+/// `NM_CLICK` on a footer `SysLink` posts the matching shell side effect,
+/// and `NM_CUSTOMDRAW` on one of the five checkboxes hand-paints its label
+/// (see [`dark::checkbox_custom_draw`]) — the one notification code here
+/// whose return value the caller must actually use, since it tells the
+/// checkbox whether to skip its own default paint. Every other notification
+/// code (including the `SysLink`'s own `NM_RETURN`, unreachable from a mouse
+/// click) is ignored and answers `0` (`CDRF_DODEFAULT`, though it is only
+/// ever inspected for `NM_CUSTOMDRAW`).
+fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
     let hdr_ptr: *const NMHDR = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
     let Some(hdr) = (unsafe { hdr_ptr.as_ref() }) else {
-        return;
+        return 0;
     };
     let id = u16::try_from(hdr.idFrom).unwrap_or(u16::MAX);
 
@@ -1156,6 +1183,7 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) {
             if let Some(nmud) = unsafe { nmud_ptr.as_ref() } {
                 handle_spinner_delta(hwnd, id, nmud.iDelta);
             }
+            0
         }
         NM_CLICK => {
             let message = match id {
@@ -1166,9 +1194,30 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) {
             if let Some(message) = message {
                 with_window_state(|state| send_message(state, message));
             }
+            0
         }
-        _ => {}
+        NM_CUSTOMDRAW if dark::is_checkbox_id(id) => {
+            let cd_ptr: *const NMCUSTOMDRAW = hdr_ptr.cast();
+            unsafe { cd_ptr.as_ref() }.map_or(0, dark::checkbox_custom_draw)
+        }
+        _ => 0,
     }
+}
+
+/// Shared shape for every `WM_CTLCOLOR*` handler: runs `f` against the open
+/// window's state, and falls back to `DefWindowProcW`'s own answer whenever
+/// `f` returns `None` — no open window, or (see each `dark::ctlcolor_*`
+/// function) light mode leaving a particular control's colour untouched.
+fn ctlcolor_reply(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    f: impl FnOnce(&WindowState) -> Option<LRESULT>,
+) -> LRESULT {
+    let mut result = None;
+    with_window_state(|state| result = f(state));
+    result.unwrap_or_else(|| unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) })
 }
 
 /// Clears this window's own slot value (never a value a newer window may
@@ -1207,6 +1256,7 @@ fn handle_destroy() {
                 let _ = DeleteObject(state.font_regular.into());
                 let _ = DeleteObject(state.font_bold.into());
             }
+            state.palette.destroy();
         }
     });
     unsafe {
@@ -1245,8 +1295,26 @@ unsafe extern "system" fn settings_wnd_proc(
                 with_window_state(restore_focus);
                 LRESULT(0)
             }
-            WM_NOTIFY => {
-                handle_notify(hwnd, lparam);
+            WM_NOTIFY => LRESULT(isize::try_from(handle_notify(hwnd, lparam)).unwrap_or(0)),
+            WM_CTLCOLORSTATIC => ctlcolor_reply(hwnd, msg, wparam, lparam, |s| {
+                dark::ctlcolor_static(s, wparam, lparam)
+            }),
+            WM_CTLCOLOREDIT => ctlcolor_reply(hwnd, msg, wparam, lparam, |s| {
+                dark::ctlcolor_edit(s, wparam)
+            }),
+            WM_CTLCOLORBTN => {
+                ctlcolor_reply(hwnd, msg, wparam, lparam, |s| dark::ctlcolor_btn(s, wparam))
+            }
+            WM_CTLCOLORLISTBOX => ctlcolor_reply(hwnd, msg, wparam, lparam, |s| {
+                dark::ctlcolor_listbox(s, wparam)
+            }),
+            WM_SETTINGCHANGE => {
+                if dark::is_immersive_color_set_change(lparam) {
+                    with_window_state(|state| {
+                        state.dark.set(dark::initial_dark_flag());
+                        dark::apply_theme(state);
+                    });
+                }
                 LRESULT(0)
             }
             WM_APP_SETTINGS_REFRESH => {
@@ -1348,6 +1416,8 @@ fn create_settings_window(
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular,
         font_bold,
+        dark: Cell::new(dark::initial_dark_flag()),
+        palette: dark::Palette::new(),
         // No control has ever had focus yet, so there is nothing to
         // restore to until the first WM_ACTIVATE deactivate records one.
         last_focus: Cell::new(0),
@@ -1363,6 +1433,7 @@ fn create_settings_window(
         last_posted_inactivity: Cell::new(None),
     };
     apply_snapshot(&state, snapshot);
+    dark::apply_theme(&state);
     WINDOW_STATE.with(|s| *s.borrow_mut() = Some(state));
 
     unsafe {

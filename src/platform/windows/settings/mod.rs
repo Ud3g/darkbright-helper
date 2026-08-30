@@ -18,14 +18,17 @@
 //! tab order.
 //!
 //! Control wiring is instant-apply (see [`window`]'s "Control Wiring"
-//! section) including hotkey capture (see [`capture`]); dark-mode theming is
-//! later work. Declarative layout data and geometry (control ids, styles,
-//! the [`layout::CONTROLS`] table, DPI scaling, window placement) lives in
-//! [`layout`]; the hotkey capture control is its own self-contained window
-//! class in [`capture`]; everything else — window creation, control wiring,
-//! the message loop and the `SettingsSink` seam — lives in [`window`].
+//! section) including hotkey capture (see [`capture`]). Declarative layout
+//! data and geometry (control ids, styles, the [`layout::CONTROLS`] table,
+//! DPI scaling, window placement) lives in [`layout`]; the hotkey capture
+//! control is its own self-contained window class in [`capture`]; every
+//! control's dark-mode painting (custom draw, window subclassing, the
+//! `WM_CTLCOLOR*` colour table) lives in [`dark`]; everything else — window
+//! creation, control wiring, the message loop and the `SettingsSink` seam —
+//! lives in [`window`].
 
 mod capture;
+mod dark;
 mod layout;
 mod window;
 
