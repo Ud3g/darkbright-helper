@@ -569,9 +569,12 @@ where
                 self.config.hotkeys.brightness_down = prev_down;
                 self.config.hotkeys.intercept_brightness_keys = prev_intercept;
             }
-            self.dirty.hotkey_up = false;
-            self.dirty.hotkey_down = false;
-            self.dirty.intercept = false;
+            // The dirty flag(s) the caller just set are left alone rather
+            // than cleared: the reverted config is exactly what belongs on
+            // disk, so leaving them dirty is a no-op if nothing else was
+            // pending and correct if an earlier, still-unsaved change is
+            // sitting in the same fields (clearing them here would silently
+            // drop that earlier change instead of saving it).
             self.hotkeys_degraded = true;
             self.settings
                 .hotkey_error("Could not reach the hotkey thread");
@@ -583,14 +586,25 @@ where
     /// Handles an ack, or a deadline expiry treated exactly like one, for the
     /// hotkey thread's most recent posted operation.
     ///
-    /// A successful rebind is a recovery signal: it clears `hotkeys_degraded`
-    /// even if an earlier attempt had set it, because a working binding right
-    /// now is what "recoverable" means for this warning. A hook-install
-    /// fallback is reported as a notice, not an error — the rebind itself
-    /// still succeeded. A failure reverts the config if the op was a rebind
-    /// (the only op with a config change to undo) and re-arms the save so
-    /// the revert reaches disk even when the optimistic value was already
-    /// written there.
+    /// An ack that arrives with nothing pending is stale — the watchdog's ack
+    /// deadline has already passed and either reverted the config (a failed
+    /// rebind) or simply moved on (suspend/resume), so the thread's actual
+    /// registration state is no longer knowable from here. Adopting a late
+    /// success as ground truth would leave `config` on the old binding while
+    /// the thread believes it registered the new one, silently diverged with
+    /// no warning left to say so; a late failure would show a second,
+    /// different error for an operation already resolved. Either way the
+    /// honest move is to change nothing and let the dialog's own next rebind
+    /// (which re-posts both bindings) resolve any divergence deterministically.
+    ///
+    /// A successful rebind is otherwise a recovery signal: it clears
+    /// `hotkeys_degraded` even if an earlier attempt had set it, because a
+    /// working binding right now is what "recoverable" means for this
+    /// warning. A hook-install fallback is reported as a notice, not an
+    /// error — the rebind itself still succeeded. A failure reverts the
+    /// config if the op was a rebind (the only op with a config change to
+    /// undo) and re-arms the save so the revert reaches disk even when the
+    /// optimistic value was already written there.
     fn handle_hotkey_rebind_result(
         &mut self,
         op: HotkeyOp,
@@ -599,10 +613,16 @@ where
         error: Option<String>,
         now: Instant,
     ) {
+        if self.pending_hotkey_op.is_none() {
+            log::debug!(op:? = op, success; "Ignoring hotkey ack with no operation pending (stale/late)");
+            return;
+        }
         self.pending_hotkey_op = None;
 
         if success {
-            self.prev_hotkeys = None;
+            if op == HotkeyOp::Rebind {
+                self.prev_hotkeys = None;
+            }
             self.hotkeys_degraded = false;
             if fallback_active {
                 self.settings.hotkey_notice(
@@ -3107,9 +3127,13 @@ mod tests {
             c.config.brightness.step_percent, DEFAULT_STEP_PERCENT,
             "the unrelated reset still applies"
         );
-        assert!(!c.dirty.hotkey_up);
-        assert!(!c.dirty.hotkey_down);
-        assert!(!c.dirty.intercept);
+        // Restore-defaults marks every field dirty up front; a sync post
+        // failure must not clear the hotkey ones back off — the reverted
+        // config is exactly what belongs on disk, so leaving them dirty is
+        // correct (and harmless: it just re-saves the same live values).
+        assert!(c.dirty.hotkey_up);
+        assert!(c.dirty.hotkey_down);
+        assert!(c.dirty.intercept);
         assert!(
             c.dirty.step_percent,
             "the unrelated reset stays dirty and still saves"
@@ -3168,9 +3192,11 @@ mod tests {
             c.config.hotkeys.brightness_up, DEFAULT_HOTKEY_UP,
             "reverted because the post never reached the hotkey thread"
         );
-        assert!(!c.dirty.hotkey_up);
-        assert!(!c.dirty.hotkey_down);
-        assert!(!c.dirty.intercept);
+        // The dirty flag the dialog change set stays set: the reverted value
+        // is exactly what belongs on disk, so it must still reach the store.
+        assert!(c.dirty.hotkey_up);
+        assert!(!c.dirty.hotkey_down, "never touched by this change");
+        assert!(!c.dirty.intercept, "never touched by this change");
         assert!(c.hotkeys_degraded);
         assert!(c.prev_hotkeys.is_none());
         assert!(c.pending_hotkey_op.is_none());
@@ -3179,6 +3205,194 @@ mod tests {
             vec!["Could not reach the hotkey thread".to_string()]
         );
         assert_eq!(c.settings.refreshed.len(), 1);
+    }
+
+    #[test]
+    fn sync_post_failure_does_not_drop_an_earlier_still_dirty_change() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        // Change A posts fine and later acks success, but its own save
+        // debounce has not fired yet.
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base + Duration::from_millis(50),
+        )
+        .unwrap();
+        assert!(
+            c.dirty.hotkey_up,
+            "A is still unsaved, waiting on its debounce"
+        );
+
+        // Before A's debounce fires, change B's post fails outright (the
+        // hotkey thread died in between).
+        let t_b = base + Duration::from_millis(400);
+        c.hotkey_port.fail_next = true;
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::InterceptBrightnessKeys(true)),
+            t_b,
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.config.hotkeys.brightness_up, "Alt+Up",
+            "A's binding survives B's revert"
+        );
+        assert!(!c.config.hotkeys.intercept_brightness_keys, "B reverted");
+        assert!(
+            c.dirty.hotkey_up,
+            "A must still be scheduled to save, not silently dropped"
+        );
+
+        c.check_pending_save(t_b + SAVE_DEBOUNCE);
+        assert_eq!(c.store.saves.len(), 1);
+        assert_eq!(c.store.saves[0].0.hotkeys.brightness_up, "Alt+Up");
+    }
+
+    #[test]
+    fn hotkey_rebind_result_with_no_pending_op_is_ignored() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base,
+        )
+        .unwrap();
+
+        assert!(!c.hotkeys_degraded);
+        assert!(c.settings.refreshed.is_empty());
+        assert!(c.settings.errors.is_empty());
+        assert!(c.settings.notices.is_empty());
+    }
+
+    #[test]
+    fn a_late_ack_after_the_watchdog_already_reverted_is_ignored() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        // The ack deadline passes with no response; the watchdog reverts and
+        // reports it.
+        let past_deadline = base + REBIND_TIMEOUT + Duration::from_millis(1);
+        c.supervise_and_watchdog(past_deadline);
+        assert!(c.hotkeys_degraded);
+        let config_up_after_timeout = c.config.hotkeys.brightness_up.clone();
+        let errors_before = c.settings.errors.len();
+        let refreshed_before = c.settings.refreshed.len();
+        let saves_before = c.store.saves.len();
+
+        // The thread was only slow, not dead, and answers success afterward.
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            past_deadline + Duration::from_millis(100),
+        )
+        .unwrap();
+
+        assert!(
+            c.hotkeys_degraded,
+            "a late success must not clear a warning the watchdog already raised"
+        );
+        assert_eq!(
+            c.config.hotkeys.brightness_up, config_up_after_timeout,
+            "a late ack changes no state"
+        );
+        assert_eq!(c.settings.errors.len(), errors_before);
+        assert_eq!(c.settings.refreshed.len(), refreshed_before);
+        assert_eq!(c.store.saves.len(), saves_before);
+        assert!(c.pending_hotkey_op.is_none());
+    }
+
+    #[test]
+    fn a_late_failure_ack_after_the_watchdog_already_reverted_is_ignored() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        let past_deadline = base + REBIND_TIMEOUT + Duration::from_millis(1);
+        c.supervise_and_watchdog(past_deadline);
+        let errors_before = c.settings.errors.clone();
+        let refreshed_before = c.settings.refreshed.len();
+        let saves_before = c.store.saves.len();
+
+        // A NAK for the same, already-resolved operation arrives even later.
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: false,
+                fallback_active: false,
+                error: Some("device busy".to_string()),
+            },
+            past_deadline + Duration::from_millis(200),
+        )
+        .unwrap();
+
+        assert_eq!(
+            c.settings.errors, errors_before,
+            "no second, different error string for the one operation"
+        );
+        assert_eq!(c.settings.refreshed.len(), refreshed_before);
+        assert_eq!(c.store.saves.len(), saves_before);
+    }
+
+    #[test]
+    fn a_resume_ack_does_not_clear_an_in_flight_rebinds_revert_stash() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        // A rebind's revert stash is parked while a later-in-flight op
+        // (e.g. a capture-suspend's resume) also has an ack outstanding.
+        c.prev_hotkeys = Some((
+            DEFAULT_HOTKEY_UP.to_string(),
+            DEFAULT_HOTKEY_DOWN.to_string(),
+            false,
+        ));
+        c.pending_hotkey_op = Some((HotkeyOp::Resume, base));
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Resume,
+                success: true,
+                fallback_active: false,
+                error: None,
+            },
+            base + Duration::from_millis(10),
+        )
+        .unwrap();
+
+        assert!(
+            c.prev_hotkeys.is_some(),
+            "a non-rebind ack must not discard a pending rebind's revert stash"
+        );
+        assert!(c.pending_hotkey_op.is_none());
     }
 
     #[test]
