@@ -17,7 +17,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
     BST_CHECKED, BST_UNCHECKED, ICC_LINK_CLASS, ICC_STANDARD_CLASSES, ICC_UPDOWN_CLASS,
     INITCOMMONCONTROLSEX, InitCommonControlsEx, NM_CLICK, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR,
-    NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
+    NMLINK, NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK,
+    WC_STATIC,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, IsWindowEnabled, SetFocus,
@@ -48,10 +49,10 @@ use super::capture::capture_wnd_proc;
 use super::dark;
 use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_INACT_CHECK,
-    ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LINK_LOGS, ID_LOG_CHECK,
-    ID_LOG_LEVEL, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK,
-    ID_RESYNC_EDIT, ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement,
-    configure_updowns, dpi_from_wparam, font_height_for_dpi, is_section_header, layout,
+    ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL,
+    ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK, ID_RESYNC_EDIT,
+    ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement, configure_updowns,
+    dpi_from_wparam, font_height_for_dpi, is_section_header, layout,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1248,8 +1249,9 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
 }
 
 /// Routes a `WM_NOTIFY`: a spinner's `UDN_DELTAPOS` commits its delta,
-/// `NM_CLICK` on a footer `SysLink` posts the matching shell side effect,
-/// and `NM_CUSTOMDRAW` on one of the five checkboxes hand-paints its label
+/// `NM_CLICK` on the footer `SysLink` posts the shell side effect matching
+/// whichever of its two embedded links was clicked, and `NM_CUSTOMDRAW` on
+/// one of the five checkboxes hand-paints its label
 /// (see [`dark::checkbox_custom_draw`]) — the one notification code here
 /// whose return value the caller must actually use, since it tells the
 /// checkbox whether to skip its own default paint. Every other notification
@@ -1271,12 +1273,17 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
             }
             0
         }
-        NM_CLICK => {
-            let message = match id {
-                ID_LINK_CONFIG => Some(BrightnessMessage::OpenConfigFile),
-                ID_LINK_LOGS => Some(BrightnessMessage::TrayOpenLogFolder),
-                _ => None,
-            };
+        // The footer SysLink carries both links as one control; which one
+        // was clicked comes from NMLINK's embedded-link index, not the
+        // control id (there is only one id now).
+        NM_CLICK if id == ID_LINK_CONFIG => {
+            let nmlink_ptr: *const NMLINK = hdr_ptr.cast();
+            let message =
+                unsafe { nmlink_ptr.as_ref() }.and_then(|nmlink| match nmlink.item.iLink {
+                    0 => Some(BrightnessMessage::OpenConfigFile),
+                    1 => Some(BrightnessMessage::TrayOpenLogFolder),
+                    _ => None,
+                });
             if let Some(message) = message {
                 with_window_state(|state| send_message(state, message));
             }

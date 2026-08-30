@@ -54,7 +54,6 @@ pub(super) const ID_LOG_LEVEL: u16 = 137;
 pub(super) const ID_LOG_HINT: u16 = 138;
 
 pub(super) const ID_LINK_CONFIG: u16 = 140;
-pub(super) const ID_LINK_LOGS: u16 = 141;
 pub(super) const ID_RESTORE: u16 = 142;
 pub(super) const ID_CLOSE: u16 = 143;
 
@@ -77,7 +76,6 @@ const ID_SEP_ADVANCED: u16 = 215;
 const ID_LABEL_RESYNC_UNIT: u16 = 216;
 const ID_LABEL_INACT_UNIT: u16 = 217;
 const ID_LABEL_LOG_LEVEL: u16 = 218;
-const ID_SEP_FOOTER_BULLET: u16 = 219;
 
 /// Whether `id` is one of the four bold section-header labels, which need
 /// `build_font`'s bold variant rather than the regular one every other
@@ -209,7 +207,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_EDIT_NUM,
         x: 250,
         y: 70,
-        w: 50,
+        w: 60,
         h: 22,
         text: "",
     },
@@ -217,7 +215,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_STEP_UPDOWN,
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
-        x: 300,
+        x: 310,
         y: 70,
         w: 16,
         h: 22,
@@ -227,7 +225,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_LABEL_STEP_UNIT,
         class: "STATIC",
         style: STYLE_LABEL,
-        x: 320,
+        x: 326,
         y: 72,
         w: 20,
         h: 20,
@@ -270,7 +268,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_CAPTURE_GROUP,
         x: 170,
         y: 138,
-        w: 180,
+        w: 218,
         h: 22,
         text: "",
     },
@@ -290,7 +288,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_CAPTURE,
         x: 170,
         y: 168,
-        w: 180,
+        w: 218,
         h: 22,
         text: "",
     },
@@ -383,7 +381,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_LABEL_TIMEOUT_UNIT,
         class: "STATIC",
         style: STYLE_LABEL,
-        x: 330,
+        x: 326,
         y: 326,
         w: 30,
         h: 20,
@@ -405,7 +403,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_EDIT_NUM,
         x: 250,
         y: 354,
-        w: 50,
+        w: 60,
         h: 22,
         text: "",
     },
@@ -413,7 +411,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_OSD_OPACITY_UPDOWN,
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
-        x: 300,
+        x: 310,
         y: 354,
         w: 16,
         h: 22,
@@ -423,7 +421,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_LABEL_OPACITY_UNIT,
         class: "STATIC",
         style: STYLE_LABEL,
-        x: 320,
+        x: 326,
         y: 356,
         w: 20,
         h: 20,
@@ -466,7 +464,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_EDIT_NUM,
         x: 250,
         y: 420,
-        w: 50,
+        w: 60,
         h: 22,
         text: "",
     },
@@ -474,7 +472,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_RESYNC_UPDOWN,
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
-        x: 300,
+        x: 310,
         y: 420,
         w: 16,
         h: 22,
@@ -484,7 +482,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_LABEL_RESYNC_UNIT,
         class: "STATIC",
         style: STYLE_LABEL,
-        x: 320,
+        x: 326,
         y: 422,
         w: 20,
         h: 20,
@@ -496,24 +494,17 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_CHECKBOX,
         x: 24,
         y: 452,
-        w: 140,
+        w: 220,
         h: 20,
-        text: "Resync after",
+        text: "Resync after inactivity of",
     },
-    // This edit sits at x: 198, not the x: 250 column the other four
-    // numeric edits share (step, OSD timeout, OSD opacity, periodic
-    // resync): its trailing unit label is the widest of the five
-    // ("s of inactivity", 120px), and a column at 250 would push that
-    // label past the window's right margin. 198 is the closest approach
-    // that still keeps the label's right edge flush with the same 12px
-    // margin every full-width control in this table uses.
     ControlSpec {
         id: ID_INACT_EDIT,
         class: "EDIT",
         style: STYLE_EDIT_NUM,
-        x: 198,
+        x: 250,
         y: 450,
-        w: 50,
+        w: 60,
         h: 22,
         text: "",
     },
@@ -521,7 +512,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_INACT_UPDOWN,
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
-        x: 248,
+        x: 310,
         y: 450,
         w: 16,
         h: 22,
@@ -531,11 +522,11 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_LABEL_INACT_UNIT,
         class: "STATIC",
         style: STYLE_LABEL,
-        x: 268,
+        x: 326,
         y: 452,
-        w: 120,
+        w: 20,
         h: 20,
-        text: "s of inactivity",
+        text: "s",
     },
     ControlSpec {
         id: ID_LOG_CHECK,
@@ -553,7 +544,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         style: STYLE_LABEL,
         x: 170,
         y: 482,
-        w: 40,
+        w: 74,
         h: 20,
         text: "Level:",
     },
@@ -564,7 +555,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         id: ID_LOG_LEVEL,
         class: "COMBOBOX",
         style: STYLE_COMBO,
-        x: 214,
+        x: 250,
         y: 480,
         w: 100,
         h: 120,
@@ -581,38 +572,21 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         text: "(logging changes take effect after restart; debug and below log monitor serials and paths)",
     },
     // ── Footer ──────────────────────────────────────────────────────────
-    // SysLink markup: the visible text is exactly the spec's wording; the
-    // `<a>` tags are SysLink's own syntax for "this span is the hyperlink",
-    // not additional user-facing text.
+    // One SysLink carries both links as flowing text, `iLink` (0 = config
+    // file, 1 = log folder) telling window.rs's NM_CLICK handler which one
+    // was clicked; the middot between them is part of that same flow, not a
+    // separate control. SysLink markup: the visible text is exactly the
+    // spec's wording; the `<a>` tags are SysLink's own syntax for "this span
+    // is the hyperlink", not additional user-facing text.
     ControlSpec {
         id: ID_LINK_CONFIG,
         class: "SysLink",
         style: STYLE_LINK_GROUP,
         x: 12,
         y: 554,
-        w: 140,
+        w: 250,
         h: 20,
-        text: "<a>Open config file</a>",
-    },
-    ControlSpec {
-        id: ID_SEP_FOOTER_BULLET,
-        class: "STATIC",
-        style: STYLE_LABEL,
-        x: 155,
-        y: 554,
-        w: 12,
-        h: 20,
-        text: "\u{b7}",
-    },
-    ControlSpec {
-        id: ID_LINK_LOGS,
-        class: "SysLink",
-        style: STYLE_LINK,
-        x: 170,
-        y: 554,
-        w: 140,
-        h: 20,
-        text: "<a>Open log folder</a>",
+        text: "<a>Open config file</a> \u{b7} <a>Open log folder</a>",
     },
     ControlSpec {
         id: ID_RESTORE,
@@ -900,7 +874,7 @@ mod tests {
         // 120 DPI = 125% scaling; px * 120 / 96 = px * 1.25. These three
         // values happen to divide evenly — a property of these particular
         // numbers, not a claim about every entry in CONTROLS (several of
-        // which do not, e.g. x: 155, x: 214, h: 22).
+        // which do not, e.g. x: 250, x: 310, h: 22).
         assert_eq!(scale_dimension(400, 120), 500);
         assert_eq!(scale_dimension(24, 120), 30);
         assert_eq!(scale_dimension(16, 120), 20);
@@ -1058,7 +1032,6 @@ mod tests {
             ID_LOG_LEVEL,
             ID_LOG_HINT,
             ID_LINK_CONFIG,
-            ID_LINK_LOGS,
             ID_RESTORE,
             ID_CLOSE,
         ] {
