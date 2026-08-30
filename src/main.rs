@@ -342,16 +342,12 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// * `tx` - Channel sender to notify the main thread of tray events.
 /// * `status_tx` - Hands the tray's status handle back to the main thread so
 ///   it can push degraded-state icon/tooltip updates.
-/// * `hotkey_up`, `hotkey_down` - Configured hotkeys, shown in the menu's
-///   usage rows. Owned, because they outlive this call on the tray thread.
 fn spawn_tray_thread(
     tx: mpsc::Sender<BrightnessMessage>,
     status_tx: mpsc::Sender<TrayStatusHandle>,
-    hotkey_up: String,
-    hotkey_down: String,
 ) {
     std::thread::spawn(move || {
-        match TrayIcon::new(tx, &hotkey_up, &hotkey_down) {
+        match TrayIcon::new(tx) {
             Ok(tray) => {
                 log::info!("System tray icon created");
                 let _ = status_tx.send(tray.status_handle());
@@ -537,12 +533,7 @@ fn main() {
     // Spawn system tray icon thread; it hands back a status handle for
     // pushing degraded-state icon/tooltip updates.
     let (tray_status_tx, tray_status_rx) = mpsc::channel();
-    spawn_tray_thread(
-        tx.clone(),
-        tray_status_tx,
-        config.hotkeys.brightness_up.clone(),
-        config.hotkeys.brightness_down.clone(),
-    );
+    spawn_tray_thread(tx.clone(), tray_status_tx);
     let mut tray_status: Option<TrayStatusHandle> = None;
     let mut last_warnings = HealthWarnings::default();
 

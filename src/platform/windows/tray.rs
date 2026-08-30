@@ -249,10 +249,9 @@ thread_local! {
     /// This allows the window procedure to send messages to the main thread.
     static TRAY_SENDER: RefCell<Option<Sender<BrightnessMessage>>> = const { RefCell::new(None) };
 
-    /// Usage rows for the menu; set once by `TrayIcon::new` (tray thread).
-    /// Composed up front because the hotkeys cannot change while the app runs
-    /// — the configuration is read once at startup.
-    static USAGE_LINES: RefCell<Option<[String; 3]>> = const { RefCell::new(None) };
+    /// Last hotkey pair received from the main thread, kept as a fallback for
+    /// the usage rows when a menu open's `TrayMenuOpening` request times out.
+    static LAST_HOTKEYS: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
 }
 
 /// Sets the thread-local sender for the tray icon callbacks.
@@ -703,21 +702,29 @@ fn show_context_menu(hwnd: HWND) {
         }
 
         // How to use the app, stated rather than hidden behind a click: this
-        // is the only place a first-time user is told what to press. Drawn
-        // from the configuration, so it survives a rebind — and it appears
-        // even when the main thread failed to answer above, because it does
-        // not depend on that data.
-        USAGE_LINES.with(|lines| {
-            if let Some(lines) = lines.borrow().as_ref() {
-                for (index, line) in lines.iter().enumerate() {
-                    // Menu IDs are u32; this block is exactly three rows.
-                    #[allow(clippy::cast_possible_truncation)]
-                    let menu_id = MENU_ID_USAGE_BASE + (index as u32);
-                    append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, line);
-                }
-                append_separator(hmenu);
+        // is the only place a first-time user is told what to press. The
+        // bindings come with each `TrayMenuOpening` reply, so a rebind in the
+        // settings dialog shows up the next time this menu opens. If the
+        // request above timed out, the last pair this thread did receive
+        // stands in rather than showing nothing.
+        let hotkeys = match &menu_data {
+            Some(data) => {
+                let pair = (data.hotkey_up.clone(), data.hotkey_down.clone());
+                LAST_HOTKEYS.with(|last| *last.borrow_mut() = Some(pair.clone()));
+                Some(pair)
             }
-        });
+            None => LAST_HOTKEYS.with(|last| last.borrow().clone()),
+        };
+        if let Some((hotkey_up, hotkey_down)) = hotkeys {
+            let lines = usage_menu_lines(&hotkey_up, &hotkey_down);
+            for (index, line) in lines.iter().enumerate() {
+                // Menu IDs are u32; this block is exactly three rows.
+                #[allow(clippy::cast_possible_truncation)]
+                let menu_id = MENU_ID_USAGE_BASE + (index as u32);
+                append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, line);
+            }
+            append_separator(hmenu);
+        }
 
         append_menu_item(hmenu, MF_STRING, MENU_ID_SETTINGS, "Settings");
         append_menu_item(hmenu, MF_STRING, MENU_ID_OPEN_LOGS, "Open Log Folder");
@@ -942,9 +949,6 @@ impl TrayIcon {
     /// # Arguments
     ///
     /// * `sender` - Channel to send messages to the main thread.
-    /// * `hotkey_up` - Configured hotkey for increasing brightness, shown in
-    ///   the menu's usage rows.
-    /// * `hotkey_down` - Configured hotkey for decreasing brightness.
     ///
     /// # Errors
     ///
@@ -952,11 +956,7 @@ impl TrayIcon {
     /// - The message window cannot be created
     /// - The icon resource cannot be loaded
     /// - The tray icon cannot be registered with the shell
-    pub fn new(
-        sender: Sender<BrightnessMessage>,
-        hotkey_up: &str,
-        hotkey_down: &str,
-    ) -> Result<Self> {
+    pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
         let class_name = ensure_tray_class_registered()?;
 
         // Before the first menu exists: without this the context menu is drawn
@@ -999,12 +999,6 @@ impl TrayIcon {
 
         // Store sender in thread-local storage for window procedure access
         set_tray_sender(sender);
-
-        // Same reason: the menu is built in the window procedure, which has no
-        // path back to this struct.
-        USAGE_LINES.with(|lines| {
-            *lines.borrow_mut() = Some(usage_menu_lines(hotkey_up, hotkey_down));
-        });
 
         // Load the application icon
         let icon_handle = load_tray_icon()?;
