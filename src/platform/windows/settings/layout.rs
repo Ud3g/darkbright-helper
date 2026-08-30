@@ -551,13 +551,18 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     // The combo's `h` is the height of the *dropped-down* list, a Win32
     // quirk: the closed control renders at the font's line height regardless
     // of this value. See `no_two_controls_overlap`'s combo exemption below.
+    // `w: 76` matches the numeric edit+updown pair's combined width (60 +
+    // 16) so the combo's right edge lands exactly where the spinner rows'
+    // updown buttons end (250 + 76 = 326, same as 250 + 60 + 16 on those
+    // rows); the longest entry ("debug", ~34px at this font) still leaves
+    // headroom against the 17px system dropdown-arrow width at that size.
     ControlSpec {
         id: ID_LOG_LEVEL,
         class: "COMBOBOX",
         style: STYLE_COMBO,
         x: 250,
         y: 480,
-        w: 100,
+        w: 76,
         h: 120,
         text: "",
     },
