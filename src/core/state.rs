@@ -476,6 +476,38 @@ pub(crate) fn monitor_menu_line(monitor: &TrayMonitorInfo) -> String {
     )
 }
 
+/// Row positions whose text differs, paired with the text to write.
+///
+/// Returns `None` when the display names no longer match, which is the only
+/// thing that makes a row position mean a particular monitor. Comparing the
+/// names rather than their count is deliberate: two identical panels can swap
+/// their `#1`/`#2` suffixes without the count ever changing, and writing row
+/// `i` then puts one monitor's brightness on another monitor's row.
+// Not yet called from the Win32 tray build: the live-refresh path that wires
+// this in updates menu rows in place while the menu is open, which isn't
+// implemented yet.
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn changed_rows(
+    prev_names: &[String],
+    prev_rows: &[String],
+    next_names: &[String],
+    next_rows: &[String],
+) -> Option<Vec<(usize, String)>> {
+    if prev_names != next_names {
+        return None;
+    }
+    Some(
+        prev_rows
+            .iter()
+            .zip(next_rows.iter())
+            .enumerate()
+            .filter(|(_, (old, new))| old != new)
+            .map(|(index, (_, new))| (index, new.clone()))
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 mod tray_menu_tests {
     use super::*;
@@ -518,6 +550,71 @@ mod tray_menu_tests {
     fn menu_line_reports_overlay_opacity() {
         let line = monitor_menu_line(&info("DEL U2722D #2", 0, true, 40));
         assert_eq!(line, "DEL U2722D #2: 🕶40% 🔆0%");
+    }
+
+    fn rows(texts: &[&str]) -> Vec<String> {
+        texts.iter().map(|t| (*t).to_string()).collect()
+    }
+
+    #[test]
+    fn no_change_produces_no_updates() {
+        let names = rows(&["one", "two"]);
+        let before = rows(&["a", "b"]);
+        assert_eq!(
+            changed_rows(&names, &before, &names, &before),
+            Some(Vec::new())
+        );
+    }
+
+    #[test]
+    fn only_the_differing_row_is_reported() {
+        let names = rows(&["one", "two", "three"]);
+        let before = rows(&["a", "b", "c"]);
+        let after = rows(&["a", "B", "c"]);
+        assert_eq!(
+            changed_rows(&names, &before, &names, &after),
+            Some(vec![(1, "B".to_string())])
+        );
+    }
+
+    #[test]
+    fn several_changes_are_reported_in_row_order() {
+        let names = rows(&["one", "two", "three"]);
+        let before = rows(&["a", "b", "c"]);
+        let after = rows(&["A", "b", "C"]);
+        assert_eq!(
+            changed_rows(&names, &before, &names, &after),
+            Some(vec![(0, "A".to_string()), (2, "C".to_string())])
+        );
+    }
+
+    #[test]
+    fn a_renamed_monitor_stops_the_refresh_though_the_count_is_unchanged() {
+        // Two identical panels swapping their #1/#2 suffixes keeps the count
+        // the same while row 0 stops meaning the monitor it meant before.
+        let before_names = rows(&["DEL U2722D #1", "DEL U2722D #2"]);
+        let after_names = rows(&["DEL U2722D #2", "DEL U2722D #1"]);
+        let before = rows(&["a", "b"]);
+        let after = rows(&["b", "a"]);
+        assert_eq!(
+            changed_rows(&before_names, &before, &after_names, &after),
+            None
+        );
+    }
+
+    #[test]
+    fn a_vanished_monitor_stops_the_refresh() {
+        let before_names = rows(&["one", "two"]);
+        let after_names = rows(&["one"]);
+        assert_eq!(
+            changed_rows(
+                &before_names,
+                &rows(&["a", "b"]),
+                &after_names,
+                &rows(&["a"])
+            ),
+            None
+        );
     }
 }
 
