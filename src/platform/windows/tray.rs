@@ -27,16 +27,16 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
     DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos, GetMessageW, HICON, HMENU,
-    HWND_MESSAGE, ICONINFO, IMAGE_ICON, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW,
-    MENU_ITEM_FLAGS, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, PostMessageW, PostQuitMessage,
-    RegisterClassExW, SetForegroundWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL,
-    WNDCLASSEXW, WS_OVERLAPPED,
+    HWND_MESSAGE, ICONINFO, IMAGE_ICON, KillTimer, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED,
+    LoadImageW, MENU_ITEM_FLAGS, MENUITEMINFOW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MIIM_STRING,
+    MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
+    SetTimer, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPED,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{PCWSTR, PWSTR, w};
 
 use crate::core::state::{
-    BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData, monitor_menu_line,
+    BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData, changed_rows, monitor_menu_line,
 };
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
@@ -97,6 +97,33 @@ const APP_NAME: &str = "Brightness Control";
 
 /// Timeout for waiting for menu data from the main thread.
 const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
+
+/// How often an open menu re-reads its monitor rows.
+///
+/// Chosen against the OSD rather than against reaction time: the OSD is the
+/// instant feedback for a hotkey press, so the row only has to stop being
+/// wrong before the eye moves to it.
+const MENU_REFRESH_INTERVAL_MS: u32 = 250;
+
+/// Timeout for one refresh round trip.
+///
+/// Deliberately far below [`MENU_DATA_TIMEOUT`]: on this path the tray thread
+/// is inside the menu's modal loop and pumps nothing while it waits, so the
+/// wait *is* a frozen menu. The main loop wakes on the send and answers within
+/// its 16 ms tick, so 50 ms is already generous.
+const MENU_POLL_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Consecutive unanswered refreshes before an open menu stops refreshing.
+///
+/// One hiccup must not kill the feature; a wedged main thread must not stutter
+/// the menu four times a second.
+const MENU_POLL_MISS_LIMIT: u32 = 2;
+
+/// Timer id for the open menu's refresh.
+///
+/// Timers are keyed by window *and* id, so this cannot collide with the OSD's
+/// timer, which lives on another window owned by another thread.
+const MENU_REFRESH_TIMER_ID: usize = 1;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Warning Presentation (pure helpers)
@@ -257,6 +284,37 @@ thread_local! {
     static LAST_HOTKEYS: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
 }
 
+/// Bookkeeping for the popup menu currently on screen.
+///
+/// Lives on the tray thread only, which is why it can hold an `HMENU` — that
+/// handle is not `Send` and never leaves this thread.
+struct MenuSession {
+    /// The live popup.
+    hmenu: HMENU,
+    /// Display names in row order. A refresh may only rewrite row `i` while
+    /// this still matches, or two identical panels could swap their rows
+    /// under the reader.
+    names: Vec<String>,
+    /// Last text written to each row, in the same order.
+    rows: Vec<String>,
+    /// Cleared once refreshing this menu must not be retried.
+    refreshing: bool,
+    /// Consecutive refreshes the main thread did not answer.
+    misses: u32,
+}
+
+thread_local! {
+    /// The open menu, or `None` when none is open. Doubles as the re-entrancy
+    /// guard: the shell can post a second right-click callback that the modal
+    /// loop dispatches, and a nested menu would take over this slot.
+    static MENU_SESSION: RefCell<Option<MenuSession>> = const { RefCell::new(None) };
+}
+
+/// Runs `f` against the open menu's session, if there is one.
+fn with_session<R>(f: impl FnOnce(&mut MenuSession) -> R) -> Option<R> {
+    MENU_SESSION.with(|cell| cell.borrow_mut().as_mut().map(f))
+}
+
 /// Sets the thread-local sender for the tray icon callbacks.
 fn set_tray_sender(sender: Sender<BrightnessMessage>) {
     TRAY_SENDER.with(|s| {
@@ -271,9 +329,11 @@ fn with_tray_sender<R>(f: impl FnOnce(&Sender<BrightnessMessage>) -> R) -> Optio
 
 /// Requests menu data from the main thread.
 ///
-/// Sends a `TrayMenuOpening` message and waits for the response with a timeout.
-/// Returns `None` if the request times out or fails.
-fn request_menu_data() -> Option<TrayMenuData> {
+/// Sends a `TrayMenuOpening` message and waits for the response.
+/// Returns `None` if the request times out or fails. The timeout is the
+/// caller's because the two callers differ in what a wait costs: before the
+/// popup exists it is a delayed menu, inside the modal loop it is a frozen one.
+fn request_menu_data(timeout: Duration) -> Option<TrayMenuData> {
     let (reply_tx, reply_rx) = mpsc::channel();
 
     let sent = with_tray_sender(|sender| {
@@ -288,7 +348,7 @@ fn request_menu_data() -> Option<TrayMenuData> {
         return None;
     }
 
-    match reply_rx.recv_timeout(MENU_DATA_TIMEOUT) {
+    match reply_rx.recv_timeout(timeout) {
         Ok(data) => Some(data),
         Err(e) => {
             log::warn!(error:% = e; "Failed to receive menu data");
@@ -645,6 +705,95 @@ fn append_menu_item(hmenu: HMENU, flags: MENU_ITEM_FLAGS, id: u32, text: &str) {
     }
 }
 
+/// Rewrites one already-appended menu item's text.
+///
+/// Addressed by command id rather than by position, so the number of warning
+/// rows above the monitor block does not have to be tracked. Windows repaints
+/// the visible popup by itself after this call, and widens it if the new text
+/// needs more room.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if the item cannot be updated, which
+/// for a live menu means the id is gone or the menu is no longer valid.
+fn set_menu_item_text(hmenu: HMENU, menu_id: u32, text: &str) -> Result<()> {
+    let mut wide: Vec<u16> = format!("{text}\0").encode_utf16().collect();
+    let info = MENUITEMINFOW {
+        cbSize: u32::try_from(std::mem::size_of::<MENUITEMINFOW>()).unwrap_or(0),
+        // MIIM_STRING alone: MIIM_TYPE would also rewrite fType and drop
+        // MFT_STRING along with the item's grayed appearance.
+        fMask: MIIM_STRING,
+        dwTypeData: PWSTR(wide.as_mut_ptr()),
+        ..Default::default()
+    };
+    // SAFETY: `info` describes a string update only, and `wide` is a
+    // NUL-terminated buffer that outlives the call.
+    unsafe { SetMenuItemInfoW(hmenu, menu_id, false, &raw const info) }
+        .map_err(|e| BrightnessError::windows_api("SetMenuItemInfoW", e.code().0.cast_unsigned()))
+}
+
+/// Re-reads the monitor rows of the open menu and writes back what changed.
+///
+/// Runs inside `TrackPopupMenu`'s modal loop. Anything slow here is a menu
+/// that does not respond to the mouse, which is why the round trip is on a
+/// short leash and why every giving-up condition latches for the rest of the
+/// menu rather than being retried.
+fn refresh_open_menu() {
+    let Some((hmenu, names, rows)) = with_session(|session| {
+        session
+            .refreshing
+            .then(|| (session.hmenu, session.names.clone(), session.rows.clone()))
+    })
+    .flatten() else {
+        return;
+    };
+
+    let Some(data) = request_menu_data(MENU_POLL_TIMEOUT) else {
+        let gave_up = with_session(|session| {
+            session.misses += 1;
+            let gave_up = session.misses >= MENU_POLL_MISS_LIMIT;
+            if gave_up {
+                session.refreshing = false;
+            }
+            gave_up
+        })
+        .unwrap_or(false);
+        if gave_up {
+            log::warn!("Main thread did not answer; tray menu rows stay as they are");
+        }
+        return;
+    };
+
+    let next_names: Vec<String> = data
+        .monitors
+        .iter()
+        .map(|monitor| monitor.display_name.clone())
+        .collect();
+    let next_rows: Vec<String> = data.monitors.iter().map(monitor_menu_line).collect();
+
+    let Some(updates) = changed_rows(&names, &rows, &next_names, &next_rows) else {
+        let _ = with_session(|session| session.refreshing = false);
+        log::debug!("Monitor set changed while the tray menu was open; rows frozen");
+        return;
+    };
+
+    for (index, text) in updates {
+        // Menu IDs are u32; index won't exceed monitor count (typically < 10)
+        #[allow(clippy::cast_possible_truncation)]
+        let menu_id = MENU_ID_MONITOR_BASE + (index as u32);
+        if let Err(e) = set_menu_item_text(hmenu, menu_id, &text) {
+            let _ = with_session(|session| session.refreshing = false);
+            log::warn!(error:% = e; "Tray menu row update failed; rows frozen");
+            return;
+        }
+    }
+
+    let _ = with_session(|session| {
+        session.rows = next_rows;
+        session.misses = 0;
+    });
+}
+
 /// Appends a separator line.
 fn append_separator(hmenu: HMENU) {
     unsafe {
@@ -657,7 +806,18 @@ fn append_separator(hmenu: HMENU) {
 /// # Arguments
 ///
 /// * `hwnd` - Window handle for menu ownership and message routing.
+// Building the menu is one straight-line sequence of rows in display order;
+// splitting it into helpers would only scatter that order.
+#[allow(clippy::too_many_lines)]
 fn show_context_menu(hwnd: HWND) {
+    // The shell can post a second right-click callback that the modal loop
+    // dispatches; a nested menu would take over the session slot and the
+    // shared timer, silently killing the outer menu's refresh.
+    if MENU_SESSION.with(|cell| cell.borrow().is_some()) {
+        log::debug!("Tray menu already open; ignoring the second open");
+        return;
+    }
+
     // The system light/dark setting may have changed since the last menu.
     theme::refresh_menu_theme();
 
@@ -669,7 +829,10 @@ fn show_context_menu(hwnd: HWND) {
         };
 
         // Request current monitor data from main thread
-        let menu_data = request_menu_data();
+        let menu_data = request_menu_data(MENU_DATA_TIMEOUT);
+
+        let mut row_names: Vec<String> = Vec::new();
+        let mut row_texts: Vec<String> = Vec::new();
 
         if let Some(ref data) = menu_data {
             // Degraded-subsystem warnings come first so they cannot be missed.
@@ -691,6 +854,8 @@ fn show_context_menu(hwnd: HWND) {
                 #[allow(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_MONITOR_BASE + (index as u32);
                 append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, &monitor_text);
+                row_names.push(monitor.display_name.clone());
+                row_texts.push(monitor_text);
             }
             if !data.monitors.is_empty() {
                 append_separator(hmenu);
@@ -742,6 +907,30 @@ fn show_context_menu(hwnd: HWND) {
         // This ensures the menu dismisses when clicking outside
         let _ = SetForegroundWindow(hwnd);
 
+        MENU_SESSION.with(|cell| {
+            *cell.borrow_mut() = Some(MenuSession {
+                hmenu,
+                names: row_names,
+                rows: row_texts,
+                refreshing: true,
+                misses: 0,
+            });
+        });
+        // The timer lives exactly as long as the popup, so an idle process
+        // does no periodic work at all.
+        if SetTimer(
+            Some(hwnd),
+            MENU_REFRESH_TIMER_ID,
+            MENU_REFRESH_INTERVAL_MS,
+            None,
+        ) == 0
+        {
+            log::warn!(
+                error_code = super::get_last_error_code();
+                "Tray menu refresh timer not started; rows stay as opened"
+            );
+        }
+
         // Show menu and wait for selection
         let cmd = TrackPopupMenu(
             hmenu,
@@ -753,7 +942,12 @@ fn show_context_menu(hwnd: HWND) {
             None,
         );
 
-        // Clean up menu
+        // Order matters. `KillTimer` does not purge WM_TIMER messages that are
+        // already queued, so the session has to be gone before the handle is:
+        // a straggler tick then finds no session and returns, instead of
+        // writing to a destroyed menu.
+        let _ = KillTimer(Some(hwnd), MENU_REFRESH_TIMER_ID);
+        MENU_SESSION.with(|cell| *cell.borrow_mut() = None);
         let _ = DestroyMenu(hmenu);
 
         // Send a null message to ensure the window processes the menu dismissal
@@ -882,6 +1076,12 @@ unsafe extern "system" fn tray_wnd_proc(
             }
             WM_TRAY_STATUS => {
                 handle_status_update(hwnd, wparam);
+                LRESULT(0)
+            }
+            WM_TIMER => {
+                if wparam.0 == MENU_REFRESH_TIMER_ID {
+                    refresh_open_menu();
+                }
                 LRESULT(0)
             }
             WM_DESTROY => {
