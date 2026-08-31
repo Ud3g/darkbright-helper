@@ -1251,8 +1251,8 @@ and the combo's popup list; checkbox labels are custom-drawn via
 text); the combo face (arrow + selected text) is drawn through
 `DrawThemeBackground`/`DrawThemeTextEx` against the `DarkMode_CFD::COMBOBOX`
 theme class, with a hand-drawn GDI fallback whenever `OpenThemeData` or the
-theme draw call fails — that fallback path is the one actually exercised on
-the dev machine used to build this feature, not a theoretical branch. The
+theme draw call fails — that fallback path has been exercised on real
+hardware during development, not just as a theoretical branch. The
 five numeric edits are stripped of their visual-styles theme association
 entirely (empty sub-app/sub-id name) — not to disable painting, but because
 a themed edit ignores `WM_CTLCOLOREDIT`'s colours outright, so detachment is
@@ -1292,9 +1292,9 @@ control (so a paint reentered synchronously from that already sees the new
 font handle), and relayouts every control from the same baseline table
 `create_settings_window` used initially. Known unverified: dragging the
 window across two monitors at different DPIs has not been exercised on real
-hardware — the development machine has one monitor — so `WM_DPICHANGED` has
-only been confirmed through a live per-monitor scale-factor change on that
-single monitor instead.
+hardware; `WM_DPICHANGED` has instead been confirmed through a live
+per-monitor scale-factor change on a single monitor, which drives the same
+handler.
 
 **Focus save/restore.** A programmatic (non-template) `CreateWindowExW`
 window gets none of a real dialog's automatic keyboard-focus bookkeeping: a
