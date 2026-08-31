@@ -773,7 +773,14 @@ fn refresh_open_menu() {
 
     let Some(updates) = changed_rows(&names, &rows, &next_names, &next_rows) else {
         let _ = with_session(|session| session.refreshing = false);
-        log::debug!("Monitor set changed while the tray menu was open; rows frozen");
+        if names.is_empty() {
+            // The open-time request timed out (or found no monitors), so
+            // the popup has no monitor rows to write back into — not a
+            // change in the monitor set while the menu was already open.
+            log::debug!("Tray menu was built without monitor rows, so it cannot refresh them");
+        } else {
+            log::debug!("Monitor set changed while the tray menu was open; rows frozen");
+        }
         return;
     };
 

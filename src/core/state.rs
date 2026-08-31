@@ -175,6 +175,12 @@ pub(crate) fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, St
     // only caller builds this slice from a HashMap, whose order changes
     // whenever the map is mutated — which would let two identical panels
     // silently swap their numbers between one reading and the next.
+    //
+    // The tray menu's live row refresh also leans on this: it compares the
+    // display-name vector between polls to decide whether a row still means
+    // the same monitor, so a name order that wobbled between calls would
+    // make the refresh give up silently (only at `debug`). Keep this sort,
+    // and the matching sort that orders the menu rows themselves, stable.
     let mut ordered: Vec<&MonitorId> = ids.iter().collect();
     ordered.sort_by(|a, b| {
         (&a.manufacturer, &a.model_name, &a.serial_number).cmp(&(
@@ -483,6 +489,12 @@ pub(crate) fn monitor_menu_line(monitor: &TrayMonitorInfo) -> String {
 /// names rather than their count is deliberate: two identical panels can swap
 /// their `#1`/`#2` suffixes without the count ever changing, and writing row
 /// `i` then puts one monitor's brightness on another monitor's row.
+///
+/// Also returns `None` if `prev_rows` and `next_rows` differ in length from
+/// each other. Both are built alongside their matching name vector by the
+/// same caller loop, so the lengths agree in practice — but that pairing is
+/// not enforced here, and without this check a length mismatch would make
+/// the `zip` below silently truncate instead of refusing.
 #[must_use]
 pub(crate) fn changed_rows(
     prev_names: &[String],
@@ -490,7 +502,7 @@ pub(crate) fn changed_rows(
     next_names: &[String],
     next_rows: &[String],
 ) -> Option<Vec<(usize, String)>> {
-    if prev_names != next_names {
+    if prev_names != next_names || prev_rows.len() != next_rows.len() {
         return None;
     }
     Some(
@@ -609,6 +621,18 @@ mod tray_menu_tests {
                 &after_names,
                 &rows(&["a"])
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn mismatched_row_length_refuses_rather_than_truncates() {
+        // Same names on both sides, but the two row vectors disagree in
+        // length with each other — a caller bug this function must refuse
+        // rather than silently truncate via `zip`.
+        let names = rows(&["one", "two"]);
+        assert_eq!(
+            changed_rows(&names, &rows(&["a", "b"]), &names, &rows(&["a", "b", "c"])),
             None
         );
     }
