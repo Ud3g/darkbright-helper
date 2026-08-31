@@ -1502,7 +1502,7 @@ where
                 return Ok(false);
             }
             BrightnessMessage::TrayMenuOpening { reply_tx } => {
-                log::debug!("TrayMenuOpening received");
+                log::trace!("TrayMenuOpening received");
                 let menu_data = self.build_tray_menu_data();
                 if let Err(e) = reply_tx.send(menu_data) {
                     log::warn!(error:? = e; "Failed to send tray menu data");
