@@ -45,6 +45,14 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
   worth verifying, in particular that `cargo about generate --fail` succeeds,
   since a dependency licence outside the accepted list aborts the run after the
   tag already exists.
+- **The tag is what makes a binary look released.** The version shown in the
+  tray menu and the settings window is derived from `git describe`, so a build
+  made anywhere other than a clean checkout of the tag appends a `(dev)` marker
+  naming its commit. The release workflow therefore checks out with
+  `fetch-depth: 0`; a shallow checkout without the tag would ship a release
+  binary labelled as a dev build. Nothing to do during a release beyond leaving
+  that setting alone — but it is why a locally built binary never claims to be
+  the release.
 - Tags `0.7.1` and older predate this workflow and have no binaries; `0.8.0`
   was tagged retroactively (the workflow file does not exist at that commit,
   so no artifact was built for it).
