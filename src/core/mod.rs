@@ -10,6 +10,7 @@
 //! - [`panic_hook`] - Process-wide panic logging hook
 //! - [`reconcile`] - Refresh/respawn tracking and reconciliation policies
 //! - [`state`] - Application state and inter-thread messages
+//! - [`version`] - The user-facing version string, git-describe aware
 
 // `edid` is crate-internal: only `platform::windows::ddc` parses EDID blobs.
 // See the note in `platform::windows` — a `pub mod` suppresses `dead_code` for
@@ -23,3 +24,4 @@ pub mod logfile;
 pub mod panic_hook;
 pub mod reconcile;
 pub mod state;
+pub mod version;
