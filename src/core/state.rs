@@ -483,10 +483,6 @@ pub(crate) fn monitor_menu_line(monitor: &TrayMonitorInfo) -> String {
 /// names rather than their count is deliberate: two identical panels can swap
 /// their `#1`/`#2` suffixes without the count ever changing, and writing row
 /// `i` then puts one monitor's brightness on another monitor's row.
-// Not yet called from the Win32 tray build: the live-refresh path that wires
-// this in updates menu rows in place while the menu is open, which isn't
-// implemented yet.
-#[allow(dead_code)]
 #[must_use]
 pub(crate) fn changed_rows(
     prev_names: &[String],
