@@ -23,6 +23,7 @@ use darkbright_helper::core::reconcile::{
     RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate,
 };
 use darkbright_helper::core::state::{BrightnessMessage, HealthWarnings};
+use darkbright_helper::core::version::version_string;
 use darkbright_helper::platform::windows::CursorLocator;
 use darkbright_helper::platform::windows::hotkey::{
     HotkeyCommandQueue, HotkeyPortImpl, parse_hotkey, run_hotkey_thread,
@@ -280,7 +281,7 @@ fn init_logging() -> &'static TeeLogger {
         log::set_max_level(max);
     }
 
-    log::info!(version = env!("CARGO_PKG_VERSION"); "Brightness Control Tool Starting");
+    log::info!(version = version_string(); "Brightness Control Tool Starting");
     tee
 }
 
@@ -469,7 +470,7 @@ fn main() {
             Ok(file_logger) => {
                 tee.attach_file(file_logger);
                 // First line in the file: identify the build being diagnosed.
-                log::info!(version = env!("CARGO_PKG_VERSION"); "File logging enabled");
+                log::info!(version = version_string(); "File logging enabled");
                 false
             }
             Err(e) => {

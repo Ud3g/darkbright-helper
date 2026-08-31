@@ -43,6 +43,7 @@ use windows::core::{PCWSTR, w};
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
+use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
 use super::super::{autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
@@ -52,7 +53,7 @@ use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_INACT_CHECK,
     ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL,
     ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK, ID_RESYNC_EDIT,
-    ID_RESYNC_UPDOWN, ID_STEP_EDIT, RANGE_SPECS, RangeSpec, compute_placement,
+    ID_RESYNC_UPDOWN, ID_STEP_EDIT, ID_VERSION, RANGE_SPECS, RangeSpec, compute_placement,
     configure_combo_height, configure_updowns, dpi_from_wparam, font_height_for_dpi,
     is_section_header, layout,
 };
@@ -260,7 +261,13 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
             }
         };
 
-        let text = wide(spec.text);
+        // Every control's caption is a constant in the layout table except
+        // the version line, whose text only exists once the build has run.
+        let text = if spec.id == ID_VERSION {
+            wide(&format!("v{}", version_string()))
+        } else {
+            wide(spec.text)
+        };
         let id = HMENU(std::ptr::without_provenance_mut(usize::from(spec.id)));
         let style = WINDOW_STYLE(spec.style) | WS_CHILD | WS_VISIBLE;
 

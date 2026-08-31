@@ -57,6 +57,7 @@ pub(super) const ID_LOG_HINT: u16 = 138;
 pub(super) const ID_LINK_CONFIG: u16 = 140;
 pub(super) const ID_RESTORE: u16 = 142;
 pub(super) const ID_CLOSE: u16 = 143;
+pub(super) const ID_VERSION: u16 = 144;
 
 const ID_HEADER_GENERAL: u16 = 200;
 const ID_SEP_GENERAL: u16 = 201;
@@ -623,6 +624,25 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         h: 26,
         text: "Close",
     },
+    // Which build is running, in the free space left of the buttons and
+    // vertically centred against them. `text` is empty because the string is
+    // only known at build time: `window`'s control creation substitutes
+    // `core::version` output for this one id.
+    //
+    // `w` is what is left before "Restore defaults" starts, and it is the
+    // binding constraint: the longest string this can carry is a
+    // three-digit commit count on a dirty tree, measured at 165px in the
+    // dialog font at 96 DPI. A released build shows just "v0.9.0" (30px).
+    ControlSpec {
+        id: ID_VERSION,
+        class: "STATIC",
+        style: STYLE_LABEL,
+        x: 12,
+        y: 590,
+        w: 172,
+        h: 18,
+        text: "",
+    },
 ];
 
 /// Scales a 96-DPI-baseline pixel value to `dpi`, `MulDiv`-style
@@ -1149,6 +1169,7 @@ mod tests {
             ID_LINK_CONFIG,
             ID_RESTORE,
             ID_CLOSE,
+            ID_VERSION,
         ] {
             assert!(
                 ids.contains(&id),
