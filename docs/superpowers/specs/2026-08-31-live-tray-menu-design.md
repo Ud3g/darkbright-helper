@@ -152,9 +152,9 @@ would make it a swap *in front of the user*. So:
 
 - **Prerequisite fix:** sort the `Vec<MonitorId>` before passing it to `generate_display_names`, so
   the suffix follows a stable order rather than hash order.
-- **Guard:** the refresh compares the display-name vector against the session's. Any difference —
-  count, order, or naming — ends refreshing for that session and leaves the rows as they are, which
-  is the documented non-goal.
+- **Guard:** each refresh hands `changed_rows` both name vectors along with both row vectors. Any
+  difference — count, order, or naming — yields `None`, which ends refreshing for that session and
+  leaves the rows as they are, which is the documented non-goal.
 
 ### When the main thread does not answer
 
@@ -175,8 +175,17 @@ established placement rather than inventing one:
 
 ```rust
 pub(crate) fn monitor_menu_line(monitor: &TrayMonitorInfo) -> String;
-pub(crate) fn changed_rows(prev: &[String], next: &[String]) -> Vec<(usize, String)>;
+pub(crate) fn changed_rows(
+    prev_names: &[String],
+    prev_rows: &[String],
+    next_names: &[String],
+    next_rows: &[String],
+) -> Option<Vec<(usize, String)>>;
 ```
+
+`changed_rows` carries the identity guard itself, returning `None` when the names moved: "may I
+write row `i` at all" and "does row `i` differ" are one decision, and keeping them together is what
+puts the rule where a host test can reach it.
 
 The formatter is composed inline in `show_context_menu` today (`tray.rs:691`), including the `~`
 prefix that marks a seeded rather than measured brightness. It now has two callers — the build path
