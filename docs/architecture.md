@@ -1024,7 +1024,9 @@ The release workflow checks out with full history for this reason: a shallow
 checkout without the tag would stamp a release binary as a dev build.
 
 **Monitor Status Rows:**
-- Displayed at the top of the menu as disabled (non-clickable) items
+- Displayed at the top of the menu as disabled (non-clickable) items; Windows'
+  keyboard menu navigation skips grayed items too, so a monitor row is reachable
+  only by mouse
 - Show current overlay opacity (🕶) and hardware brightness (🔆) for each monitor
 - Built when the menu opens via `TrayMenuOpening` request/response, then refreshed
   every 250 ms for as long as it stays open — a `SetTimer` started immediately
@@ -1513,22 +1515,27 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 4. Hold the hotkey through key-repeat
 5. **Expected**: the row counts along without flicker; the menu may widen once and
    must not shrink back or jitter
-6. Hover "Settings", then arrow-key onto a monitor row, pressing the hotkey each time
-7. **Expected**: neither the mouse highlight nor the keyboard highlight is disturbed
-8. Repeat on a dark system theme
-9. **Expected**: the updated row keeps the system menu colours
-10. With two identical monitors connected, keep the menu open for a minute
-11. **Expected**: the `#1` and `#2` rows keep their monitors for the whole session
-12. Unplug a monitor while the menu is open
-13. **Expected**: rows freeze, "Monitor set changed while the tray menu was open"
+6. Hover a monitor row itself, then press the hotkey while the cursor stays there
+7. **Expected**: that row updates and keeps the mouse highlight
+8. Hover "Settings" instead, then press the hotkey
+9. **Expected**: the highlight stays on "Settings", undisturbed
+10. Arrow-key down from the top of the menu — the grayed monitor rows are skipped,
+    so the keyboard selection lands on "Settings" — then press the hotkey
+11. **Expected**: the keyboard highlight is undisturbed
+12. Repeat on a dark system theme
+13. **Expected**: the updated row keeps the system menu colours
+14. With two identical monitors connected, keep the menu open for a minute
+15. **Expected**: the `#1` and `#2` rows keep their monitors for the whole session
+16. Unplug a monitor while the menu is open
+17. **Expected**: rows freeze, "Monitor set changed while the tray menu was open"
     appears in the log, nothing crashes, and the next open is correct
-14. Close the menu
-15. Restart the application with `RUST_LOG=trace`
-16. Open the tray menu again and leave it open for a few seconds
-17. **Expected**: per-tick `TrayMenuOpening` lines appear in the log, about four
-    times a second
 18. Close the menu
-19. **Expected**: no further `TrayMenuOpening` traffic, and the idle main-loop
+19. Restart the application with `RUST_LOG=trace`
+20. Open the tray menu again and leave it open for a few seconds
+21. **Expected**: per-tick `TrayMenuOpening` lines appear in the log, about four
+    times a second
+22. Close the menu
+23. **Expected**: no further `TrayMenuOpening` traffic, and the idle main-loop
     cadence is unchanged
 
 #### Unplug/Replug (Ghost Pruning) Test
