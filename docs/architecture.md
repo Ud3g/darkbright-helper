@@ -1523,8 +1523,13 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 13. **Expected**: rows freeze, "Monitor set changed while the tray menu was open"
     appears in the log, nothing crashes, and the next open is correct
 14. Close the menu
-15. **Expected**: no further `TrayMenuOpening` traffic at `RUST_LOG=trace`, and the
-    idle main-loop cadence is unchanged
+15. Restart the application with `RUST_LOG=trace`
+16. Open the tray menu again and leave it open for a few seconds
+17. **Expected**: per-tick `TrayMenuOpening` lines appear in the log, about four
+    times a second
+18. Close the menu
+19. **Expected**: no further `TrayMenuOpening` traffic, and the idle main-loop
+    cadence is unchanged
 
 #### Unplug/Replug (Ghost Pruning) Test
 1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config so the 90s absence window is reached quickly
