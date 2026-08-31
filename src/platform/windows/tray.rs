@@ -36,6 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use crate::core::state::{BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData};
+use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
 use super::theme;
@@ -732,7 +733,7 @@ fn show_context_menu(hwnd: HWND) {
 
         // Version line (grayed, informational)
         append_separator(hmenu);
-        let version_text = format!("{APP_NAME} v{}", env!("CARGO_PKG_VERSION"));
+        let version_text = format!("{APP_NAME} v{}", version_string());
         append_menu_item(hmenu, MF_STRING | MF_GRAYED, MENU_ID_VERSION, &version_text);
 
         // Get cursor position for menu placement

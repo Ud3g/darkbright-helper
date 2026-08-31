@@ -65,7 +65,7 @@ use super::super::theme;
 use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_HK_ERROR, ID_HK_HINT, ID_INACT_CHECK, ID_INACT_EDIT, ID_INTERCEPT,
     ID_LOG_CHECK, ID_LOG_HINT, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESYNC_CHECK,
-    ID_RESYNC_EDIT, ID_STEP_EDIT,
+    ID_RESYNC_EDIT, ID_STEP_EDIT, ID_VERSION,
 };
 use super::window::{WindowState, window_text, with_window_state};
 
@@ -437,7 +437,7 @@ fn static_color(id: u16, dark: bool) -> Option<StaticColor> {
             LIGHT_ERROR_TEXT
         }));
     }
-    if id == ID_HK_HINT || id == ID_LOG_HINT {
+    if id == ID_HK_HINT || id == ID_LOG_HINT || id == ID_VERSION {
         return Some(if dark {
             StaticColor::Fixed(DARK_GRAY_TEXT)
         } else {
@@ -1307,13 +1307,13 @@ mod tests {
     }
 
     #[test]
-    fn hint_lines_are_gray_in_dark_and_sys_gray_in_light() {
-        for hint_id in [ID_HK_HINT, ID_LOG_HINT] {
+    fn secondary_text_is_gray_in_dark_and_sys_gray_in_light() {
+        for id in [ID_HK_HINT, ID_LOG_HINT, ID_VERSION] {
             assert_eq!(
-                static_color(hint_id, true),
+                static_color(id, true),
                 Some(StaticColor::Fixed(DARK_GRAY_TEXT))
             );
-            assert_eq!(static_color(hint_id, false), Some(StaticColor::SysGray));
+            assert_eq!(static_color(id, false), Some(StaticColor::SysGray));
         }
     }
 
