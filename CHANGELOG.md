@@ -7,6 +7,14 @@ history lives in the git log.
 
 ### Added
 
+- Builds that are not a released version now say so. The tray menu's version
+  row shows `Brightness Control v0.9.0+55.gc4687e5 (dev)` — the release it
+  followed, the number of commits since, and the commit it was built from —
+  instead of the bare release number, and the same string opens the log file so
+  a bug report identifies the exact build whichever way it is written. A
+  release binary is unaffected and still reads `Brightness Control v0.9.0`.
+- The settings window footer now shows the version, greyed, left of the
+  buttons. It had shown none before.
 - The tray context menu now follows the Windows light/dark setting instead of
   always being drawn light, and picks up a changed setting the next time it is
   opened. Requires Windows 10 1903 or newer; on anything older, or if the

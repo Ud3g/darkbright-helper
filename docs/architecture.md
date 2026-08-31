@@ -1005,9 +1005,23 @@ The application runs as a background process with a system tray icon for user in
 │ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
 │ Quit Brightness Control                         │  → Graceful shutdown
 │─────────────────────────────────────────────────│
-│ Brightness Control v0.8.0                       │  ← Version (disabled/info only)
+│ Brightness Control v0.9.0+55.gc4687e5 (dev)     │  ← Version (disabled/info only)
 └─────────────────────────────────────────────────┘
 ```
+
+**Version Row:**
+
+The row names the build, not just the release. `core::version` combines the
+package version with `git describe` output that `build.rs` passes in at
+compile time, and appends a `+<metadata> (dev)` suffix **only** when the build
+is not a clean checkout of the tag matching the package version — so a
+released binary shows a bare `Brightness Control v0.9.0` and anything built
+further along the cycle identifies its commit. A build with no git available
+at all (an unpacked source archive) also shows the bare version, which is the
+right answer for it. The same string opens the log and appears in the settings
+window footer (§14), so a bug report carries it whichever way it is written.
+The release workflow checks out with full history for this reason: a shallow
+checkout without the tag would stamp a release binary as a dev build.
 
 **Monitor Status Rows:**
 - Displayed at the top of the menu as disabled (non-clickable) items
@@ -1321,6 +1335,15 @@ so a Task-Manager-disabled entry reads as enabled here; toggling off and back
 on heals it. "Restore defaults" leaves autostart untouched — it is system
 integration, not a preference, and silently removing it would surprise. A
 failed registry write reverts the checkbox and shows an inline notice.
+
+**Version line.** The footer carries the same build string as the tray's
+version row (§13), greyed, in the space left of the buttons. It is the one
+control whose caption is not a constant in the layout table — the string only
+exists once the build has run — so control creation substitutes it for that
+single id. Its width is what remains before "Restore defaults", which bounds
+what it can show: the longest realistic string, a three-digit commit count on
+a dirty tree, measures 165px in the dialog font at 96 DPI against 172px of
+room. A released build needs 30px of it.
 
 **Module placement.** `src/platform/windows/settings/` is a directory
 module: `mod.rs` (module wiring, `pub use` re-exports), `layout.rs`

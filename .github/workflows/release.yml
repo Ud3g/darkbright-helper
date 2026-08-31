@@ -17,7 +17,12 @@ jobs:
     name: build + publish
     runs-on: windows-latest
     steps:
+      # Full history and tags, not the default shallow checkout: the build
+      # script derives the displayed version from `git describe`, and without
+      # the tag it would stamp the release binary as a dev build.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
