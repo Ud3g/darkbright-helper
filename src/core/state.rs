@@ -171,12 +171,25 @@ pub(crate) fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, St
         *base_name_counts.entry(base).or_insert(0) += 1;
     }
 
+    // The `#N` suffix must not depend on the caller's iteration order. The
+    // only caller builds this slice from a HashMap, whose order changes
+    // whenever the map is mutated — which would let two identical panels
+    // silently swap their numbers between one reading and the next.
+    let mut ordered: Vec<&MonitorId> = ids.iter().collect();
+    ordered.sort_by(|a, b| {
+        (&a.manufacturer, &a.model_name, &a.serial_number).cmp(&(
+            &b.manufacturer,
+            &b.model_name,
+            &b.serial_number,
+        ))
+    });
+
     // Track current index for each base name (for duplicates)
     let mut base_name_indices: HashMap<String, usize> = HashMap::new();
 
     // Generate unique names
     let mut result = HashMap::new();
-    for id in ids {
+    for id in ordered {
         let base = id.base_display_name();
         let display_name = if base_name_counts[&base] > 1 {
             // Multiple monitors with same base name - append index
@@ -447,6 +460,24 @@ pub(crate) struct TrayMonitorInfo {
     pub(crate) brightness_known: bool,
     /// Current overlay opacity (0-100, where 0 = invisible).
     pub(crate) overlay_opacity: u8,
+}
+
+#[cfg(test)]
+mod tray_menu_tests {
+    use super::*;
+
+    #[test]
+    fn duplicate_suffixes_do_not_depend_on_input_order() {
+        let a = MonitorId::new("DEL", "U2722D", Some("AAA111".to_string()));
+        let b = MonitorId::new("DEL", "U2722D", Some("BBB222".to_string()));
+
+        let forward = generate_display_names(&[a.clone(), b.clone()]);
+        let reverse = generate_display_names(&[b.clone(), a.clone()]);
+
+        assert_eq!(forward, reverse, "suffix must not follow caller order");
+        assert_eq!(forward[&a], "DEL U2722D #1");
+        assert_eq!(forward[&b], "DEL U2722D #2");
+    }
 }
 
 /// Condition of the DDC subsystem, as surfaced to the user.
