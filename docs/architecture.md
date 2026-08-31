@@ -1046,6 +1046,13 @@ checkout without the tag would stamp a release binary as a dev build.
   hot-plug, pruning, reordering — stops refreshing for that menu and leaves the rows
   standing. Warning lines and the usage rows are likewise fixed at open: they change
   the menu's height, which an in-place text update cannot do.
+- Each tick's round trip to the main thread waits at most `MENU_POLL_TIMEOUT` (50 ms):
+  the tray thread pumps nothing else inside the modal loop, so the wait itself is a
+  frozen menu, and it must stay short. Two consecutive unanswered polls
+  (`MENU_POLL_MISS_LIMIT`) end refreshing for that menu session, logged as "Main
+  thread did not answer; tray menu rows stay as they are". Every giving-up condition —
+  a missed poll limit, a display-name mismatch, a failed `SetMenuItemInfoW` — leaves
+  the rows exactly as last written rather than retrying or clearing them.
 
 **Menu Theming:**
 
@@ -1529,13 +1536,17 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 16. Unplug a monitor while the menu is open
 17. **Expected**: rows freeze, "Monitor set changed while the tray menu was open"
     appears in the log, nothing crashes, and the next open is correct
-18. Close the menu
-19. Restart the application with `RUST_LOG=trace`
-20. Open the tray menu again and leave it open for a few seconds
-21. **Expected**: per-tick `TrayMenuOpening` lines appear in the log, about four
+18. With the menu still open, right-click the tray icon a second time
+19. **Expected**: nothing breaks; the menu either stays up or reopens. Whichever
+    happens is timing-dependent — if the re-entrancy guard fired, the log carries
+    "Tray menu already open; ignoring the second open"
+20. Close the menu
+21. Restart the application with `RUST_LOG=trace`
+22. Open the tray menu again and leave it open for a few seconds
+23. **Expected**: per-tick `TrayMenuOpening` lines appear in the log, about four
     times a second
-22. Close the menu
-23. **Expected**: no further `TrayMenuOpening` traffic, and the idle main-loop
+24. Close the menu
+25. **Expected**: no further `TrayMenuOpening` traffic, and the idle main-loop
     cadence is unchanged
 
 #### Unplug/Replug (Ghost Pruning) Test
