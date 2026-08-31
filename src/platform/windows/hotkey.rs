@@ -1276,7 +1276,7 @@ mod tests {
 
     #[test]
     fn every_accepted_key_round_trips_through_display() {
-        for (name, _vk) in KEY_MAP.iter() {
+        for name in KEY_MAP.keys() {
             let s = format!("Ctrl+{name}");
             let parsed = parse_hotkey(&s).unwrap_or_else(|_| panic!("parse {s}"));
             let shown = parsed.to_string();
