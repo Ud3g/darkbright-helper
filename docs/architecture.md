@@ -1026,7 +1026,24 @@ checkout without the tag would stamp a release binary as a dev build.
 **Monitor Status Rows:**
 - Displayed at the top of the menu as disabled (non-clickable) items
 - Show current overlay opacity (🕶) and hardware brightness (🔆) for each monitor
-- Updated each time the menu is opened via `TrayMenuOpening` request/response
+- Built when the menu opens via `TrayMenuOpening` request/response, then refreshed
+  every 250 ms for as long as it stays open — a `SetTimer` started immediately
+  before `TrackPopupMenu` and killed immediately after, so an idle process does no
+  periodic work. Each tick re-runs the same pull and rewrites only the rows whose
+  text changed, addressed by command ID via `SetMenuItemInfoW`.
+- Three measured Win32 behaviours carry that design, none of them documented by
+  Microsoft: `WM_TIMER` is delivered inside the modal `TrackPopupMenu` loop (and is
+  not starved by mouse motion over the popup); a visible popup repaints itself after
+  `SetMenuItemInfoW`, with no `InvalidateRect` on the `#32768` window; and a row that
+  outgrows the popup widens it rather than being clipped — at the right work-area
+  edge it grows leftward, so the popup only ever gains area. Verified light and dark
+  on Windows 11 build 22621. If a future build stops repainting, the row simply keeps
+  its old text, which is the behaviour this replaced — no error path is needed.
+- A refresh may only rewrite row `i` while row `i` still means the same monitor, so
+  each tick compares the display-name list against the one drawn. Any difference —
+  hot-plug, pruning, reordering — stops refreshing for that menu and leaves the rows
+  standing. Warning lines and the usage rows are likewise fixed at open: they change
+  the menu's height, which an in-place text update cannot do.
 
 **Menu Theming:**
 
@@ -1488,6 +1505,26 @@ Controller orchestration is unit-tested (see above); what remains hardware-depen
 1. Set both `periodic_seconds` and `inactivity_seconds` to low values
 2. Trigger conditions where multiple refresh triggers fire simultaneously
 3. **Expected**: Only one refresh executes (log shows single "Requesting monitor refresh")
+
+#### Live Tray Menu Rows Test
+1. Start the application with `RUST_LOG=debug`
+2. Open the tray menu and, with it still open, press a brightness hotkey
+3. **Expected**: the row follows within ~250 ms and matches the OSD
+4. Hold the hotkey through key-repeat
+5. **Expected**: the row counts along without flicker; the menu may widen once and
+   must not shrink back or jitter
+6. Hover "Settings", then arrow-key onto a monitor row, pressing the hotkey each time
+7. **Expected**: neither the mouse highlight nor the keyboard highlight is disturbed
+8. Repeat on a dark system theme
+9. **Expected**: the updated row keeps the system menu colours
+10. With two identical monitors connected, keep the menu open for a minute
+11. **Expected**: the `#1` and `#2` rows keep their monitors for the whole session
+12. Unplug a monitor while the menu is open
+13. **Expected**: rows freeze, "Monitor set changed while the tray menu was open"
+    appears in the log, nothing crashes, and the next open is correct
+14. Close the menu
+15. **Expected**: no further `TrayMenuOpening` traffic at `RUST_LOG=trace`, and the
+    idle main-loop cadence is unchanged
 
 #### Unplug/Replug (Ghost Pruning) Test
 1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config so the 90s absence window is reached quickly
