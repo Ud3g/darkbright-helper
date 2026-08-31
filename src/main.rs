@@ -664,7 +664,13 @@ fn main() {
         // docs/architecture.md before changing it.
         match rx.recv_timeout(Duration::from_millis(16)) {
             Ok(msg) => {
-                log::debug!(message:? = msg; "Main loop received message");
+                // An open tray menu asks for its rows four times a second. At
+                // debug level that buries the lines a manual test is reading.
+                if matches!(msg, BrightnessMessage::TrayMenuOpening { .. }) {
+                    log::trace!(message:? = msg; "Main loop received message");
+                } else {
+                    log::debug!(message:? = msg; "Main loop received message");
+                }
                 match msg {
                     // Shell side effects stay out of the core controller.
                     BrightnessMessage::TrayOpenLogFolder => open_log_folder(),
