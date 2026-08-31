@@ -35,7 +35,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::core::state::{BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData};
+use crate::core::state::{
+    BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData, monitor_menu_line,
+};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
@@ -684,14 +686,7 @@ fn show_context_menu(hwnd: HWND) {
 
             // Monitor info rows (disabled/non-clickable)
             for (index, monitor) in data.monitors.iter().enumerate() {
-                // "~" marks a brightness this app seeded rather than read: the
-                // monitor answers writes but not reads, so the number is our
-                // model of it, not a measurement.
-                let approx = if monitor.brightness_known { "" } else { "~" };
-                let monitor_text = format!(
-                    "{}: 🕶{}% 🔆{approx}{}%",
-                    monitor.display_name, monitor.overlay_opacity, monitor.hardware_brightness
-                );
+                let monitor_text = monitor_menu_line(monitor);
                 // Menu IDs are u32; index won't exceed monitor count (typically < 10)
                 #[allow(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_MONITOR_BASE + (index as u32);

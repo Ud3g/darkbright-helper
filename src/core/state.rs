@@ -462,6 +462,20 @@ pub(crate) struct TrayMonitorInfo {
     pub(crate) overlay_opacity: u8,
 }
 
+/// Composes the tray menu's status row for one monitor.
+///
+/// `~` marks a brightness this app seeded rather than read: the monitor
+/// answers writes but not reads, so the number is our model of it, not a
+/// measurement.
+#[must_use]
+pub(crate) fn monitor_menu_line(monitor: &TrayMonitorInfo) -> String {
+    let approx = if monitor.brightness_known { "" } else { "~" };
+    format!(
+        "{}: 🕶{}% 🔆{approx}{}%",
+        monitor.display_name, monitor.overlay_opacity, monitor.hardware_brightness
+    )
+}
+
 #[cfg(test)]
 mod tray_menu_tests {
     use super::*;
@@ -477,6 +491,33 @@ mod tray_menu_tests {
         assert_eq!(forward, reverse, "suffix must not follow caller order");
         assert_eq!(forward[&a], "DEL U2722D #1");
         assert_eq!(forward[&b], "DEL U2722D #2");
+    }
+
+    fn info(name: &str, brightness: u8, known: bool, overlay: u8) -> TrayMonitorInfo {
+        TrayMonitorInfo {
+            display_name: name.to_string(),
+            hardware_brightness: brightness,
+            brightness_known: known,
+            overlay_opacity: overlay,
+        }
+    }
+
+    #[test]
+    fn menu_line_shows_a_measured_brightness_plainly() {
+        let line = monitor_menu_line(&info("DEL U2722D", 60, true, 0));
+        assert_eq!(line, "DEL U2722D: 🕶0% 🔆60%");
+    }
+
+    #[test]
+    fn menu_line_marks_a_seeded_brightness_as_approximate() {
+        let line = monitor_menu_line(&info("DEL U2722D", 50, false, 0));
+        assert_eq!(line, "DEL U2722D: 🕶0% 🔆~50%");
+    }
+
+    #[test]
+    fn menu_line_reports_overlay_opacity() {
+        let line = monitor_menu_line(&info("DEL U2722D #2", 0, true, 40));
+        assert_eq!(line, "DEL U2722D #2: 🕶40% 🔆0%");
     }
 }
 
