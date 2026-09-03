@@ -1,5 +1,25 @@
 # Architecture & Technical Decisions
 
+> **Keeping this file true.** This document is the source of truth for behaviour, which only
+> works if a behaviour change and its description land in the same commit. Two rules follow
+> from that, both learned from breakage:
+>
+> - **Supersede in place, never by addition.** When a later section describes new behaviour,
+>   go back and fix every earlier passage it contradicts. A reader — human or LLM — takes the
+>   first statement it finds as authoritative and has no way to know that something 800 lines
+>   further down overrides it. The settings window (§14) invalidated three claims in §4 this
+>   way, and they stood uncorrected until a documentation review went looking.
+> - **Section numbers are a stable contract; do not renumber.** Cross-references use `§N`,
+>   including from `CLAUDE.md`, from dated design and review documents that must not be
+>   rewritten after the fact, and from other sections here. Add new sections at the end,
+>   keep a retired section's number retired, and resolve a numbering mistake by merging or
+>   retitling rather than by shifting everything after it.
+>
+> Passages that go stale quietly, worth a glance whenever the shape of the code changes: the
+> module tree and seam list under [Platform Abstraction](#platform-abstraction), the config
+> field table in §4, the constants in §12, and the manual checklists under
+> [Integration Testing (Manual)](#integration-testing-manual).
+
 ## Tech Stack
 
 ### Language & Toolchain
@@ -66,16 +86,19 @@ src/
 ├── core/                 # Platform-agnostic logic
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
-│   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc>: message-driven orchestration behind OSD/overlay/DDC/locator seams, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
+│   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc,Set,Hk,Store>: message-driven orchestration behind the seams below, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
 │   ├── edid.rs           # EDID → MonitorId parsing
 │   ├── logfile.rs        # Size-capped rolling file log sink
 │   ├── panic_hook.rs     # Logs panic payload/location/thread, flushes sinks before exit
 │   ├── reconcile.rs      # Refresh generations, respawn backoff, watchdog policies
-│   └── state.rs          # Application state, messages, DDC commands
+│   ├── state.rs          # Application state, messages, DDC commands
+│   └── version.rs        # Build/version string shown in the tray and settings footer
 └── platform/
     ├── mod.rs            # Gates the platform submodule (Windows-only today)
     └── windows/          # #[cfg(windows)]
         ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes
+        ├── autostart.rs  # "Start with Windows" via HKCU\Run
+        ├── config_store.rs # ConfigStore seam: atomic save with merge-on-external-edit
         ├── ddc.rs        # DDC/CI communication (monitor handles)
         ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
         ├── hotkey.rs     # RegisterHotKey API + optional low-level keyboard hook
@@ -83,15 +106,22 @@ src/
         ├── osd_render.rs # OSD GDI rendering (RAII resource wrappers)
         ├── overlay.rs    # Dimming overlay windows (implements the OverlaySink seam)
         ├── power.rs      # Power event listener (sleep/resume)
+        ├── settings/     # Settings window, on its own thread (§14)
+        │   ├── mod.rs    # Directory module gate
+        │   ├── capture.rs # Hotkey-capture control
+        │   ├── dark.rs   # Dark-mode painting
+        │   ├── layout.rs # Declarative CONTROLS/RANGE_SPECS tables, DPI scaling
+        │   └── window.rs # Window creation, wiring, SettingsSinkImpl
         ├── single_instance.rs # Per-session named-mutex single-instance guard
+        ├── theme.rs      # Dark-mode opt-in (tray menu, settings window)
         └── tray.rs       # System tray icon and menu
 ```
 
 The portability boundary is the set of controller seams in `core/controller.rs`
-(`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`): core logic is generic
-over them and unit-tested against fakes; `platform/windows/` provides the real
-implementations. A port to another OS implements those seams plus its own
-hotkey/power/tray equivalents and binary wiring.
+(`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`, `SettingsSink`, `HotkeyPort`,
+`ConfigStore`): core logic is generic over them and unit-tested against fakes;
+`platform/windows/` provides the real implementations. A port to another OS implements those
+seams plus its own hotkey/power/tray equivalents and binary wiring.
 
 ### Threading Model
 
@@ -264,14 +294,12 @@ pub struct MonitorId {
 - Config files are portable across platforms
 - For identical monitors without serials, position (topology) is used as a secondary disambiguator
 
-### 3. Multi-Monitor: Mouse Position
+### 3. Hotkeys: Targeting and Hybrid Registration
 
-Hotkeys affect the monitor containing the mouse cursor:
+**Which monitor a hotkey affects: the one under the mouse cursor.**
 - `GetCursorPos()` → `MonitorFromPoint()`
 - Intuitive, matches user expectations from volume controls
 - No configuration required
-
-### 3. Hotkey Strategy: Hybrid Registration
 
 **Primary Default:** `Ctrl+Shift+Up` / `Ctrl+Shift+Down`
 - Reliable across all keyboard types
