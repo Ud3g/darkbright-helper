@@ -1964,7 +1964,16 @@ impl SettingsSink for SettingsSinkImpl {
                 let tx = self.tx.clone();
                 let hwnd_slot = Arc::clone(&self.hwnd);
                 let snapshot = snapshot.clone();
-                std::thread::spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
+                let spawned = std::thread::Builder::new()
+                    .name("settings".to_string())
+                    .spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
+                if let Err(e) = spawned {
+                    // The slot is still OPENING, which every later activation
+                    // reads as "a window is on its way". Release it, or Settings
+                    // stays unopenable for the rest of the process.
+                    self.hwnd.store(0, Ordering::SeqCst);
+                    log::error!(error:% = e; "Failed to spawn settings window thread");
+                }
             }
             Err(OPENING) => {
                 log::debug!(

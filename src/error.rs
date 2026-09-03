@@ -91,6 +91,13 @@ pub enum BrightnessError {
     #[error("Failed to receive message: channel closed")]
     ChannelRecv,
 
+    /// The operating system refused to start a thread.
+    #[error("Failed to spawn the {name} thread: {source}")]
+    ThreadSpawn {
+        name: String,
+        source: std::io::Error,
+    },
+
     /// The hotkey thread did not report its registration result in time.
     #[error("Hotkey thread did not report registration in time")]
     HotkeyThreadUnresponsive,
@@ -109,6 +116,16 @@ impl BrightnessError {
         Self::DdcCommunication {
             monitor: monitor.into(),
             message: message.into(),
+        }
+    }
+
+    /// Creates a thread-spawn error naming the thread the OS refused to start.
+    ///
+    /// `pub` because the binary's thread wiring in `main.rs` constructs it.
+    pub fn thread_spawn(name: impl Into<String>, source: std::io::Error) -> Self {
+        Self::ThreadSpawn {
+            name: name.into(),
+            source,
         }
     }
 

@@ -261,7 +261,14 @@ impl DdcSupervisor {
     fn spawn_worker(resp_tx: &Sender<BrightnessMessage>) -> (Sender<DdcCommand>, JoinHandle<()>) {
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<DdcCommand>();
         let worker = DdcWorker::new(cmd_rx, resp_tx.clone());
-        let handle = std::thread::spawn(move || worker.run());
+        // Unlike the tray and power threads, a DDC worker that cannot start is
+        // not something to degrade around: it is the only path to the hardware,
+        // and the OS refusing a thread means resources are exhausted anyway.
+        // `thread::spawn` already aborted here; the panic is only made explicit.
+        let handle = std::thread::Builder::new()
+            .name("ddc".to_string())
+            .spawn(move || worker.run())
+            .expect("OS refused to start the DDC worker thread");
         (cmd_tx, handle)
     }
 

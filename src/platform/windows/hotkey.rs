@@ -654,9 +654,12 @@ impl HotkeyManager {
 
                     if direction != 0 {
                         log::debug!(direction = direction; "Sending brightness adjustment");
-                        let _ = self
+                        if let Err(e) = self
                             .sender
-                            .send(BrightnessMessage::AdjustStep { direction });
+                            .send(BrightnessMessage::AdjustStep { direction })
+                        {
+                            log::error!(error:% = e; "Failed to send brightness adjustment");
+                        }
                     }
                 } else if msg.hwnd.is_invalid() && msg.message == WM_APP_HOTKEY_WAKE {
                     for command in drain_commands(queue) {
@@ -854,19 +857,20 @@ impl HotkeyPortImpl {
     /// # Errors
     ///
     /// Returns `BrightnessError::ChannelSend` if no thread is currently
-    /// ready (id is 0) or the queue's lock is poisoned, and
-    /// `BrightnessError::WindowsApi` if `PostThreadMessageW` itself fails
-    /// (e.g. the thread died between the id check and the post).
+    /// ready (id is 0), and `BrightnessError::WindowsApi` if
+    /// `PostThreadMessageW` itself fails (e.g. the thread died between the id
+    /// check and the post). A poisoned queue lock is recovered rather than
+    /// reported: the queue is plain data a panicking thread cannot leave torn.
     fn post(&mut self, command: HotkeyThreadCommand) -> Result<()> {
         let tid = self.thread_id.load(Ordering::SeqCst);
         if tid == 0 {
             return Err(BrightnessError::ChannelSend);
         }
 
-        match self.queue.lock() {
-            Ok(mut guard) => guard.push_back(command),
-            Err(_) => return Err(BrightnessError::ChannelSend),
-        }
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(command);
 
         let wake = unsafe { PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)) };
         if let Err(e) = wake {

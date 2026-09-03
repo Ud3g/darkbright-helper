@@ -225,6 +225,44 @@ rate as the adaptive variant, for a transport rewrite.
 Revisit if a main-thread window ever becomes long-lived and interactive, or if battery
 profiling on a mobile machine says otherwise.
 
+#### Thread conventions
+
+Four rules that were each decided three different ways before being written down.
+
+**Every thread is named.** Threads are started through
+`thread::Builder::new().name("ddc" | "hotkey" | "power" | "settings" | "tray")`, never
+`thread::spawn`. The panic hook (`core/panic_hook.rs`) logs the thread name, and in a release
+build the log file is the only diagnostic that survives a crash — a report saying
+`thread = <unnamed>` names the one thing the reader needed. A spawn that fails is handled
+where the subsystem's other failures are handled: the tray and power threads log and carry
+on without that subsystem, the hotkey thread reports `ThreadSpawn` to its caller, and the DDC
+worker aborts, because it is the only path to the hardware and there is nothing to degrade
+to. The settings thread additionally has to release its `OPENING` slot, or the window can
+never be opened again.
+
+**A failed `send` is logged at the level its message deserves.** `error!` when the message
+carries user intent or state the receiver must reconcile — a brightness adjustment, a DDC
+result, a menu command the user clicked; `warn!` when nobody is harmed by the loss, typically
+a reply whose requester may already be gone (the tray's menu data, sent after the menu may
+have closed) or a notification that only fails because the app is shutting down.
+`let _ = tx.send(...)` is reserved for sends whose failure is the normal
+shutdown case, and the reason then goes in a comment or doc comment at the site. A dropped
+keypress that leaves no trace anywhere is the failure this rule exists to prevent.
+
+**A poisoned mutex is recovered, not avoided.** Every shared mutex in this process guards
+plain data — a command queue, a sender — that a panicking thread cannot leave half-written in
+a way a second thread would misread, so the policy is
+`unwrap_or_else(PoisonError::into_inner)`. Silently skipping the critical section
+(`if let Ok(guard)`) hides the failure and can turn Ctrl+C into a no-op; converting poison to
+an error reports a condition the caller cannot act on. If a mutex ever guards a multi-field
+invariant, that one gets its own documented policy rather than changing this one.
+
+**Worker threads are never joined.** There is no `.join()` in `src/`, deliberately: shutdown
+asks each worker to stop and then drops the owner, and process exit is the join. A thread
+blocked in `GetMessageW` would make a join a deadlock, and one spawn is already abandoned on
+purpose when it fails to report in time (§12). A thread that genuinely needs joining needs a
+design discussion first.
+
 ### State Management
 
 Message-passing with single ownership:

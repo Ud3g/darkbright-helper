@@ -106,9 +106,13 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
         log::info!("Shutdown signal received");
-        if let Ok(guard) = SHUTDOWN_SENDER.lock()
-            && let Some(tx) = &*guard
-        {
+        // Recover a poisoned lock rather than skipping the send: the guarded
+        // value is a plain sender, and declining to shut down is worse than
+        // acting on state a panicking thread touched.
+        let guard = SHUTDOWN_SENDER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(tx) = &*guard {
             let _ = tx.send(BrightnessMessage::Shutdown);
             return BOOL::from(true);
         }
@@ -319,18 +323,24 @@ fn build_file_logger(config: &Config) -> std::io::Result<env_logger::Logger> {
 ///
 /// * `tx` - Channel sender to notify the main thread of power events.
 fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
-    std::thread::spawn(move || {
-        match PowerEventListener::new(tx) {
-            Ok(listener) => {
-                log::info!("Power event listener started");
-                listener.run_message_loop();
+    let spawned = std::thread::Builder::new()
+        .name("power".to_string())
+        .spawn(move || {
+            match PowerEventListener::new(tx) {
+                Ok(listener) => {
+                    log::info!("Power event listener started");
+                    listener.run_message_loop();
+                }
+                Err(e) => {
+                    log::error!(error:% = e; "Failed to create power event listener");
+                    // Non-fatal: app works without resume detection
+                }
             }
-            Err(e) => {
-                log::error!(error:% = e; "Failed to create power event listener");
-                // Non-fatal: app works without resume detection
-            }
-        }
-    });
+        });
+    if let Err(e) = spawned {
+        // Non-fatal, same as a listener that fails to start: no resume detection.
+        log::error!(error:% = e; "Failed to spawn power listener thread");
+    }
 }
 
 /// Spawns the system tray icon thread.
@@ -347,21 +357,27 @@ fn spawn_tray_thread(
     tx: mpsc::Sender<BrightnessMessage>,
     status_tx: mpsc::Sender<TrayStatusHandle>,
 ) {
-    std::thread::spawn(move || {
-        match TrayIcon::new(tx) {
-            Ok(tray) => {
-                log::info!("System tray icon created");
-                let _ = status_tx.send(tray.status_handle());
-                if let Err(e) = tray.run_message_loop() {
-                    log::error!(error:% = e; "Tray message loop error");
+    let spawned = std::thread::Builder::new()
+        .name("tray".to_string())
+        .spawn(move || {
+            match TrayIcon::new(tx) {
+                Ok(tray) => {
+                    log::info!("System tray icon created");
+                    let _ = status_tx.send(tray.status_handle());
+                    if let Err(e) = tray.run_message_loop() {
+                        log::error!(error:% = e; "Tray message loop error");
+                    }
+                }
+                Err(e) => {
+                    // Non-fatal: app works without tray icon
+                    log::warn!(error:% = e; "Failed to create system tray icon, continuing without it");
                 }
             }
-            Err(e) => {
-                // Non-fatal: app works without tray icon
-                log::warn!(error:% = e; "Failed to create system tray icon, continuing without it");
-            }
-        }
-    });
+        });
+    if let Err(e) = spawned {
+        // Non-fatal, same as a tray icon that fails to create: no tray.
+        log::error!(error:% = e; "Failed to spawn tray thread");
+    }
 }
 
 /// Spawns the hotkey thread (running [`run_hotkey_thread`]) and returns its
@@ -394,9 +410,12 @@ fn start_hotkey_thread(
     // and moving on.
     let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
 
-    let handle = std::thread::spawn(move || {
-        run_hotkey_thread(up, down, intercept, tx, thread_id, queue, ready_tx);
-    });
+    let handle = std::thread::Builder::new()
+        .name("hotkey".to_string())
+        .spawn(move || {
+            run_hotkey_thread(up, down, intercept, tx, thread_id, queue, ready_tx);
+        })
+        .map_err(|e| BrightnessError::thread_spawn("hotkey", e))?;
 
     // Wait for the registration result, but bounded: a spawn hung inside
     // window creation or registration must not block the main loop —
@@ -541,9 +560,9 @@ fn main() {
     // Register hotkeys and start hotkey thread
 
     // Register Ctrl+C handler
-    if let Ok(mut guard) = SHUTDOWN_SENDER.lock() {
-        *guard = Some(tx.clone());
-    }
+    *SHUTDOWN_SENDER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx.clone());
 
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
