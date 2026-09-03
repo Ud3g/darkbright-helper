@@ -1600,6 +1600,23 @@ no deadline — fold the migration in opportunistically, the next time `ddc.rs` 
 another reason. `SafeHwnd` is explicitly **not** a candidate: `DestroyWindow` does not fit
 the `Free` pattern. See `docs/code-conventions.md` § 3 for the rule this illustrates.
 
+### Tracking tooltips via `tooltips_class32` do not work
+
+Kept as a negative result: the app has no menu tooltips today, and this is the record of why
+a future attempt should not start with the obvious API.
+
+The Win32 tooltip control is unreliable for *tracking tooltips* — manually positioned
+tooltips near a popup menu. `TTM_ADDTOOLW` can fail silently, returning 0 with
+`GetLastError()` also 0, even with correct parameters. Configurations tried, all failing the
+same way: `hwnd` as `HWND_MESSAGE`, as `GetDesktopWindow()`, as the tooltip's own handle, and
+as a dedicated invisible `STATIC` window; various combinations of `TTF_TRACK`, `TTF_ABSOLUTE`
+and `TTF_IDISHWND`; and a verified-correct `cbSize` (72 bytes on 64-bit).
+
+What works instead is a plain custom popup: a `STATIC`-class window with
+`WS_POPUP | WS_BORDER | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`, shown with `ShowWindow` and placed
+with `SetWindowPos`. More reliable, and it gives full control over appearance — which a
+themed tooltip would not.
+
 ---
 
 ## Testing

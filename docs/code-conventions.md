@@ -7,32 +7,27 @@ This document contains **project-specific** conventions only. Standard Rust conv
 
 ## 1. Tooling
 
-All code must pass these checks before commit:
+**`.github/workflows/ci.yml` is the authority on what must pass.** The list was previously
+restated here and in `CONTRIBUTING.md` in two versions that both disagreed with it (only
+`CLAUDE.md`'s copy matched): the one here omitted `--all-targets`, so following it linted no
+tests at all and could pass locally while CI failed. Run what CI runs:
 
 ```bash
-cargo fmt -- --check
-cargo clippy -- -D warnings
-cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
+cargo check --release --locked   # the only config where the hidden-console cfg compiles
 ```
 
-### rustfmt.toml
+CI additionally checks all targets against the MSRV pinned in `Cargo.toml`, runs `cargo audit`
+against the RustSec advisory database (also weekly on a schedule, so a quiet repo still hears
+about new advisories), and — on release only — fails if `cargo about generate` finds a
+dependency licence outside the accepted list.
 
-```toml
-edition = "2024"
-max_width = 100
-hard_tabs = false
-tab_spaces = 4
-```
-
-### Clippy Configuration
-
-In `Cargo.toml`:
-
-```toml
-[lints.clippy]
-all = "warn"
-pedantic = "warn"
-```
+Lint levels and formatter settings live in `Cargo.toml` (`[lints.clippy]`, currently `all` and
+`pedantic` at `warn`, promoted to errors by CI's `-D warnings`) and `rustfmt.toml`. Both are
+enforced artifacts; this document does not restate their contents, because a copy is a second
+thing to keep true.
 
 ---
 
@@ -77,20 +72,32 @@ Since this project uses Win32 APIs for DDC/CI, hotkeys, and overlays:
 
 ### Isolate unsafe code
 
-Keep `unsafe` at module boundaries with safe wrappers:
+Keep `unsafe` at module boundaries with safe wrappers. Copied from
+`platform/windows/hotkey.rs`, because the examples in this document are the part most
+likely to be imitated and so have to be real code rather than something plausible:
 
 ```rust
-// Safe public API
-pub fn register_hotkey(&mut self, id: i32, modifiers: u32, key: u32) -> Result<()> {
-    // unsafe contained here, not exposed to callers
+pub fn register_hotkey(
+    &mut self,
+    id: i32,
+    modifiers: HOT_KEY_MODIFIERS,
+    vk: VIRTUAL_KEY,
+) -> Result<()> {
     unsafe {
-        if RegisterHotKey(self.hwnd, id, modifiers, key) == 0 {
-            return Err(Error::HotkeyRegistrationFailed(GetLastError()));
-        }
+        RegisterHotKey(Some(self.hwnd), id, modifiers, u32::from(vk.0)).map_err(|e| {
+            BrightnessError::windows_api("RegisterHotKey", e.code().0.cast_unsigned())
+        })?;
     }
+    log::debug!(hotkey_id = id; "Registered hotkey");
+    self.registered_ids.push(id);
     Ok(())
 }
 ```
+
+Four rules from further down this section at once: the `Result`-returning binding with `?`
+rather than a `BOOL` check, `Some(hwnd)` for an optional handle parameter, `u32::from` and
+`.cast_unsigned()` instead of `as`, and the error mapped into `BrightnessError` at the
+boundary so callers never see a `windows` crate type.
 
 ### Unsafe Blocks in Unsafe Functions (Rust 2024)
 
@@ -107,19 +114,34 @@ unsafe fn my_unsafe_fn() {
 
 ### Wrap handles in RAII types
 
-Windows handles should be wrapped in structs that implement `Drop`:
+A handle that outlives a single expression — one that is stored in a struct, crosses a scope,
+or crosses a thread — gets a wrapper whose `Drop` releases it, as `SafeHwnd` does in
+`platform/windows/mod.rs`:
 
 ```rust
-pub struct MonitorHandle {
-    handle: HMONITOR,
-}
-
-impl Drop for MonitorHandle {
+impl Drop for SafeHwnd {
     fn drop(&mut self) {
-        // Cleanup if needed
+        if self.is_valid() {
+            // SAFETY: We own this handle and it's valid.
+            unsafe {
+                let _ = DestroyWindow(self.hwnd);
+            }
+        }
     }
 }
 ```
+
+The rule is about *ownership*, not about every handle-typed value:
+
+- A GDI object created and freed inside one painting block (the brushes and pens throughout
+  `settings/dark.rs`) does not need a wrapper, and wrapping it would obscure the paint code.
+  What the rule is really guarding against is an early `return` between the create and the
+  free.
+- A handle that needs no release at all — `HMONITOR`, for instance — gets no wrapper. A
+  `Drop` with an empty body is worse than none: it claims an ownership that does not exist.
+- Not every handle-shaped type is a handle. `core::controller::MonitorHandle` is deliberately
+  a plain `isize` and deliberately has no `Drop`: it exists so the platform-agnostic core can
+  carry a monitor's identity across a thread boundary, which a real handle type could not do.
 
 ### FFI calls should be wrapped in safe functions as close to their point of use as possible
 
@@ -127,25 +149,11 @@ FFI calls should be wrapped in safe functions as close to their point of use as 
 
 Shared or common FFI wrappers may be extracted into a common module (e.g., `platform/windows/mod.rs` or a dedicated `ffi.rs`) to avoid duplication and provide reusable utilities like RAII handle wrappers.
 
-### Win32 UI Control Pitfalls
+### Windows Crate Specifics
 
-**Tracking Tooltips (`tooltips_class32`):**
-
-The Win32 tooltip control is unreliable for "tracking tooltips" (manually positioned tooltips near popup menus). `TTM_ADDTOOLW` can silently fail (return 0) with `GetLastError()` returning 0, even with correct parameters.
-
-Attempted configurations that failed:
-- `hwnd` = `HWND_MESSAGE` (message-only window)
-- `hwnd` = `GetDesktopWindow()`
-- `hwnd` = tooltip's own window handle
-- `hwnd` = dedicated invisible STATIC window
-- Various flag combinations (`TTF_TRACK`, `TTF_ABSOLUTE`, `TTF_IDISHWND`)
-- Correct `cbSize` (72 bytes on 64-bit)
-
-**Recommended approach:** For menu tooltips, use a simple custom popup window (e.g., `STATIC` class with `WS_POPUP | WS_BORDER | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`) instead of `tooltips_class32`. Control visibility with `ShowWindow()` and position with `SetWindowPos()`. This is more reliable and provides full control over appearance.
-
-### Windows Crate (v0.62) Specifics
-
-We use the `windows` crate which generates idiomatic Rust bindings. Follow these rules:
+The `windows` crate generates idiomatic Rust bindings; the version in use is whatever
+`Cargo.toml` pins, and its bump policy is a Maintenance Decision in `docs/architecture.md`.
+These rules describe how the bindings behave, not one release of them:
 
 1.  **Result over BOOL**: Newer bindings return `windows::core::Result<()>` or `Result<T>` instead of `BOOL`. Use `?` operator (with `.map_err` to convert to `BrightnessError`) instead of checking `.as_bool()`.
 2.  **Slices over Pointers**: APIs taking arrays now often accept slices (`&[T]`) instead of `pointer` + `length`.
@@ -161,14 +169,14 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
     // Avoid (triggers clippy::borrow_as_ptr)
     Function(&mut my_struct as *mut _);
     ```
-5.  **Handles are pointers** (since 0.58): validity checks use `handle.is_invalid()`,
+5.  **Handles are pointers**: validity checks use `handle.is_invalid()`,
     never field comparisons like `.0 == 0`. Handle types implement neither `Send`
     nor `Sync`; a type that must cross threads either carries the handle as
     `isize` (see the seam helpers in `platform/windows/mod.rs`) or documents an
     explicit `unsafe impl Send` invariant.
 6.  **Optional handle parameters**: parameters that accept "no window/DC/hook"
     take `Option<T>` — pass `None`, not `T::default()`.
-7.  **`BOOL` lives in `windows::core`** (since 0.60); `TRUE`/`FALSE` remain in
+7.  **`BOOL` lives in `windows::core`**; `TRUE`/`FALSE` remain in
     `Win32::Foundation`. Parameters that were `Into<BOOL>` are plain `bool` now.
 8.  **RAII**: for new code, prefer `windows::core::Owned<T>` for handles whose
     cleanup is the crate-provided `Free` impl (e.g. `CloseHandle`) over writing
@@ -183,7 +191,10 @@ We use the `windows` crate which generates idiomatic Rust bindings. Follow these
 
 ## 4. Documentation
 
-Document all public items with `///` doc comments. Include:
+Document all items with `///` doc comments, not only public ones — the de-facto practice
+throughout the codebase, and rustc's `missing_docs` is *not* enabled, so this half is
+convention rather than gate. Exempt: trait-impl boilerplate, serde `default_*` helpers, and
+tests. Include:
 - Brief description
 - `# Arguments` for non-obvious parameters
 - `# Returns` for non-trivial return values
@@ -195,22 +206,25 @@ Document all public items with `///` doc comments. Include:
 
 ## 5. Coding Style & Linting
 
-### Numeric Literals
-Use underscores for readability in long numeric literals, especially hex colors/masks:
-```rust
-const COLOR: u32 = 0x00FF_FFFF;
-```
+Underscored numeric literals (`clippy::unreadable_literal`), `u32::from` over `as`
+(`cast_lossless`), `try_from` where a value can truncate (`cast_possible_truncation`), and
+`#[must_use]` on pure functions (`must_use_candidate`) are all pedantic lints that CI already
+fails the build on. They are not restated here; the compiler is a better teacher than a list,
+and a list is a second thing to keep true. (One clarification the lint does not offer: a
+function returning `Result` gets no `#[must_use]` — `Result` already carries it.)
 
-### Casting
-Minimize `as` casting.
-- Use `u32::from(val)` for lossless conversions (`clippy::cast_lossless`).
-- Use `try_from` for potential truncation.
-- Use `.cast_unsigned()` or `.cast_signed()` for sign changes (e.g., `HRESULT` to `u32`).
-- For `f32` to integer, ensure the value is clamped/rounded before casting.
+Two rules remain, because no lint expresses them:
 
-### Purity
-Annotate pure functions (constructors, getters, calculations) with `#[must_use]` to ensure their results aren't accidentally discarded.
-- **Exception**: Do not annotate functions returning `Result` (redundant).
+**Clamp and round before casting a float to an integer.** `clippy::cast_possible_truncation`
+can only be silenced at such a site, never satisfied, so the correctness argument has to be
+made by the code: bound the value, `.round()` it, and only then cast — see the OSD's opacity
+handling in `osd.rs` and the overlay's in `overlay.rs`.
+
+**A lint suppression is narrow and carries its reason.** Attach it to the smallest item that
+needs it, never a module or the crate root, and say why the lint is wrong *here* — "the
+truncation is bounded by a checked range", not "clippy complains". Prefer
+`#[expect(lint, reason = "…")]` over `#[allow]`: with `-D warnings` in CI, an `expect` fails
+the build once it becomes unnecessary, which is the only way a suppression ever gets removed.
 
 ---
 
@@ -311,11 +325,15 @@ deliberately sets `logging.file_level` to `debug` for a diagnostic session.
 
 ## Quick Checklist
 
-- [ ] `cargo fmt` passes
-- [ ] `cargo clippy` shows no warnings
-- [ ] `cargo test` passes
-- [ ] Public items have doc comments
-- [ ] Unsafe code is isolated with safe wrappers
-- [ ] Windows handles use RAII wrappers
-- [ ] Log statements use appropriate levels (see section 7)
-- [ ] No PII or secrets in log output
+The four commands in section 1 pass — they are the mechanical half and the only half worth
+a checklist item, since CI runs exactly them.
+
+What the tooling cannot check, and a reviewer therefore has to:
+
+- [ ] Every item is documented, private ones included — only trait-impl boilerplate,
+      serde `default_*` helpers and tests are exempt
+- [ ] `unsafe` is isolated behind safe wrappers, and a handle that outlives its expression
+      has a `Drop` (see section 3 for what the rule does *not* cover)
+- [ ] Log statements sit at the point of handling, at the level section 7 describes
+- [ ] No PII: no serials or absolute paths above `debug!`
+- [ ] Any new lint suppression is narrow, is an `#[expect]`, and says why
