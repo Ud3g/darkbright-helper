@@ -54,6 +54,10 @@ history lives in the git log.
 
 ### Fixed
 
+- If the system refused to start the settings window's thread, the window
+  stayed unopenable for the rest of the session: the click had been recorded as
+  "opening" and nothing ever cleared it. The failure is now logged and the next
+  click tries again.
 - The `THIRD-PARTY-NOTICES.html` shipped in release archives attributed the
   twelve `windows-*` crates to `Copyright (c) <year> <copyright holders>` — the
   unfilled SPDX placeholder — instead of Microsoft. Those crates ship their
