@@ -7,6 +7,23 @@ history lives in the git log.
 
 ### Added
 
+- The tray menu's "Settings" item now opens a settings window instead of
+  `config.json` in a text editor. It exposes every option the file has —
+  hotkeys, brightness step, OSD timeout and opacity, the refresh intervals and
+  the file log — and applies each change as you make it, where before every
+  edit meant saving the file and restarting the app. Hotkeys are set by
+  pressing the combination rather than typing its name, and are rebound live;
+  the brightness keys stop adjusting brightness while the field is waiting for
+  input. The two logging options are the exception and still need a restart, as
+  a label in the window says. A "Restore defaults" button resets everything at
+  once, and the file itself stays one click away through the footer's "Open
+  config file" link. The window follows the Windows light/dark setting like the
+  tray menu, and lays itself out again when moved to a monitor with a different
+  display scaling. Saves are written only for the fields a session actually changed, so
+  hand-edits to the rest of the file survive a save made in the window.
+- The settings window can turn on "Start with Windows", which registers the app
+  under the current user's `Run` key. There had been no way to start it
+  automatically short of placing a shortcut in the Startup folder by hand.
 - Builds that are not a released version now say so. The tray menu's version
   row shows `Brightness Control v0.9.0+55.gc4687e5 (dev)` — the release it
   followed, the number of commits since, and the commit it was built from —
