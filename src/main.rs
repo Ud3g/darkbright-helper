@@ -106,9 +106,11 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
         log::info!("Shutdown signal received");
-        // Recover a poisoned lock rather than skipping the send: the guarded
-        // value is a plain sender, and declining to shut down is worse than
-        // acting on state a panicking thread touched.
+        // Neither holder of this lock can panic while holding it, so poisoning
+        // is not reachable today; recovering rather than skipping keeps the
+        // one policy the process uses (see architecture.md, Thread Conventions)
+        // and means a future holder that can panic does not silently turn
+        // shutdown into a no-op.
         let guard = SHUTDOWN_SENDER
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -363,7 +365,11 @@ fn spawn_tray_thread(
             match TrayIcon::new(tx) {
                 Ok(tray) => {
                     log::info!("System tray icon created");
-                    let _ = status_tx.send(tray.status_handle());
+                    if let Err(e) = status_tx.send(tray.status_handle()) {
+                        // Losing this costs every later degraded-state icon and
+                        // tooltip update, for the rest of the run.
+                        log::error!(error:% = e; "Failed to hand the tray status handle to the main thread");
+                    }
                     if let Err(e) = tray.run_message_loop() {
                         log::error!(error:% = e; "Tray message loop error");
                     }
@@ -415,7 +421,10 @@ fn start_hotkey_thread(
         .spawn(move || {
             run_hotkey_thread(up, down, intercept, tx, thread_id, queue, ready_tx);
         })
-        .map_err(|e| BrightnessError::thread_spawn("hotkey", e))?;
+        .map_err(|e| BrightnessError::ThreadSpawn {
+            name: "hotkey",
+            source: e,
+        })?;
 
     // Wait for the registration result, but bounded: a spawn hung inside
     // window creation or registration must not block the main loop —
@@ -579,19 +588,37 @@ fn main() {
         Ok(handle) => handle,
         Err(e) => {
             log::error!(error:% = e; "Fatal error during hotkey registration");
-            let config_path = Config::default_path().map_or_else(
-                || "config file".to_string(),
-                |p| p.to_string_lossy().to_string(),
-            );
-            let message = format!(
-                "Failed to register hotkeys:\n\n\
-                 {e}\n\n\
-                 Possible solutions:\n\
-                 • Close other applications that might be using these hotkeys\n\
-                 • Change the hotkey configuration in:\n  {config_path}\n\
-                 • Restart the application after making changes"
-            );
-            show_error_message_box("Brightness Control - Hotkey Error", &message);
+            // A refused thread is not a hotkey conflict: none of the advice
+            // below applies to it, and the title would misattribute the cause.
+            let (title, message) = if matches!(e, BrightnessError::ThreadSpawn { .. }) {
+                (
+                    "Brightness Control - Startup Error",
+                    format!(
+                        "Brightness Control could not start:\n\n\
+                     {e}\n\n\
+                     The system would not start a thread, which usually means it \
+                     is out of resources. Close some applications, or restart the \
+                     computer, and try again."
+                    ),
+                )
+            } else {
+                let config_path = Config::default_path().map_or_else(
+                    || "config file".to_string(),
+                    |p| p.to_string_lossy().to_string(),
+                );
+                (
+                    "Brightness Control - Hotkey Error",
+                    format!(
+                        "Failed to register hotkeys:\n\n\
+                         {e}\n\n\
+                         Possible solutions:\n\
+                         • Close other applications that might be using these hotkeys\n\
+                         • Change the hotkey configuration in:\n  {config_path}\n\
+                         • Restart the application after making changes"
+                    ),
+                )
+            };
+            show_error_message_box(title, &message);
             return;
         }
     };

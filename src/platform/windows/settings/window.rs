@@ -1973,6 +1973,12 @@ impl SettingsSink for SettingsSinkImpl {
                     // stays unopenable for the rest of the process.
                     self.hwnd.store(0, Ordering::SeqCst);
                     log::error!(error:% = e; "Failed to spawn settings window thread");
+                    // No thread means no window and so no handle_destroy, the
+                    // usual sender of this message; without it the controller's
+                    // settings_open latches true for the rest of the process.
+                    if let Err(e) = self.tx.send(BrightnessMessage::SettingsClosed) {
+                        log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
+                    }
                 }
             }
             Err(OPENING) => {

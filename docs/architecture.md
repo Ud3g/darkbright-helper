@@ -225,20 +225,26 @@ rate as the adaptive variant, for a transport rewrite.
 Revisit if a main-thread window ever becomes long-lived and interactive, or if battery
 profiling on a mobile machine says otherwise.
 
-#### Thread conventions
+#### Thread Conventions
 
 Four rules that were each decided three different ways before being written down.
 
-**Every thread is named.** Threads are started through
+**Every thread this process starts is named.** Threads are started through
 `thread::Builder::new().name("ddc" | "hotkey" | "power" | "settings" | "tray")`, never
 `thread::spawn`. The panic hook (`core/panic_hook.rs`) logs the thread name, and in a release
 build the log file is the only diagnostic that survives a crash — a report saying
-`thread = <unnamed>` names the one thing the reader needed. A spawn that fails is handled
-where the subsystem's other failures are handled: the tray and power threads log and carry
-on without that subsystem, the hotkey thread reports `ThreadSpawn` to its caller, and the DDC
-worker aborts, because it is the only path to the hardware and there is nothing to degrade
-to. The settings thread additionally has to release its `OPENING` slot, or the window can
-never be opened again.
+`thread = <unnamed>` names the one thing the reader needed. The rule cannot reach threads
+Windows creates to call into us, notably the console control handler: a panic there aborts
+inside an `extern "system"` callback and does report `<unnamed>`.
+
+A spawn that fails is handled where the subsystem's other failures are handled: the tray and
+power threads log and carry on without that subsystem; the hotkey thread reports
+`ThreadSpawn`, fatal at startup and a degraded `set_hotkeys_lost()` on a respawn; the DDC
+worker reports a refused respawn as `RespawnOutcome::BackoffExceeded`, the same degraded
+state a worker that died repeatedly produces, and only its *initial* spawn is fatal. Two
+subsystems have extra cleanup: the settings thread must release its `OPENING` slot **and**
+send `SettingsClosed`, or the window stays unopenable and the controller's `settings_open`
+latches true for the rest of the run.
 
 **A failed `send` is logged at the level its message deserves.** `error!` when the message
 carries user intent or state the receiver must reconcile — a brightness adjustment, a DDC
@@ -257,11 +263,13 @@ a way a second thread would misread, so the policy is
 an error reports a condition the caller cannot act on. If a mutex ever guards a multi-field
 invariant, that one gets its own documented policy rather than changing this one.
 
-**Worker threads are never joined.** There is no `.join()` in `src/`, deliberately: shutdown
-asks each worker to stop and then drops the owner, and process exit is the join. A thread
-blocked in `GetMessageW` would make a join a deadlock, and one spawn is already abandoned on
-purpose when it fails to report in time (§12). A thread that genuinely needs joining needs a
-design discussion first.
+**Worker threads are never joined.** There is no `.join()` in `src/`, deliberately: process
+exit is the join. Only the DDC worker is asked to stop (`Controller::shutdown_worker`, so a
+DDC transaction in flight is not cut mid-write); the tray, hotkey, power and settings threads
+are simply left to die with the process. A thread blocked in `GetMessageW` would make a join
+a deadlock, and one hotkey spawn is already abandoned on purpose when it fails to report in
+time — see `start_hotkey_thread` in `main.rs` for that case. A thread that genuinely needs
+joining needs a design discussion first.
 
 ### State Management
 

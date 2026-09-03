@@ -755,7 +755,7 @@ impl std::fmt::Display for ParsedHotkey {
 /// exactly like every other constructor/registration failure — and the
 /// thread exits without ever running the loop.
 // Every non-Copy parameter is owned rather than borrowed on purpose: this
-// is the spawned thread's entry point (`thread::spawn(move || run_hotkey_thread(...))`),
+// is the spawned thread's entry point (see `start_hotkey_thread` in `main.rs`),
 // so the caller hands over the shared cells and the startup values outright
 // instead of keeping borrows alive across the thread boundary, even though
 // the body itself only ever reads through most of them afterward.
@@ -1376,5 +1376,50 @@ mod tests {
             queue.lock().unwrap().is_empty(),
             "a post whose wake failed must not leave a command behind for a later thread to pick up"
         );
+    }
+
+    /// Poisons a queue by panicking while its guard is held.
+    fn poisoned_queue() -> HotkeyCommandQueue {
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let victim = Arc::clone(&queue);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = victim.lock().unwrap();
+            panic!("poison the queue");
+        }));
+        assert!(queue.is_poisoned(), "setup must actually poison the mutex");
+        queue
+    }
+
+    #[test]
+    fn post_on_a_poisoned_queue_still_enqueues() {
+        // The queue is plain data, so poisoning is recovered rather than
+        // reported: a panic elsewhere must not silently stop rebinds from
+        // reaching the hotkey thread. The wake still fails on the bogus tid,
+        // which is what rolls the command back out again.
+        let queue = poisoned_queue();
+        let thread_id = Arc::new(AtomicU32::new(u32::MAX));
+        let mut port = HotkeyPortImpl::new(thread_id, Arc::clone(&queue));
+
+        assert!(
+            port.resume().is_err(),
+            "the bogus thread id must still surface the wake failure"
+        );
+        assert!(
+            !matches!(port.resume(), Err(BrightnessError::ChannelSend)),
+            "poisoning must not be reported as a closed channel"
+        );
+    }
+
+    #[test]
+    fn drain_commands_on_a_poisoned_queue_still_drains() {
+        let queue = poisoned_queue();
+        queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(HotkeyThreadCommand::Resume);
+
+        let drained = drain_commands(&queue);
+
+        assert_eq!(drained.len(), 1, "a poisoned queue must still drain");
     }
 }

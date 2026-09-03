@@ -246,9 +246,17 @@ impl DdcSupervisor {
     ///
     /// `resp_tx` is the channel the worker sends results on; the supervisor
     /// keeps a clone so it can wire replacement workers.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS refuses the initial worker thread. There is no useful
+    /// degraded startup: the worker is the only path to the hardware, and this
+    /// runs before any window exists to report the failure in. A worker refused
+    /// *later* is not fatal — see [`DdcSupervisor::respawn`].
     #[must_use]
     pub fn spawn(resp_tx: Sender<BrightnessMessage>) -> Self {
-        let (cmd_tx, handle) = Self::spawn_worker(&resp_tx);
+        let (cmd_tx, handle) =
+            Self::spawn_worker(&resp_tx).expect("OS refused to start the DDC worker thread");
         Self {
             cmd_tx,
             handle,
@@ -258,18 +266,22 @@ impl DdcSupervisor {
     }
 
     /// Creates a fresh command channel and spawns a worker draining it.
-    fn spawn_worker(resp_tx: &Sender<BrightnessMessage>) -> (Sender<DdcCommand>, JoinHandle<()>) {
+    ///
+    /// Returns `None` if the OS refuses the thread; callers decide whether that
+    /// is fatal (startup) or a degraded state to report (respawn).
+    fn spawn_worker(
+        resp_tx: &Sender<BrightnessMessage>,
+    ) -> Option<(Sender<DdcCommand>, JoinHandle<()>)> {
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<DdcCommand>();
         let worker = DdcWorker::new(cmd_rx, resp_tx.clone());
-        // Unlike the tray and power threads, a DDC worker that cannot start is
-        // not something to degrade around: it is the only path to the hardware,
-        // and the OS refusing a thread means resources are exhausted anyway.
-        // `thread::spawn` already aborted here; the panic is only made explicit.
         let handle = std::thread::Builder::new()
             .name("ddc".to_string())
             .spawn(move || worker.run())
-            .expect("OS refused to start the DDC worker thread");
-        (cmd_tx, handle)
+            .map_err(|e| {
+                log::error!(error:% = e; "Failed to spawn DDC worker thread");
+            })
+            .ok()?;
+        Some((cmd_tx, handle))
     }
 
     /// Sends a command to the worker.
@@ -292,7 +304,12 @@ impl DdcSupervisor {
     pub(crate) fn respawn(&mut self, now: Instant) -> RespawnOutcome {
         match self.gate.on_death(now) {
             RespawnDecision::Attempt => {
-                let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
+                // A refused thread is reported as an exhausted budget rather
+                // than panicking on the main thread: the caller already has a
+                // degraded mode for a worker that will not come back.
+                let Some((cmd_tx, handle)) = Self::spawn_worker(&self.resp_tx) else {
+                    return RespawnOutcome::BackoffExceeded;
+                };
                 self.cmd_tx = cmd_tx;
                 self.handle = handle;
                 RespawnOutcome::Respawned

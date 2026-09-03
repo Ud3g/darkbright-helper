@@ -3826,6 +3826,28 @@ mod tests {
     }
 
     #[test]
+    fn settings_closed_clears_the_open_flag_after_an_open() {
+        // `open()` cannot report failure, so a platform impl that fails to
+        // show a window clears this flag by sending `SettingsClosed` itself.
+        // Without that the flag latches and `assert_topmost` is called for a
+        // window that does not exist. This pins the half the controller owns.
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            .unwrap();
+        assert!(c.settings_open);
+
+        c.handle_message(BrightnessMessage::SettingsClosed, base)
+            .unwrap();
+
+        assert!(
+            !c.settings_open,
+            "a window that never appeared must not leave the flag latched"
+        );
+    }
+
+    #[test]
     fn settings_closed_forces_a_save_when_dirty() {
         let base = Instant::now();
         let mut c = test_controller(base);
