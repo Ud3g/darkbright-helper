@@ -358,15 +358,24 @@ Location: `%APPDATA%\BrightnessControl\config.json`
 
 **`monitors` Field:** Reserved for future per-monitor settings (e.g., min/max limits, custom step sizes, DDC disable). Empty `{}` for MVP. Schema will be defined based on real-world user feedback after v1.0. A non-empty map logs a warning at load ("not yet implemented"); entries are preserved and round-trip through saves so hand-written settings survive until the feature exists. Note that neither the key format (how a monitor is addressed in this map) nor the value shape is a contract yet — surviving hand-written entries may not match the eventual schema and may need manual migration when the feature lands.
 
-**When changes take effect:** at the next start, not while running. The file is read once
-during startup and the resulting `Config` is then cloned into the places that need it — the
-controller keeps one, the hotkey thread keeps another, `main` keeps the original. All three
-are immutable for the process lifetime, which is why no synchronisation is needed and why
-they cannot drift apart. There is no reload path: the tray's "Settings" item opens
-`config.json` in the default editor, but saving it changes nothing until the app is
-restarted. Live reload is the first thing that has to be built if the settings GUI on the
-roadmap lands, and it is what makes the three snapshots a design decision rather than an
-accident.
+**When changes take effect:** it depends on *how* the change is made, and the split is a
+design decision rather than an accident.
+
+Changes made in the settings window (§14) apply immediately — including hotkey rebinds,
+which happen in place on the live hotkey thread. The controller is the sole owner of the
+runtime `Config`; the dialog never mutates it directly but posts
+`BrightnessMessage::SettingChanged(SettingChange)` down the existing channel, so the single
+owner keeps the invariant that only the main thread mutates state. The startup `Config` that
+`main` loads is a snapshot used to build the log sink and to seed the threads it spawns; the
+hotkey thread is given the two hotkey strings and the intercept flag, not a `Config`, which
+is why a rebind does not have to reach a second copy. Only the **logging** options are
+exempt: the rolling file sink is attached once during startup, so `logging.file_enabled` and
+`logging.file_level` take effect at the next start (a static label in the dialog says so).
+
+Changes made by hand-editing `config.json` take effect at the next start. There is no file
+watcher and no reload path — the file is read at startup, and thereafter only re-read when a
+save needs to merge onto it (§14, "Merge-on-external-change"). A hand-edit therefore
+survives on disk but does not apply while the app is running.
 
 **Hotkey String Format:**
 
@@ -386,8 +395,16 @@ Examples:
 - `alt+f1` — case doesn't matter
 - `Ctrl+Plus` — Ctrl and the `+` key
 
-**Merge Strategy: Shallow Replace**
-User config values override defaults at the top level. When a new field is added to defaults, existing user configs will miss that field until manually updated. This is acceptable for MVP and simplifies implementation.
+**Merge Strategy: Per-Field Defaults**
+
+Every field of the config schema carries `#[serde(default = "…")]` — the reserved `monitors`
+map is defaulted as a whole, its inner shape being no contract yet — so the merge happens per
+field rather than per section: a key the file does not contain takes its default, and the
+rest of the file is still honoured. Adding a field to the schema therefore does not
+invalidate existing configs and needs no manual edit by the user — the key reappears in the
+file the next time a save rewrites it. This is what makes step 1 of the checklist below load-bearing: a field without
+a serde default fails the whole parse for every user whose file predates it, which the
+`.bak` recovery path would then mask as a corrupt config.
 
 **Invalid Config Handling: Error and Use Default**
 
@@ -436,10 +453,51 @@ Config writes are atomic: the file is written to `config.json.tmp` and then rena
 
 After every *successful* parse at startup, the validated settings are mirrored to `config.json.bak` (also written atomically, best-effort — a backup failure never blocks startup). The backup therefore always holds the last-known-good configuration, including hand-edits that parsed successfully.
 
-When `config.json` is unreadable or corrupt (typically a broken hand-edit via the tray "Settings" entry):
+When `config.json` is unreadable or corrupt (typically a broken hand-edit, reached through the settings window's "Open config file" footer link or the file itself):
 1. Settings are recovered from `config.json.bak` and a warning is logged — user settings are **not** silently replaced by defaults.
 2. Only when the backup is also missing or corrupt do defaults substitute (logged as error).
 3. The corrupt `config.json` is left untouched in both cases, so the user can inspect and fix their edit; it is not overwritten until the next successful save.
+
+**Adding or changing a field**
+
+A field is not one edit but a dozen, spread across core, the settings window and the docs,
+and nothing but this list makes them findable. Two of them are silent when forgotten: a field
+with no arm in `validate_and_fix` accepts garbage instead of repairing it, breaking the
+never-fatal contract above; a field missing from `Config::overlay_dirty` is dropped whenever
+a save merges onto an externally edited file (§14), so it appears to save and then vanishes.
+
+In `core/config.rs`:
+
+1. The struct field, with `#[serde(default = "default_…")]` and its default function, so an
+   older config file without the key still loads.
+2. An arm in `validate_and_fix` that substitutes the default for an out-of-range value and
+   logs an error — never fatal.
+3. A line in `Config::restore_defaults`, unless the field is deliberately preserved across a
+   reset (as `monitors` and `version` are).
+4. A flag on `SettingsDirty` and a guarded copy in `Config::overlay_dirty`, if the settings
+   window can change the field.
+
+In the controller and the settings window, if the field is user-editable:
+
+5. A `SettingChange` variant and its arm in `Controller::handle_setting_changed`, applying
+   the change live where that is possible and marking the dirty flag.
+6. A `ControlSpec` row in `settings/layout.rs`'s `CONTROLS` table — creation order is also
+   tab order.
+7. For a numeric field, a `RangeSpec` in the same file's `RANGE_SPECS`. This is the third
+   place the range appears, after the validator and the table above; all three must agree,
+   and they enforce it differently on purpose (see the note under the table).
+
+In the docs:
+
+8. The range/default row in the table above, and the key in this section's JSON sample.
+9. The README's configuration section — the sample block and the per-field description.
+10. A `[Unreleased]` entry in `CHANGELOG.md`, written from the user's point of view.
+
+**When `version` has to be bumped:** only when an existing field is removed, renamed, or
+changes meaning — a reader of an older file would otherwise misinterpret it. Adding an
+optional field with a default does not qualify, because the loader already tolerates its
+absence, and neither does widening a valid range. There is still no migration logic (see the
+`version` note above), so a bump is a decision to write some.
 
 ### 5. Brightness Step Size
 
