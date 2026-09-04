@@ -108,9 +108,9 @@ A rough candidate list is worth generating before that, but only as a starting
 point: grep the `pub` items declared under `src/` (excluding `main.rs` and
 `#[cfg(test)]` blocks) and subtract every name that appears in `src/main.rs`,
 `tests/` or `src/lib.rs`. It over-reports badly, because it cannot see the
-"required by a signature" case above — the last run of it flagged 28 items, of
-which 19 were legitimate and 9 were genuinely too wide. Every type it flagged was
-legitimate; every real hit was a function or a constant. Treat it as a list of
+"required by a signature" case above; the last audit narrowed 16 of its hits and
+dismissed the rest. Every type it flagged was legitimate — all 16 real hits were
+functions or constants, 11 and 5. Treat it as a list of
 things to test, never as a verdict.
 
 One more reason not to trust a green build here: widening visibility is silent.
@@ -132,7 +132,7 @@ Keep `unsafe` at module boundaries with safe wrappers. Copied from
 likely to be imitated and so have to be real code rather than something plausible:
 
 ```rust
-pub fn register_hotkey(
+pub(crate) fn register_hotkey(
     &mut self,
     id: i32,
     modifiers: HOT_KEY_MODIFIERS,
@@ -292,10 +292,13 @@ These rules describe how the bindings behave, not one release of them:
 
 ## 4. Documentation
 
-Document all items with `///` doc comments, not only public ones — the de-facto practice
-throughout the codebase, and rustc's `missing_docs` is *not* enabled, so this half is
-convention rather than gate. Exempt: trait-impl boilerplate, serde `default_*` helpers, and
-tests. Include:
+Document all items with `///` doc comments, not only public ones. Clippy enforces the
+`# Errors` and `# Panics` sections on the public surface; everything else here is convention,
+since rustc's `missing_docs` is not enabled — and it is followed unevenly, with perhaps a
+dozen private helpers (several of the subclass procedures in `settings/dark.rs`, for
+instance) still undocumented. Treat those as debt to pay off when you touch them, not as
+precedent. Exempt by rule: trait-impl boilerplate, serde `default_*` helpers, and tests.
+Include:
 - Brief description
 - `# Arguments` for non-obvious parameters
 - `# Returns` for non-trivial return values
@@ -461,9 +464,10 @@ struct FakeOverlay {
   calls worth only counting. No `Arc<Mutex<…>>`, no `RefCell`, no interior mutability: the
   controller owns its seams exclusively and every method that records takes `&mut self`, so
   shared mutability would be modelling a concurrency that does not exist here — and would
-  hide the single-owner property the whole design rests on. The seam methods that take
-  `&self` are the pure queries (`is_visible`, `is_alive`, `monitor_under_cursor`), and a fake
-  that only answers them needs no fields at all — `FakeLocator` is two configured values.
+  hide the single-owner property the whole design rests on. Five seam methods take `&self`
+  — `is_visible`, `is_alive`, `monitor_under_cursor`, `resolve_id` and `shutdown`, the first
+  four queries and the last a fire-and-forget signal — and a fake that only answers those
+  needs no fields at all: `FakeLocator` is two configured values.
 - **Inject failure with a flag**, named for what it breaks (`fail_send`, `fail_update`). When
   only the next call should fail, use the one-shot form: a `fail_next` field consumed through
   `std::mem::take`, as `FakeHotkeyPort` does.
@@ -476,13 +480,17 @@ the clock, which is why the watchdog and refresh timing tests are deterministic.
 
 ### On the Windows side, test the pure helpers
 
-Thirteen of the `platform/windows/` files have tests, and with two exceptions they test only
-pure helpers — parsing, formatting, layout arithmetic — never a live window or a real device.
-The two exceptions are deliberate and are the whole list:
+Thirteen of the `platform/windows/` files have tests, and most of them test only pure
+helpers — parsing, formatting, layout arithmetic. What is never tested is a live window, a
+real device, or a theme. Three files go further than pure helpers, deliberately, and they are
+the whole list:
 
 - `power.rs` calls `power_wnd_proc` directly to prove resume events reach the main thread.
 - `ddc.rs` enumerates real monitors, written to pass on a headless machine by asserting only
   that the call succeeds.
+- `config_store.rs` drives real file I/O against a temp path, because the save-with-merge
+  contract *is* filesystem behaviour and a fake would test nothing. Cheap and host-portable,
+  unlike a window or a device.
 
 Anything else that needs a window, a device, or a theme belongs in the manual checklists in
 `docs/architecture.md`, not in a `#[test]`.

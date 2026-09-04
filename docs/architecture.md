@@ -126,8 +126,8 @@ seams plus its own hotkey/power/tray equivalents and binary wiring.
 **Adding a seam**
 
 The seam count went from four to seven in a single feature, so this is a path that gets
-walked. A new seam is one trait and six other edits; the compiler catches all but the last
-two, and the two it misses are the ones that rot:
+walked. A new seam is one trait and five other edits; the compiler catches every one of
+them but the last, and the last is the one that rots:
 
 In `core/controller.rs`:
 
@@ -146,10 +146,10 @@ In `platform/windows/` and `main.rs`:
 
 In the docs:
 
-6. The seam list in the paragraph above, the `controller.rs` line of the module tree, **and**
-   the seam enumeration under §Testing. Three places name this set; the §Testing copy is the
-   one that was left saying "four" after the settings window shipped, so treat all three as a
-   single edit.
+6. Four places name this set and all four are one edit: the seam list in the paragraph
+   above, the `controller.rs` line of the module tree, the seam enumeration under §Testing,
+   and the module map in `CLAUDE.md`. The §Testing copy is the one that was still saying
+   "four" long after the settings window shipped.
 
 Note what is deliberately absent: no rule about how many tests a seam needs, and no coverage
 claim here — §Testing owns the unit-vs-manual boundary.
@@ -304,7 +304,7 @@ joining needs a design discussion first.
 
 **`WM_APP` messages are allocated per receiving window class, and the one
 thread-addressed message is the exception that needs a guard.** Three modules define custom
-messages, and the values are read from four files today:
+messages, and the values live in three files today:
 
 | Constant | Value | Owning thread | Receiving class | Delivery |
 |---|---|---|---|---|
@@ -535,7 +535,10 @@ Examples:
 
 **Merge Strategy: Per-Field Defaults**
 
-Every field of the config schema carries `#[serde(default = "…")]` — the reserved `monitors`
+Every field of the config schema carries a serde default — a named function where the
+default is a real value (`#[serde(default = "default_osd_timeout")]`), the bare
+`#[serde(default)]` where `Default` already gives the right answer, as it does for the
+nested sections and for the `false` booleans. The reserved `monitors`
 map is defaulted as a whole, its inner shape being no contract yet — so the merge happens per
 field rather than per section: a key the file does not contain takes its default, and the
 rest of the file is still honoured. Adding a field to the schema therefore does not
@@ -606,8 +609,9 @@ a save merges onto an externally edited file (§14), so it appears to save and t
 
 In `core/config.rs`:
 
-1. The struct field, with `#[serde(default = "default_…")]` and its default function, so an
-   older config file without the key still loads.
+1. The struct field with a serde default, so an older config file without the key still
+   loads: `#[serde(default = "default_…")]` plus the function, or the bare
+   `#[serde(default)]` when `Default::default()` is already the value you want.
 2. An arm in `validate_and_fix` that substitutes the default for an out-of-range value and
    logs an error — never fatal.
 3. A line in `Config::restore_defaults`, unless the field is deliberately preserved across a
