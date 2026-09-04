@@ -997,16 +997,19 @@ static KEY_MAP: LazyLock<HashMap<&'static str, VIRTUAL_KEY>> = LazyLock::new(|| 
     m.insert("minus", VK_OEM_MINUS);
 
     // Note: Leak is acceptable as this is done once in LazyLock for the lifetime of the process.
-    // Letters A-Z (VK codes are same as ASCII uppercase)
-    for c in 'a'..='z' {
-        let key_name: &'static str = Box::leak(c.to_string().into_boxed_str());
-        m.insert(key_name, VIRTUAL_KEY(c.to_ascii_uppercase() as u16));
+    // Letters A-Z (VK codes are same as ASCII uppercase). Iterating over bytes
+    // rather than `char`s makes the ASCII assumption structural: a `char` would
+    // need a narrowing cast here, and this loop is the only reason it would be
+    // sound.
+    for c in b'a'..=b'z' {
+        let key_name: &'static str = Box::leak(char::from(c).to_string().into_boxed_str());
+        m.insert(key_name, VIRTUAL_KEY(u16::from(c.to_ascii_uppercase())));
     }
 
     // Numbers 0-9 (VK codes are same as ASCII)
-    for c in '0'..='9' {
-        let key_name: &'static str = Box::leak(c.to_string().into_boxed_str());
-        m.insert(key_name, VIRTUAL_KEY(c as u16));
+    for c in b'0'..=b'9' {
+        let key_name: &'static str = Box::leak(char::from(c).to_string().into_boxed_str());
+        m.insert(key_name, VIRTUAL_KEY(u16::from(c)));
     }
 
     m
@@ -1051,13 +1054,13 @@ static VK_TO_NAME: LazyLock<Vec<(String, VIRTUAL_KEY)>> = LazyLock::new(|| {
     ];
 
     // Letters A-Z and digits 0-9 (VK codes match ASCII uppercase / ASCII).
-    for c in 'A'..='Z' {
-        let code = u16::try_from(u32::from(c)).expect("ASCII letter code always fits in a u16");
-        v.push((c.to_string(), VIRTUAL_KEY(code)));
+    // Byte ranges for the same reason as `KEY_MAP` above, which also retires the
+    // two `expect`s a `char` range needed to promise the code fits a `u16`.
+    for c in b'A'..=b'Z' {
+        v.push((char::from(c).to_string(), VIRTUAL_KEY(u16::from(c))));
     }
-    for c in '0'..='9' {
-        let code = u16::try_from(u32::from(c)).expect("ASCII digit code always fits in a u16");
-        v.push((c.to_string(), VIRTUAL_KEY(code)));
+    for c in b'0'..=b'9' {
+        v.push((char::from(c).to_string(), VIRTUAL_KEY(u16::from(c))));
     }
 
     v

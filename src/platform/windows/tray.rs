@@ -712,6 +712,10 @@ fn remove_tray_icon(hwnd: HWND) {
 /// than breaking it, so the result is ignored.
 fn append_menu_item(hmenu: HMENU, flags: MENU_ITEM_FLAGS, id: u32, text: &str) {
     let wide: Vec<u16> = format!("{text}\0").encode_utf16().collect();
+    // `as` rather than `try_from`: `usize::from` does not exist for `u32`, and
+    // `try_from(..).unwrap_or(0)` would have to invent menu id 0 for a case that
+    // cannot occur. Widening a `u32` to `usize` loses nothing on any target this
+    // binary is built for.
     unsafe {
         let _ = AppendMenuW(hmenu, flags, id as usize, PCWSTR(wide.as_ptr()));
     }
