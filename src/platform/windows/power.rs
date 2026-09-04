@@ -89,7 +89,7 @@ fn handle_power_broadcast(wparam: WPARAM) {
     // PBT_APMRESUMEAUTOMATIC: Resume from suspend (automatic)
     // PBT_APMRESUMESUSPEND: Resume from suspend (user action)
     // Power event types fit in u32; truncation is acceptable on 64-bit
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let event_type = wparam.0 as u32;
 
     match event_type {

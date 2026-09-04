@@ -31,16 +31,21 @@ some.
 Every PR must pass what CI enforces:
 
 ```bash
-cargo fmt -- --check
-cargo clippy --all-targets -- -D warnings   # clippy all + pedantic are warn-by-default
-cargo test
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings   # clippy all + pedantic are warn-by-default
+cargo test --locked
+cargo check --release --locked
 ```
+
+CI also checks all targets on the MSRV and audits dependencies for advisories.
+`.github/workflows/ci.yml` is the authority if this list ever drifts from it.
 
 - Anything touching **DDC/CI, the OSD, the overlay, the tray, hotkeys, or power events**
   needs a manual test on real hardware — see "Integration Testing" in
   [docs/architecture.md](docs/architecture.md). Say in the PR what you tested on which
   setup; untested hardware-path changes will wait until I can verify them myself, which
-  may take long.
+  may take long. If your change moves what one of those procedures should observe, update
+  the procedure in the same PR.
 
 ## Code conventions
 
@@ -54,6 +59,16 @@ version:
   public items (`# Errors`/`# Panics` — clippy enforces this).
 - Logging: structured key-value form, log at the point of handling, never log PII —
   monitor serials at `debug` only, and only via `MonitorId::full_identity()`.
+
+## Changelog
+
+If a user could notice your change, it gets a `CHANGELOG.md` entry in the same PR, under
+`[Unreleased]` in the Added / Changed / Fixed section that fits. Write it for the person
+running the app, not for a reviewer: say what it does now and what it did before, not which
+function moved. Pure refactors, tests, and dependency bumps get no entry.
+
+Leave the version heading and the date alone — those are added when a release is cut, and
+`RELEASING.md` covers that.
 
 ## Commits and privacy
 

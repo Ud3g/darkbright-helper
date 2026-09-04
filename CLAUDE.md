@@ -24,12 +24,12 @@ cargo build --release        # release: console HIDDEN (windows_subsystem="windo
 cargo fmt --all -- --check   # must pass before commit
 cargo clippy --all-targets --locked -- -D warnings  # matches the CI gate exactly; `all` + `pedantic` are warn-by-default in Cargo.toml
 cargo test --locked          # unit + integration + doc tests
-cargo test test_decrease_from_50   # run a single test by name (or a whole module: cargo test brightness)
+cargo test read_is_scaled_by_the_monitors_reported_maximum   # single test by name (or a module: cargo test brightness)
 cargo check --release --locked     # only configuration in which the hidden-console cfg compiles
 RUST_LOG=debug cargo run     # run with debug logging (env_logger)
 ```
 
-Tests live in-module (`#[cfg(test)]`) under `src/` plus integration tests in `tests/` (`ddc_test.rs`, `hotkey_test.rs`, `single_instance_test.rs`); the crate-root example in `src/lib.rs` is a real doctest. Hardware-dependent DDC/refresh behavior is verified **manually** — see the "Integration Testing" section of `docs/architecture.md`.
+Tests live in-module (`#[cfg(test)]`) under `src/` plus integration tests in `tests/` (`ddc_test.rs`, `hotkey_test.rs`, `single_instance_test.rs`); the crate-root example in `src/lib.rs` is a real doctest. Hardware-dependent DDC/refresh behavior is verified **manually** — see the "Integration Testing" section of `docs/architecture.md`; changing such a path updates its procedure in the same PR.
 
 Releases are cut by pushing a bare-semver tag (`0.8.0`, no `v` prefix), which triggers the release workflow — see `RELEASING.md`.
 
@@ -65,7 +65,7 @@ Read `docs/architecture.md` for full design rationale (it is the source of truth
 ## Project conventions (project-specific; standard Rust is assumed)
 
 - **Config**: JSON at `%APPDATA%\BrightnessControl\config.json`. Invalid field values are logged as errors and replaced with defaults (never fatal). Durability contract: writes are atomic (`config.json.tmp` + rename), a `config.json.bak` mirror is refreshed after every successful parse, and a corrupt primary is recovered from the backup (warning) before defaults are substituted (error) — do not break this when touching the save/load paths. Valid ranges/defaults are tabulated in `docs/architecture.md` §4. The `monitors: {}` field is reserved for future per-monitor settings. The settings window (§14) writes through the same atomic path but merges onto a concurrently hand-edited file instead of refreshing `.bak` — a different contract, documented where it lives.
-- **FFI safety**: keep `unsafe` isolated behind safe wrappers, as close to point of use as possible. Wrap Windows handles in RAII (`Drop`) types. In Rust 2024, `unsafe fn` bodies still need explicit `unsafe { }` blocks.
+- **FFI safety**: keep `unsafe` isolated behind safe wrappers, as close to point of use as possible. Wrap Windows handles in RAII (`Drop`) types. A `// SAFETY:` comment goes on every `unsafe` block whose correctness rests on something the block does not show — pointer provenance, a separately passed buffer length, a handle's validity or thread affinity, a `transmute`, a callback contract, an `unsafe impl` — and *only* there; a plain Win32 call on scalars needs none, and a cast or lint suppression gets an ordinary comment (see `docs/code-conventions.md` §3).
 - **`windows` crate v0.62**: prefer the `Result`-returning bindings with `?` (+ `.map_err` to `BrightnessError`) over `BOOL` checks; handles are pointers — use `is_invalid()`, never `.0 == 0`, and note handles are not `Send`/`Sync` (core seam carries them as `isize`); optional handle params take `None`; `BOOL` lives in `windows::core`; use slices not ptr+len; many FFI structs lack `Debug` (impl manually, copy packed fields to locals first); use `&raw const`/`&raw mut` not `&x as *mut _`.
 - **Casts**: avoid `as`; use `u32::from`, `try_from`, `.cast_unsigned()`/`.cast_signed()`. Annotate pure fns with `#[must_use]` (except those returning `Result`).
 - **Docs**: all public items need `///` with `# Errors`/`# Panics` where applicable (clippy enforces this). Backtick code identifiers (`clippy::doc_markdown`).

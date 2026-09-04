@@ -1,5 +1,25 @@
 # Architecture & Technical Decisions
 
+> **Keeping this file true.** This document is the source of truth for behaviour, which only
+> works if a behaviour change and its description land in the same commit. Two rules follow
+> from that, both learned from breakage:
+>
+> - **Supersede in place, never by addition.** When a later section describes new behaviour,
+>   go back and fix every earlier passage it contradicts. A reader — human or LLM — takes the
+>   first statement it finds as authoritative and has no way to know that something 800 lines
+>   further down overrides it. The settings window (§14) invalidated three claims in §4 this
+>   way, and they stood uncorrected until a documentation review went looking.
+> - **Section numbers are a stable contract; do not renumber.** Cross-references use `§N`,
+>   including from `CLAUDE.md`, from dated design and review documents that must not be
+>   rewritten after the fact, and from other sections here. Add new sections at the end,
+>   keep a retired section's number retired, and resolve a numbering mistake by merging or
+>   retitling rather than by shifting everything after it.
+>
+> Passages that go stale quietly, worth a glance whenever the shape of the code changes: the
+> module tree and seam list under [Platform Abstraction](#platform-abstraction), the config
+> field table in §4, the constants in §12, and the manual checklists under
+> [Integration Testing (Manual)](#integration-testing-manual).
+
 ## Tech Stack
 
 ### Language & Toolchain
@@ -64,18 +84,22 @@ src/
 ├── lib.rs
 ├── error.rs              # Centralized error types
 ├── core/                 # Platform-agnostic logic
+│   ├── mod.rs            # Declares the core submodules; `edid` stays crate-internal
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
-│   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc>: message-driven orchestration behind OSD/overlay/DDC/locator seams, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
+│   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc,Set,Hk,Store>: message-driven orchestration behind the seams below, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
 │   ├── edid.rs           # EDID → MonitorId parsing
 │   ├── logfile.rs        # Size-capped rolling file log sink
 │   ├── panic_hook.rs     # Logs panic payload/location/thread, flushes sinks before exit
 │   ├── reconcile.rs      # Refresh generations, respawn backoff, watchdog policies
-│   └── state.rs          # Application state, messages, DDC commands
+│   ├── state.rs          # Application state, messages, DDC commands
+│   └── version.rs        # Build/version string shown in the tray and settings footer
 └── platform/
     ├── mod.rs            # Gates the platform submodule (Windows-only today)
     └── windows/          # #[cfg(windows)]
         ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes
+        ├── autostart.rs  # "Start with Windows" via HKCU\Run
+        ├── config_store.rs # ConfigStore seam: atomic save with merge-on-external-edit
         ├── ddc.rs        # DDC/CI communication (monitor handles)
         ├── ddc_worker.rs # DDC worker thread (non-blocking I/O)
         ├── hotkey.rs     # RegisterHotKey API + optional low-level keyboard hook
@@ -83,50 +107,91 @@ src/
         ├── osd_render.rs # OSD GDI rendering (RAII resource wrappers)
         ├── overlay.rs    # Dimming overlay windows (implements the OverlaySink seam)
         ├── power.rs      # Power event listener (sleep/resume)
+        ├── settings/     # Settings window, on its own thread (§14)
+        │   ├── mod.rs    # Directory module gate
+        │   ├── capture.rs # Hotkey-capture control
+        │   ├── dark.rs   # Dark-mode painting
+        │   ├── layout.rs # Declarative CONTROLS/RANGE_SPECS tables, DPI scaling
+        │   └── window.rs # Window creation, wiring, SettingsSinkImpl
         ├── single_instance.rs # Per-session named-mutex single-instance guard
+        ├── theme.rs      # Dark-mode opt-in (tray menu, settings window)
         └── tray.rs       # System tray icon and menu
 ```
 
 The portability boundary is the set of controller seams in `core/controller.rs`
-(`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`): core logic is generic
-over them and unit-tested against fakes; `platform/windows/` provides the real
-implementations. A port to another OS implements those seams plus its own
-hotkey/power/tray equivalents and binary wiring.
+(`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`, `SettingsSink`, `HotkeyPort`,
+`ConfigStore`): core logic is generic over them and unit-tested against fakes;
+`platform/windows/` provides the real implementations. A port to another OS implements those
+seams plus its own hotkey/power/tray equivalents and binary wiring.
+
+**Adding a seam**
+
+The seam count went from four to seven in a single feature, so this is a path that gets
+walked. A new seam is one trait and five other edits; the compiler catches every one of
+them but the last, and the last is the one that rots:
+
+In `core/controller.rs`:
+
+1. The trait, with a doc comment saying which side of the boundary owns the work and whether
+   a result comes back later as a `BrightnessMessage`.
+2. A type parameter on `Controller<…>` and on its `impl` block's bounds.
+3. A field on the struct and a parameter on `Controller::new`.
+4. A `Fake…` in the test module, plus its line in the `TestController` alias and its argument
+   in `test_controller()`. See section 8 of `docs/code-conventions.md` for what a fake in
+   this codebase may and may not do — the short version is a plain struct with `Vec` fields
+   and no interior mutability.
+
+In `platform/windows/` and `main.rs`:
+
+5. The real implementation, and the wiring that injects it.
+
+In the docs:
+
+6. Six places name this set, and they are one edit: the seam list in the paragraph above,
+   the `controller.rs` line of the module tree, the seam enumeration under §Testing, the
+   seam table in §14, the module doc comment at the top of `src/platform/mod.rs`, and the
+   module map in `CLAUDE.md`. Two of them have already rotted once: the §Testing copy still
+   said "four" long after the settings window shipped, and `platform/mod.rs` named only the
+   original four seams. Neither is reachable from the compiler, which is why they are
+   listed by name here.
+
+Note what is deliberately absent: no rule about how many tests a seam needs, and no coverage
+claim here — §Testing owns the unit-vs-manual boundary.
 
 ### Threading Model
 
 Dedicated threads for I/O, main thread owns state and UI:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Main Thread                            │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │        Controller (owner, in core/controller.rs)      │  │
-│  │    - processes messages from all threads              │  │
-│  │    - owns MonitorState map                            │  │
-│  │    - updates overlay/OSD (UI always responsive)       │  │
-│  │    - sends DdcCommand to worker                       │  │
-│  │    - checks periodic/inactivity refresh triggers      │  │
-│  └───────────────────────────────────────────────────────┘  │
-│              ▲                              │                │
-│       recv() │                              │ send()         │
-│              │                              ▼                │
-└──────────────┼──────────────────────────────┼────────────────┘
-               │                              │
-      BrightnessMessage                  DdcCommand
-               │                              │
-    ┌──────────┼──────────┬──────────┐        │
-    │          │          │          │        │
-┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───┴───────────────────────────┐
-│  Hotkey   │ │  Power    │ │   Tray    │ │       DDC Worker Thread       │
-│  Thread   │ │  Thread   │ │  Thread   │ │  ┌───────────────────────┐    │
-│           │ │           │ │           │ │  │  - owns monitor HashMap│   │
-│ send()    │ │ send()    │ │ send()    │ │  │  - executes DDC I/O   │    │
-│  │        │ │  │        │ │  │        │ │  │  - sends results back │    │
-│  │        │ │  │        │ │  │        │ │  └───────────────────────┘    │
-└──┼────────┘ └──┼────────┘ └──┼────────┘ └───────────────────────────────┘
-   │             │             │                      │
-   └─────────────┴─────────────┴──────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                               Main Thread                                 │
+│  ┌───────────────────────────────────────────────────────┐                │
+│  │        Controller (owner, in core/controller.rs)      │                │
+│  │    - processes messages from all threads              │                │
+│  │    - owns MonitorState map                            │                │
+│  │    - updates overlay/OSD (UI always responsive)       │                │
+│  │    - sends DdcCommand to worker                       │                │
+│  │    - checks periodic/inactivity refresh triggers      │                │
+│  └───────────────────────────────────────────────────────┘                │
+│             ▲                                             │               │
+│      recv() │                                             │ send()        │
+│             │                                             ▼               │
+└─────────────┼─────────────────────────────────────────────┼───────────────┘
+              │                                             │
+     BrightnessMessage                                 DdcCommand
+              │                                             │
+   ┌──────────┴──┬─────────────┬─────────────┐              │
+   │             │             │             │              │
+┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───┴───────────────────────────┐
+│  Hotkey   │ │  Power    │ │   Tray    │ │ Settings  │ │       DDC Worker Thread       │
+│  Thread   │ │  Thread   │ │  Thread   │ │  Thread   │ │  ┌────────────────────────┐   │
+│           │ │           │ │           │ │(per open) │ │  │  - owns monitor HashMap│   │
+│ send()    │ │ send()    │ │ send()    │ │ send()    │ │  │  - executes DDC I/O    │   │
+│  │        │ │  │        │ │  │        │ │  │        │ │  │  - sends results back  │   │
+└──┼────────┘ └──┼────────┘ └──┼────────┘ └──┼────────┘ │  └────────────────────────┘   │
+   │             │             │             │          └───────────────────────────────┘
+   │             │             │             │                        │
+   └─────────────┴─────────────┴─────────────┴────────────────────────┘
               (all send BrightnessMessage)
 ```
 
@@ -136,6 +201,8 @@ Dedicated threads for I/O, main thread owns state and UI:
 - DDC worker thread keeps main thread responsive for OSD/overlay updates
 - Power thread listens for system resume events (sleep/hibernate wake)
 - Tray thread handles system tray icon and context menu
+- Settings thread hosts the settings window and its own `GetMessageW` loop, so a modal
+  dialog blocks only itself; it is spawned per open and exits with the window (§14)
 - Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
@@ -195,22 +262,114 @@ rate as the adaptive variant, for a transport rewrite.
 Revisit if a main-thread window ever becomes long-lived and interactive, or if battery
 profiling on a mobile machine says otherwise.
 
+#### Thread Conventions
+
+Four rules that were each decided three different ways before being written down.
+
+**Every thread this process starts is named.** Threads are started through
+`thread::Builder::new().name("ddc" | "hotkey" | "power" | "settings" | "tray")`, never
+`thread::spawn`. The panic hook (`core/panic_hook.rs`) logs the thread name, and in a release
+build the log file is the only diagnostic that survives a crash — a report saying
+`thread = <unnamed>` names the one thing the reader needed. The rule cannot reach threads
+Windows creates to call into us, notably the console control handler: a panic there aborts
+inside an `extern "system"` callback and does report `<unnamed>`.
+
+A spawn that fails is handled where the subsystem's other failures are handled: the tray and
+power threads log and carry on without that subsystem; the hotkey thread reports
+`ThreadSpawn`, fatal at startup and a degraded `set_hotkeys_lost()` on a respawn; the DDC
+worker reports a refused respawn as `RespawnOutcome::BackoffExceeded`, the same degraded
+state a worker that died repeatedly produces, and only its *initial* spawn is fatal. Two
+subsystems have extra cleanup: the settings thread must release its `OPENING` slot **and**
+send `SettingsClosed`, or the window stays unopenable and the controller's `settings_open`
+latches true for the rest of the run.
+
+**A failed `send` is logged at the level its message deserves.** `error!` when the message
+carries user intent or state the receiver must reconcile — a brightness adjustment, a DDC
+result, a menu command the user clicked; `warn!` when nobody is harmed by the loss, typically
+a reply whose requester may already be gone (the tray's menu data, sent after the menu may
+have closed) or a notification that only fails because the app is shutting down.
+`let _ = tx.send(...)` is reserved for sends whose failure is the normal
+shutdown case, and the reason then goes in a comment or doc comment at the site. A dropped
+keypress that leaves no trace anywhere is the failure this rule exists to prevent.
+
+**A poisoned mutex is recovered, not avoided.** Every shared mutex in this process guards
+plain data — a command queue, a sender — that a panicking thread cannot leave half-written in
+a way a second thread would misread, so the policy is
+`unwrap_or_else(PoisonError::into_inner)`. Silently skipping the critical section
+(`if let Ok(guard)`) hides the failure and can turn Ctrl+C into a no-op; converting poison to
+an error reports a condition the caller cannot act on. If a mutex ever guards a multi-field
+invariant, that one gets its own documented policy rather than changing this one.
+
+**Worker threads are never joined.** There is no `.join()` in `src/`, deliberately: process
+exit is the join. Only the DDC worker is asked to stop (`Controller::shutdown_worker`, so a
+DDC transaction in flight is not cut mid-write); the tray, hotkey, power and settings threads
+are simply left to die with the process. A thread blocked in `GetMessageW` would make a join
+a deadlock, and one hotkey spawn is already abandoned on purpose when it fails to report in
+time — see `start_hotkey_thread` in `main.rs` for that case. A thread that genuinely needs
+joining needs a design discussion first.
+
+**`WM_APP` messages are allocated per receiving window class, and the one
+thread-addressed message is the exception that needs a guard.** Three modules define custom
+messages, and the values live in three files today:
+
+| Constant | Value | Owning thread | Receiving class | Delivery |
+|---|---|---|---|---|
+| `WM_APP_SETTINGS_REFRESH` … `_TOPMOST` | `WM_APP + 1` … `+ 5` | settings | `DarkBrightSettings` | `PostMessageW` to the window |
+| `WM_APP_HOTKEY_WAKE` | `WM_APP + 10` | hotkey | none — see below | **`PostThreadMessageW` to the thread** |
+| `WM_TRAY_CALLBACK` / `WM_TRAY_STATUS` | `WM_APP + 100` / `+ 101` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
+
+For a window-addressed message, `WM_APP + n` only has to be unique among the messages that
+one *class* handles; two classes may reuse a value without interfering, which is why the
+settings thread can host both `DarkBrightSettings` and `DarkBrightHotkeyCapture` without a
+shared numbering scheme. The disjoint bases above are therefore convenience, not a
+requirement.
+
+A thread-addressed message is different, and `WM_APP_HOTKEY_WAKE` is the only one in the
+process. The hotkey thread does host a class of its own (`DarkBrightHotkeyWindow`, a
+message-only window used for `RegisterHotKey`), but the wake is deliberately not addressed to
+it: it arrives with a null `hwnd`, so `DispatchMessageW` can deliver it nowhere and it is
+handled in the loop body or dropped. That is what keeps it from being confused with a
+window message. The `msg.hwnd.is_invalid()` test in `run_message_loop` guards the converse
+case — a window message that happens to carry the same value being mistaken for a wake — and
+is the reason the wake value must be unique across *every* class on that thread, not merely
+within one. Introducing a second thread-addressed message means repeating that check and
+re-checking every class hosted on the receiving thread.
+
+One allocation carries a further constraint that is not obvious from the values: the five
+settings messages are a contiguous, ordered range because `drain_pending_payload_messages`
+reclaims their heap payloads with a `PeekMessageW` range filter over `[REFRESH, TOPMOST]`. A
+constant added outside that span would be skipped and its `Box` leaked, so a compile-time
+assertion beside the constants pins the ordering and the width.
+
 ### State Management
 
 Message-passing with single ownership:
 
 ```rust
-// Messages TO main thread (from hotkey thread, DDC worker, power thread, or tray thread)
+// Messages TO main thread (from the hotkey, DDC worker, power, tray, or settings thread)
 enum BrightnessMessage {
-    Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
-    DdcSetResult { monitor_id, value, seq, success, error }, // DDC worker → main
-    DdcRefreshResult { generation, monitors, enumerated },   // DDC worker → main
+    // Brightness and cache
+    Adjust { monitor_id: Option<MonitorId>, delta: i8 },       // None = monitor under cursor
+    AdjustStep { direction: i8 },                              // One configured step, cursor monitor
+    DdcSetResult { monitor_id, value, seq, success, error },    // DDC worker → main
+    DdcRefreshResult { generation, monitors, enumerated },      // DDC worker → main
     Refresh,
-    SystemResumed,                                            // Power thread → main
-    TrayOpenSettings,                                         // Tray thread → main
-    TrayOpenLogFolder,                                        // Tray thread → main
-    TrayRequestQuit,                                          // Tray thread → main
-    TrayMenuOpening { reply_tx: Sender<TrayMenuData> },       // Tray thread ↔ main (request/response)
+    SystemResumed,                                             // Power thread → main
+
+    // Tray thread → main
+    TrayOpenSettings,
+    TrayOpenLogFolder,
+    TrayRequestQuit,
+    TrayMenuOpening { reply_tx: Sender<TrayMenuData> },         // request/response
+
+    // Settings window
+    SettingChanged(SettingChange),                             // Settings thread → main
+    HotkeyRebindResult { op, success, fallback_active, error }, // Hotkey thread → main (ack)
+    SettingsClosed,                                            // Flush pending save, end capture
+    HotkeyCaptureStarted,                                      // Suspend interception while capturing
+    HotkeyCaptureEnded,                                        // Capture ended with no new binding
+    OpenConfigFile,                                            // Shell side effect, like TrayOpenLogFolder
+
     Shutdown,
 }
 
@@ -264,14 +423,12 @@ pub struct MonitorId {
 - Config files are portable across platforms
 - For identical monitors without serials, position (topology) is used as a secondary disambiguator
 
-### 3. Multi-Monitor: Mouse Position
+### 3. Hotkeys: Targeting and Hybrid Registration
 
-Hotkeys affect the monitor containing the mouse cursor:
+**Which monitor a hotkey affects: the one under the mouse cursor.**
 - `GetCursorPos()` → `MonitorFromPoint()`
 - Intuitive, matches user expectations from volume controls
 - No configuration required
-
-### 3. Hotkey Strategy: Hybrid Registration
 
 **Primary Default:** `Ctrl+Shift+Up` / `Ctrl+Shift+Down`
 - Reliable across all keyboard types
@@ -301,25 +458,35 @@ Primary hotkey *registration* failures (e.g. the combination is already taken by
 An *invalid hotkey string* in the config is **not** fatal: it is repaired to the default with an error log at load time (`Config::repair_hotkeys`, fed by the platform parser), per the "Invalid Config Handling" contract in section 4. The parse step before registration remains only as a defensive guard.
 
 ```rust
-// Register primary hotkeys (fail = fatal error with message box)
-hotkey_manager.register(BRIGHTNESS_UP_ID, MOD_CTRL | MOD_SHIFT, VK_UP)?;
-hotkey_manager.register(BRIGHTNESS_DOWN_ID, MOD_CTRL | MOD_SHIFT, VK_DOWN)?;
+// In `apply_bindings`, used for the initial registration and every rebind.
+// A primary that will not register is fatal: the app cannot do its job.
+self.register_hotkey(BRIGHTNESS_UP_ID, up.modifiers, up.vk_code)
+    .map_err(|e| BrightnessError::hotkey_registration(up.to_string(), e.to_string()))?;
 
-// Attempt secondary hotkeys (fail = log and continue)
-if let Err(e) = hotkey_manager.register(BRIGHTNESS_UP_ALT_ID, 0, VK_BRIGHTNESS_UP) {
-    log::debug!("VK_BRIGHTNESS_UP not available: {}", e);
-}
-if let Err(e) = hotkey_manager.register(BRIGHTNESS_DOWN_ALT_ID, 0, VK_BRIGHTNESS_DOWN) {
-    log::debug!("VK_BRIGHTNESS_DOWN not available: {}", e);
+// The dedicated brightness keys are best-effort: another app or the shell may
+// already own them, or the low-level hook may be handling them instead.
+fn register_secondary_brightness_hotkeys(&mut self) {
+    if let Err(e) =
+        self.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
+    {
+        log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
+    }
+    // … the same for BRIGHTNESS_DOWN_ALT_ID / VK_BRIGHTNESS_DOWN
 }
 ```
 
 **Technical Details:**
 - Dedicated listener thread calls `RegisterHotKey()` API
 - Receives `WM_HOTKEY` messages in thread message loop
-- Secondary brightness keys (`VK_BRIGHTNESS_UP`/`DOWN`) use `SetWindowsHookExW(WH_KEYBOARD_LL)`
-  to intercept before Shell handling (user-mode hook, not kernel-mode)
-- Hook is **opt-in** via `hotkeys.intercept_brightness_keys` config option (default: `false`)
+- Secondary brightness keys (`VK_BRIGHTNESS_UP`/`DOWN`) are, by default, registered through
+  the same plain `RegisterHotKey` path as the primaries
+  (`register_secondary_brightness_hotkeys`), so the Shell sees them first and the app only
+  gets what the Shell leaves over
+- Intercepting them *ahead of* the Shell instead requires the low-level keyboard hook
+  (`SetWindowsHookExW(WH_KEYBOARD_LL)` — a user-mode hook, not kernel-mode), which is
+  **opt-in** via `hotkeys.intercept_brightness_keys` (default: `false`). When the hook is
+  requested but cannot be installed, the dedicated keys fall back to plain registration and
+  the failure is reported as a notice rather than an error
 - Rationale for opt-in: Some antivirus software may flag low-level keyboard hooks;
   disabled by default to avoid false positives for users who don't need the feature
 
@@ -354,19 +521,32 @@ Location: `%APPDATA%\BrightnessControl\config.json`
 }
 ```
 
+JSON rather than a binary or bespoke format for two reasons that both outlive the MVP: the
+file is human-readable, so a user chasing a problem can inspect and hand-edit it without a
+tool, and it is portable to Linux, where a future port would read the very same file.
+
 **`version` Field:** No migration logic exists yet. A value other than the current schema version logs a warning at load; the fields are interpreted as the current schema (unknown fields are dropped by the parser) and the value is reset to the current version, so later writes describe what the file actually contains.
 
 **`monitors` Field:** Reserved for future per-monitor settings (e.g., min/max limits, custom step sizes, DDC disable). Empty `{}` for MVP. Schema will be defined based on real-world user feedback after v1.0. A non-empty map logs a warning at load ("not yet implemented"); entries are preserved and round-trip through saves so hand-written settings survive until the feature exists. Note that neither the key format (how a monitor is addressed in this map) nor the value shape is a contract yet — surviving hand-written entries may not match the eventual schema and may need manual migration when the feature lands.
 
-**When changes take effect:** at the next start, not while running. The file is read once
-during startup and the resulting `Config` is then cloned into the places that need it — the
-controller keeps one, the hotkey thread keeps another, `main` keeps the original. All three
-are immutable for the process lifetime, which is why no synchronisation is needed and why
-they cannot drift apart. There is no reload path: the tray's "Settings" item opens
-`config.json` in the default editor, but saving it changes nothing until the app is
-restarted. Live reload is the first thing that has to be built if the settings GUI on the
-roadmap lands, and it is what makes the three snapshots a design decision rather than an
-accident.
+**When changes take effect:** it depends on *how* the change is made, and the split is a
+design decision rather than an accident.
+
+Changes made in the settings window (§14) apply immediately — including hotkey rebinds,
+which happen in place on the live hotkey thread. The controller is the sole owner of the
+runtime `Config`; the dialog never mutates it directly but posts
+`BrightnessMessage::SettingChanged(SettingChange)` down the existing channel, so the single
+owner keeps the invariant that only the main thread mutates state. The startup `Config` that
+`main` loads is a snapshot used to build the log sink and to seed the threads it spawns; the
+hotkey thread is given the two hotkey strings and the intercept flag, not a `Config`, which
+is why a rebind does not have to reach a second copy. Only the **logging** options are
+exempt: the rolling file sink is attached once during startup, so `logging.file_enabled` and
+`logging.file_level` take effect at the next start (a static label in the dialog says so).
+
+Changes made by hand-editing `config.json` take effect at the next start. There is no file
+watcher and no reload path — the file is read at startup, and thereafter only re-read when a
+save needs to merge onto it (§14, "Merge-on-external-change"). A hand-edit therefore
+survives on disk but does not apply while the app is running.
 
 **Hotkey String Format:**
 
@@ -386,12 +566,23 @@ Examples:
 - `alt+f1` — case doesn't matter
 - `Ctrl+Plus` — Ctrl and the `+` key
 
-**Merge Strategy: Shallow Replace**
-User config values override defaults at the top level. When a new field is added to defaults, existing user configs will miss that field until manually updated. This is acceptable for MVP and simplifies implementation.
+**Merge Strategy: Per-Field Defaults**
+
+Every field of the config schema carries a serde default — a named function where the
+default is a real value (`#[serde(default = "default_osd_timeout")]`), the bare
+`#[serde(default)]` where `Default` already gives the right answer, as it does for the
+nested sections and for the `false` booleans. The reserved `monitors`
+map is defaulted as a whole, its inner shape being no contract yet — so the merge happens per
+field rather than per section: a key the file does not contain takes its default, and the
+rest of the file is still honoured. Adding a field to the schema therefore does not
+invalidate existing configs and needs no manual edit by the user — the key reappears in the
+file the next time a save rewrites it. This is what makes step 1 of the checklist below load-bearing: a field without
+a serde default fails the whole parse for every user whose file predates it, which the
+`.bak` recovery path would then mask as a corrupt config.
 
 **Invalid Config Handling: Error and Use Default**
 
-When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
+When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: 50`):
 - Log an error describing the invalid value and which default is being used
 - Use the default value for that field
 - Continue startup normally
@@ -421,14 +612,23 @@ unattended startup), while the dialog *clamps to the nearest bound* on focus los
 policy for a user mid-edit). Same never-fatal spirit, deliberately different mechanism — don't
 "fix" one to match the other.
 
-Example log output for invalid config:
+Two spinner ranges deliberately do *not* match the table, and the mismatch is the point: in
+`settings/layout.rs` the periodic-resync spinner is bounded 1–3600 and the inactivity-resync
+spinner 1–600, while the config accepts 0 for both. Zero means "disabled" there, and in the
+dialog that state is expressed by clearing the field's checkbox rather than by typing a `0`
+into it — so the spinner never has to produce a value whose meaning is not a duration. Every
+other range appears identically in all three places.
+
+Example log output for an invalid value, as the structured `key=value` sink renders it:
 ```
-[ERROR] Invalid config: brightness.step_percent=999 exceeds maximum 50, using default 5
-[ERROR] Invalid config: osd.timeout_ms=-5 below minimum 100, using default 1000
+[ERROR] Invalid config value, using default field=brightness.step_percent value=999 min=1 max=50 default=5
+[ERROR] Invalid config value exceeds maximum, using default field=refresh.periodic_seconds value=99999 max=3600 default=60
 ```
 
-- Human-readable for debugging
-- Portable to Linux
+A *type* error never reaches this path. `osd.timeout_ms` is a `u32`, so a hand-written `-5`
+fails in serde before `validate_and_fix` ever runs; the file is then treated as unparseable
+and goes down the backup-recovery route described below, not the repair route described here.
+Only a value that parses and then falls outside its range is repaired against the table.
 
 **Atomic Writes & Backup Recovery**
 
@@ -436,10 +636,53 @@ Config writes are atomic: the file is written to `config.json.tmp` and then rena
 
 After every *successful* parse at startup, the validated settings are mirrored to `config.json.bak` (also written atomically, best-effort — a backup failure never blocks startup). The backup therefore always holds the last-known-good configuration, including hand-edits that parsed successfully.
 
-When `config.json` is unreadable or corrupt (typically a broken hand-edit via the tray "Settings" entry):
+When `config.json` is unreadable or corrupt (typically a broken hand-edit, reached through the settings window's "Open config file" footer link or the file itself):
 1. Settings are recovered from `config.json.bak` and a warning is logged — user settings are **not** silently replaced by defaults.
 2. Only when the backup is also missing or corrupt do defaults substitute (logged as error).
 3. The corrupt `config.json` is left untouched in both cases, so the user can inspect and fix their edit; it is not overwritten until the next successful save.
+
+**Adding or changing a field**
+
+A field is not one edit but a dozen, spread across core, the settings window and the docs,
+and nothing but this list makes them findable. Two of them are silent when forgotten: a field
+with no arm in `validate_and_fix` accepts garbage instead of repairing it, breaking the
+never-fatal contract above; a field missing from `Config::overlay_dirty` is dropped whenever
+a save merges onto an externally edited file (§14), so it appears to save and then vanishes.
+
+In `core/config.rs`:
+
+1. The struct field with a serde default, so an older config file without the key still
+   loads: `#[serde(default = "default_…")]` plus the function, or the bare
+   `#[serde(default)]` when `Default::default()` is already the value you want.
+2. An arm in `validate_and_fix` that substitutes the default for an out-of-range value and
+   logs an error — never fatal.
+3. A line in `Config::restore_defaults`, unless the field is deliberately preserved across a
+   reset (as `monitors` and `version` are).
+4. A flag on `SettingsDirty` and a guarded copy in `Config::overlay_dirty`, if the settings
+   window can change the field.
+
+In the controller and the settings window, if the field is user-editable:
+
+5. A `SettingChange` variant and its arm in `Controller::handle_setting_changed`, applying
+   the change live where that is possible and marking the dirty flag.
+6. A `ControlSpec` row in `settings/layout.rs`'s `CONTROLS` table — creation order is also
+   tab order.
+7. For a numeric field, a `RangeSpec` in the same file's `RANGE_SPECS`. This is the third
+   place the range appears, after the validator and the table above; all three must agree —
+   apart from a documented "0 means disabled" spinner exception — and they enforce it
+   differently on purpose (see the notes under the table).
+
+In the docs:
+
+8. The range/default row in the table above, and the key in this section's JSON sample.
+9. The README's configuration section — the sample block and the per-field description.
+10. A `[Unreleased]` entry in `CHANGELOG.md`, written from the user's point of view.
+
+**When `version` has to be bumped:** only when an existing field is removed, renamed, or
+changes meaning — a reader of an older file would otherwise misinterpret it. Adding an
+optional field with a default does not qualify, because the loader already tolerates its
+absence, and neither does widening a valid range. There is still no migration logic (see the
+`version` note above), so a bump is a decision to write some.
 
 ### 5. Brightness Step Size
 
@@ -933,14 +1176,21 @@ reconciles to the correct final value.
 **One restart policy, two supervised threads.** `RespawnGate`
 (`core/reconcile.rs`) holds the whole rule — deaths spaced apart restart
 indefinitely, a rapid crash loop within `RESPAWN_WINDOW` latches into a
-give-up state — and both the DDC worker and the hotkey thread run on that one
-instance of it. What differs is not the policy but the way back out:
+give-up state — and both the DDC worker and the hotkey thread are gated by it.
+One policy, two *separate* instances of it: `DdcSupervisor` owns its own gate as
+a field, `main.rs` builds a second one (`hotkey_gate`) for the hotkey thread.
+Nothing is shared between them, so one subsystem's crash loop can never spend
+the other's respawn budget. What differs is not the policy but the way back out:
 
 - The **DDC worker** has external recovery triggers, so `DdcSupervisor` calls
   `RespawnGate::reset()` when one fires (a brightness keypress or a system
   resume) and the gate reopens. The supervisor itself only translates a
   decision into an action — spawn a replacement, or report that none was
   spawned — because `RespawnOutcome` is what the controller needs to know.
+  Deliberately, a failed restart *attempt* does **not** latch here, unlike the
+  hotkey case below: the next keypress or resume would lift the latch moments
+  later anyway, and the attempt has already been charged against the respawn
+  budget, so the retries stay bounded without it.
 - The **hotkey thread** has no such trigger and never resets: once its restarts
   are exhausted the tray says "restart the app" and means it. A failed restart
   *attempt* latches immediately (`record_spawn_failure`) — a second attempt
@@ -1186,8 +1436,8 @@ user reopens Settings. A second "Settings" click while the window already
 exists focuses it instead of spawning a duplicate.
 
 **Message flow.** The controller stays the sole owner of the runtime
-`Config`. Three new host-fakeable seams join `OsdSink`/`OverlaySink`/`DdcPort`
-in `core/controller.rs`:
+`Config`. Three new host-fakeable seams join `OsdSink`/`OverlaySink`/`DdcPort`/
+`MonitorLocator` in `core/controller.rs`, bringing the total to seven:
 
 | Seam | Responsibility | Windows implementation |
 |---|---|---|
@@ -1374,8 +1624,9 @@ room. A released build needs 30px of it.
 **Module placement.** `src/platform/windows/settings/` is a directory
 module: `mod.rs` (module wiring, `pub use` re-exports), `layout.rs`
 (declarative control table + DPI geometry, no window logic), `window.rs`
-(window creation and the per-open `std::thread::spawn`, control wiring, the
-message loop, `SettingsSinkImpl`), `capture.rs` (the hotkey-capture control,
+(window creation and the per-open named `settings` thread — a
+`thread::Builder`, per the naming rule under Thread Conventions — control
+wiring, the message loop, `SettingsSinkImpl`), `capture.rs` (the hotkey-capture control,
 its own subclassed window class), `dark.rs` (all dark-mode painting: custom
 draw, subclassing, the `WM_CTLCOLOR*` colour table). Two supporting pieces
 live outside the directory, alongside the platform module's other
@@ -1468,26 +1719,56 @@ no deadline — fold the migration in opportunistically, the next time `ddc.rs` 
 another reason. `SafeHwnd` is explicitly **not** a candidate: `DestroyWindow` does not fit
 the `Free` pattern. See `docs/code-conventions.md` § 3 for the rule this illustrates.
 
+### Tracking tooltips via `tooltips_class32` do not work
+
+Kept as a negative result: the app has no menu tooltips today, and this is the record of why
+a future attempt should not start with the obvious API.
+
+The Win32 tooltip control is unreliable for *tracking tooltips* — manually positioned
+tooltips near a popup menu. `TTM_ADDTOOLW` can fail silently, returning 0 with
+`GetLastError()` also 0, even with correct parameters. Configurations tried, all failing the
+same way: `hwnd` as `HWND_MESSAGE`, as `GetDesktopWindow()`, as the tooltip's own handle, and
+as a dedicated invisible `STATIC` window; various combinations of `TTF_TRACK`, `TTF_ABSOLUTE`
+and `TTF_IDISHWND`; and a verified-correct `cbSize` (72 bytes on 64-bit).
+
+What works instead is a plain custom popup: a `STATIC`-class window with
+`WS_POPUP | WS_BORDER | WS_EX_TOPMOST | WS_EX_TOOLWINDOW`, shown with `ShowWindow` and placed
+with `SetWindowPos`. More reliable, and it gives full control over appearance — which a
+themed tooltip would not.
+
 ---
 
 ## Testing
 
 ### Unit Tests
 
-Run all unit tests with:
-```bash
-cargo test
-```
+`cargo test --locked` runs them; `.github/workflows/ci.yml` is the authority on the full
+check set, and `docs/code-conventions.md` §8 covers how the tests themselves are built.
 
 Key test areas:
 - **Config validation**: Ensures invalid values are clamped to defaults
 - **Brightness calculations**: Tests adjustment logic in `core/brightness.rs`
 - **State management**: Tests `MonitorState` transitions
-- **Controller orchestration**: `core/controller.rs` drives the optimistic-update, supervision, watchdog, refresh, and ghost-pruning sequences against fakes for the OSD/overlay/DDC/locator seams — the message-driven control flow is unit-tested on any host, no Windows target or physical monitor required
+- **Controller orchestration**: `core/controller.rs` drives the optimistic-update, supervision, watchdog, refresh, and ghost-pruning sequences against fakes for all seven seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`, `SettingsSink`, `HotkeyPort`, `ConfigStore`) — the message-driven control flow is unit-tested on any host, no Windows target or physical monitor required
 
 ### Integration Testing (Manual)
 
 Controller orchestration is unit-tested (see above); what remains hardware-dependent and must be tested manually is DDC/CI I/O against real monitors, the DDC worker's EDID enumeration (including the `enumerated` set it reports), and topology changes:
+
+**Keeping these procedures true.** For DDC, the OSD, the overlay, the tray and power events
+these procedures are the whole verification story, because CI cannot run any of them. So
+a change to one of those paths updates its procedure in the same PR. In practice that means
+the **Expected** line rather than the steps: the steps age slowly — a monitor is still
+unplugged by unplugging it — while the expected observation goes stale the moment a log
+message or a visible behaviour changes. A procedure whose Expected line no longer matches is
+worse than no procedure at all, because it fails on a correct build and teaches whoever runs
+it to wave the failure through.
+
+There is deliberately **no record of which procedure last ran against which version**. Such a
+note is only ever as good as its upkeep, and a stale one claiming a verification that never
+happened would be worse than the silence it replaced — the same failure this document's
+freshness rule exists to prevent. The verification history therefore lives in the commit and
+release history, not in a table here.
 
 #### Periodic Refresh Test
 1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config

@@ -17,27 +17,10 @@ pub enum BrightnessError {
     #[error("Monitor not found: {0}")]
     MonitorNotFound(String),
 
-    /// DDC/CI is not supported by the monitor.
-    #[error("Monitor '{0}' does not support DDC/CI")]
-    DdcNotSupported(String),
-
     // ── Hotkey Errors ────────────────────────────────────────────────────
     /// Failed to register a global hotkey.
     #[error("Failed to register hotkey '{hotkey}': {message}")]
     HotkeyRegistration { hotkey: String, message: String },
-
-    /// Hotkey is already registered by another application.
-    #[error("Hotkey '{0}' is already in use by another application")]
-    HotkeyAlreadyRegistered(String),
-
-    // ── Overlay/OSD Errors ───────────────────────────────────────────────
-    /// Failed to create the dimming overlay window.
-    #[error("Failed to create overlay window: {0}")]
-    OverlayCreation(String),
-
-    /// Failed to create or update the OSD window.
-    #[error("Failed to create OSD window: {0}")]
-    OsdCreation(String),
 
     // ── Tray Icon Errors ─────────────────────────────────────────────────
     /// Failed to create or register the system tray icon.
@@ -46,30 +29,30 @@ pub enum BrightnessError {
 
     // ── Configuration Errors ─────────────────────────────────────────────
     /// Failed to read the configuration file.
-    #[error("Failed to read config file '{path}': {source}")]
+    #[error("Failed to read config file '{file}': {source}")]
     ConfigRead {
-        path: String,
+        file: String,
         source: std::io::Error,
     },
 
     /// Failed to open the configuration file with the system default application.
-    #[error("Failed to open config file '{path}': {source}")]
+    #[error("Failed to open config file '{file}': {source}")]
     ConfigFileOpen {
-        path: String,
+        file: String,
         source: std::io::Error,
     },
 
     /// Failed to write the configuration file.
-    #[error("Failed to write config file '{path}': {source}")]
+    #[error("Failed to write config file '{file}': {source}")]
     ConfigWrite {
-        path: String,
+        file: String,
         source: std::io::Error,
     },
 
     /// Failed to parse the configuration file.
-    #[error("Failed to parse config file '{path}': {source}")]
+    #[error("Failed to parse config file '{file}': {source}")]
     ConfigParse {
-        path: String,
+        file: String,
         source: serde_json::Error,
     },
 
@@ -90,6 +73,16 @@ pub enum BrightnessError {
     /// Failed to receive a message from a channel.
     #[error("Failed to receive message: channel closed")]
     ChannelRecv,
+
+    /// The operating system refused to start a thread.
+    ///
+    /// `name` is a static thread name, so this variant needs no constructor
+    /// helper and stays buildable directly by the binary's thread wiring.
+    #[error("Failed to spawn the {name} thread: {source}")]
+    ThreadSpawn {
+        name: &'static str,
+        source: std::io::Error,
+    },
 
     /// The hotkey thread did not report its registration result in time.
     #[error("Hotkey thread did not report registration in time")]
@@ -113,7 +106,10 @@ impl BrightnessError {
     }
 
     /// Creates a new hotkey registration error.
-    pub fn hotkey_registration(hotkey: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn hotkey_registration(
+        hotkey: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self::HotkeyRegistration {
             hotkey: hotkey.into(),
             message: message.into(),
@@ -134,39 +130,51 @@ impl BrightnessError {
     }
 
     /// Creates a new config read error.
-    pub(crate) fn config_read(path: impl Into<String>, source: std::io::Error) -> Self {
+    ///
+    /// `file` is a bare file name, never a full path: this message reaches `warn!`
+    /// and `error!` logs, and a path under the user's profile would carry their name.
+    pub(crate) fn config_read(file: impl Into<String>, source: std::io::Error) -> Self {
         Self::ConfigRead {
-            path: path.into(),
+            file: file.into(),
             source,
         }
     }
 
     /// Creates a new config file open error.
-    pub fn config_file_open(path: impl Into<String>, source: std::io::Error) -> Self {
+    ///
+    /// `file` is a bare file name, never a full path: this message reaches `warn!`
+    /// and `error!` logs, and a path under the user's profile would carry their name.
+    pub fn config_file_open(file: impl Into<String>, source: std::io::Error) -> Self {
         Self::ConfigFileOpen {
-            path: path.into(),
+            file: file.into(),
             source,
         }
     }
 
     /// Creates a new config write error.
-    pub(crate) fn config_write(path: impl Into<String>, source: std::io::Error) -> Self {
+    ///
+    /// `file` is a bare file name, never a full path: this message reaches `warn!`
+    /// and `error!` logs, and a path under the user's profile would carry their name.
+    pub(crate) fn config_write(file: impl Into<String>, source: std::io::Error) -> Self {
         Self::ConfigWrite {
-            path: path.into(),
+            file: file.into(),
             source,
         }
     }
 
     /// Creates a new config parse error.
-    pub(crate) fn config_parse(path: impl Into<String>, source: serde_json::Error) -> Self {
+    ///
+    /// `file` is a bare file name, never a full path: this message reaches `warn!`
+    /// and `error!` logs, and a path under the user's profile would carry their name.
+    pub(crate) fn config_parse(file: impl Into<String>, source: serde_json::Error) -> Self {
         Self::ConfigParse {
-            path: path.into(),
+            file: file.into(),
             source,
         }
     }
 
     /// Creates a new invalid config error.
-    pub fn config_invalid(field: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn config_invalid(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self::ConfigInvalid {
             field: field.into(),
             message: message.into(),

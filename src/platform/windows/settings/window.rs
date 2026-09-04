@@ -76,6 +76,19 @@ pub(super) const WM_APP_SETTINGS_HK_NOTICE: u32 = WM_APP + 4;
 /// Re-assert `HWND_TOPMOST`; no payload.
 pub(super) const WM_APP_SETTINGS_TOPMOST: u32 = WM_APP + 5;
 
+// These five must stay one contiguous, ordered range with REFRESH lowest and
+// TOPMOST highest: `drain_pending_payload_messages` reclaims the leaked
+// `Box` payloads by filtering `PeekMessageW` on exactly that span, so a
+// constant added outside it would never be drained and its payload would
+// leak. Adding a sixth message means extending the range here, deliberately.
+const _: () = {
+    assert!(WM_APP_SETTINGS_REFRESH < WM_APP_SETTINGS_FOCUS);
+    assert!(WM_APP_SETTINGS_FOCUS < WM_APP_SETTINGS_HK_ERROR);
+    assert!(WM_APP_SETTINGS_HK_ERROR < WM_APP_SETTINGS_HK_NOTICE);
+    assert!(WM_APP_SETTINGS_HK_NOTICE < WM_APP_SETTINGS_TOPMOST);
+    assert!(WM_APP_SETTINGS_TOPMOST - WM_APP_SETTINGS_REFRESH == 4);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Window Class Registration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1964,7 +1977,22 @@ impl SettingsSink for SettingsSinkImpl {
                 let tx = self.tx.clone();
                 let hwnd_slot = Arc::clone(&self.hwnd);
                 let snapshot = snapshot.clone();
-                std::thread::spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
+                let spawned = std::thread::Builder::new()
+                    .name("settings".to_string())
+                    .spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
+                if let Err(e) = spawned {
+                    // The slot is still OPENING, which every later activation
+                    // reads as "a window is on its way". Release it, or Settings
+                    // stays unopenable for the rest of the process.
+                    self.hwnd.store(0, Ordering::SeqCst);
+                    log::error!(error:% = e; "Failed to spawn settings window thread");
+                    // No thread means no window and so no handle_destroy, the
+                    // usual sender of this message; without it the controller's
+                    // settings_open latches true for the rest of the process.
+                    if let Err(e) = self.tx.send(BrightnessMessage::SettingsClosed) {
+                        log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
+                    }
+                }
             }
             Err(OPENING) => {
                 log::debug!(

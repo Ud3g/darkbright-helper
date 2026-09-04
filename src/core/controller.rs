@@ -205,7 +205,7 @@ enum SaveFailureStage {
 // The bools below are independent latches/flags (degraded-subsystem state,
 // dialog session state), not a state machine with mutually exclusive modes —
 // an enum would not fit them any better than it does `SettingsDirty`.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     /// Current state (brightness, overlay, absence evidence) per monitor.
     states: HashMap<MonitorId, MonitorState>,
@@ -288,7 +288,7 @@ where
     Store: ConfigStore,
 {
     /// Creates a controller; `now` stamps the activity/health/refresh baselines.
-    #[allow(clippy::too_many_arguments)] // one independent seam per parameter
+    #[expect(clippy::too_many_arguments)] // one independent seam per parameter
     #[must_use]
     pub fn new(
         config: Config,
@@ -418,10 +418,10 @@ where
     /// clamping into range (a value written outside it by hand-editing the
     /// config file must still display sanely).
     #[must_use]
-    pub fn settings_snapshot(&self) -> SettingsSnapshot {
+    pub(crate) fn settings_snapshot(&self) -> SettingsSnapshot {
         let opacity_percent = (self.config.osd.opacity * 100.0).round().clamp(10.0, 100.0);
         // The clamp above bounds this to 10.0..=100.0, well within u8 range.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let osd_opacity_percent = opacity_percent as u8;
 
         SettingsSnapshot {
@@ -890,7 +890,7 @@ where
     // The caller destructures an owned `enumerated: Vec<MonitorId>` straight out
     // of the refresh-result message; taking it by value here avoids an extra
     // borrow indirection even though this function only ever reads it.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn handle_ddc_refresh_result(
         &mut self,
         generation: u64,
@@ -1210,7 +1210,11 @@ where
                 state.force_revert();
             }
             self.show_error_on_visible_osd();
-            return Err(e);
+            // Handled, so reported as handled: the value is reverted and the
+            // OSD says so. Propagating the error as well would have the main
+            // loop log the same event a second time, with less to say about
+            // it. The DDC send failure below takes the same shape.
+            return Ok(());
         }
 
         // Re-borrow: `overlay_update` needs `&mut self` (it may also touch
@@ -2356,9 +2360,11 @@ mod tests {
         let prior_overlay = c.states[&id].overlay_opacity;
         c.overlay.fail_update = true;
 
-        let err = c.handle_adjust(None, -10, base).unwrap_err();
+        // A failed overlay call is fully handled here — reverted and shown on
+        // the OSD — so the press reports success and the main loop has nothing
+        // left to log.
+        c.handle_adjust(None, -10, base).unwrap();
 
-        assert!(matches!(err, BrightnessError::ChannelSend));
         assert_eq!(
             c.states[&id].overlay_opacity, prior_overlay,
             "opacity must not be committed when the platform call fails"
@@ -2398,9 +2404,8 @@ mod tests {
         // changes both, so it sets a real hardware pending before the
         // overlay call fails; the failure must revert that pending.
         c.overlay.fail_update = true;
-        let err = c.handle_adjust(None, 15, base).unwrap_err();
+        c.handle_adjust(None, 15, base).unwrap();
 
-        assert!(matches!(err, BrightnessError::ChannelSend));
         assert!(
             c.states[&id].pending.is_none(),
             "hardware pending set this press must be reverted"
@@ -3823,6 +3828,28 @@ mod tests {
         assert!(c.settings_open);
         assert_eq!(c.settings.opened.len(), 1);
         assert_eq!(c.settings.opened[0].step_percent, 12);
+    }
+
+    #[test]
+    fn settings_closed_clears_the_open_flag_after_an_open() {
+        // `open()` cannot report failure, so a platform impl that fails to
+        // show a window clears this flag by sending `SettingsClosed` itself.
+        // Without that the flag latches and `assert_topmost` is called for a
+        // window that does not exist. This pins the half the controller owns.
+        let base = Instant::now();
+        let mut c = test_controller(base);
+
+        c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+            .unwrap();
+        assert!(c.settings_open);
+
+        c.handle_message(BrightnessMessage::SettingsClosed, base)
+            .unwrap();
+
+        assert!(
+            !c.settings_open,
+            "a window that never appeared must not leave the flag latched"
+        );
     }
 
     #[test]

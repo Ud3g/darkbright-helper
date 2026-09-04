@@ -20,8 +20,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 // Standard Windows Virtual Key codes for brightness (not always in windows crate)
-pub const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
-pub const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
+pub(crate) const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
+pub(crate) const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 
 /// Hook code indicating the hook procedure must process the message.
 /// Used in low-level keyboard hook callbacks.
@@ -50,16 +50,21 @@ pub const BRIGHTNESS_UP_ID: i32 = 1;
 pub const BRIGHTNESS_DOWN_ID: i32 = 2;
 
 /// Hotkey ID for the secondary (dedicated key) brightness up command.
-pub const BRIGHTNESS_UP_ALT_ID: i32 = 3;
+pub(crate) const BRIGHTNESS_UP_ALT_ID: i32 = 3;
 
 /// Hotkey ID for the secondary (dedicated key) brightness down command.
-pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
+pub(crate) const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
 
 /// Thread message posted to wake the hotkey message loop and make it drain
 /// [`HotkeyCommandQueue`]. Delivered via `PostThreadMessageW`, so it always
 /// arrives with `MSG::hwnd` null — that is what distinguishes it from a
 /// window message in `run_message_loop`.
-pub const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
+///
+/// Because it is thread-addressed rather than class-addressed, its value has
+/// to be free across every window class hosted on this thread, which is
+/// `DarkBrightHotkeyWindow` alone. Adding another class here, or another
+/// thread message, means re-checking that.
+pub(crate) const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // In-Place Rebind Command Queue
@@ -71,6 +76,10 @@ pub const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
 /// thread boundary and the hotkey thread is the one place equipped to parse
 /// and act on them; a string that fails to parse is reported back as a
 /// failed [`BrightnessMessage::HotkeyRebindResult`] rather than panicking.
+///
+/// `pub` even though the binary never names it: it appears inside
+/// [`HotkeyCommandQueue`], which the binary does name, so narrowing this to
+/// `pub(crate)` makes that alias expose a private type.
 #[derive(Debug, Clone)]
 pub enum HotkeyThreadCommand {
     /// Re-register with new bindings and/or a new intercept setting.
@@ -199,13 +208,13 @@ unsafe extern "system" fn low_level_keyboard_proc(
     if code == HC_ACTION {
         // Check for key-down events only (ignore key-up to avoid double-firing)
         // Message types (WM_KEYDOWN, WM_SYSKEYDOWN) are well-defined u32 constants.
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(clippy::cast_possible_truncation)]
         let msg_type = wparam.0 as u32;
         if msg_type == WM_KEYDOWN || msg_type == WM_SYSKEYDOWN {
             // SAFETY: When code == HC_ACTION, lparam points to a valid KBDLLHOOKSTRUCT
             let kb_struct = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             // Virtual key codes are 16-bit values (0x00-0xFF typical, max 0xFFFF).
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let vk_code = VIRTUAL_KEY(kb_struct.vkCode as u16);
 
             // Check if this is a brightness key we want to intercept
@@ -352,7 +361,7 @@ impl HotkeyManager {
     /// # Errors
     ///
     /// Returns `BrightnessError::WindowsApi` if registration fails.
-    pub fn register_hotkey(
+    pub(crate) fn register_hotkey(
         &mut self,
         id: i32,
         modifiers: HOT_KEY_MODIFIERS,
@@ -379,7 +388,7 @@ impl HotkeyManager {
     /// # Errors
     ///
     /// Returns `BrightnessError::WindowsApi` if `SetWindowsHookExW` fails.
-    pub fn install_brightness_hook(&mut self) -> Result<()> {
+    fn install_brightness_hook(&mut self) -> Result<()> {
         // Initialize thread-local context for the hook callback
         set_hook_context(self.sender.clone());
 
@@ -640,9 +649,10 @@ impl HotkeyManager {
                     break;
                 }
                 if msg.message == WM_HOTKEY {
-                    // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey.
-                    // Cast is safe as we only register small positive IDs (1-4).
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    // WPARAM for WM_HOTKEY is the identifier of the hotkey; the
+                    // cast cannot lose anything because we only ever register
+                    // small positive IDs (1-4).
+                    #[expect(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                     let id = msg.wParam.0 as i32;
                     log::debug!(hotkey_id = id; "Received WM_HOTKEY");
 
@@ -654,9 +664,12 @@ impl HotkeyManager {
 
                     if direction != 0 {
                         log::debug!(direction = direction; "Sending brightness adjustment");
-                        let _ = self
+                        if let Err(e) = self
                             .sender
-                            .send(BrightnessMessage::AdjustStep { direction });
+                            .send(BrightnessMessage::AdjustStep { direction })
+                        {
+                            log::error!(error:% = e; "Failed to send brightness adjustment");
+                        }
                     }
                 } else if msg.hwnd.is_invalid() && msg.message == WM_APP_HOTKEY_WAKE {
                     for command in drain_commands(queue) {
@@ -752,11 +765,11 @@ impl std::fmt::Display for ParsedHotkey {
 /// exactly like every other constructor/registration failure — and the
 /// thread exits without ever running the loop.
 // Every non-Copy parameter is owned rather than borrowed on purpose: this
-// is the spawned thread's entry point (`thread::spawn(move || run_hotkey_thread(...))`),
+// is the spawned thread's entry point (see `start_hotkey_thread` in `main.rs`),
 // so the caller hands over the shared cells and the startup values outright
 // instead of keeping borrows alive across the thread boundary, even though
 // the body itself only ever reads through most of them afterward.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn run_hotkey_thread(
     up: String,
     down: String,
@@ -854,19 +867,20 @@ impl HotkeyPortImpl {
     /// # Errors
     ///
     /// Returns `BrightnessError::ChannelSend` if no thread is currently
-    /// ready (id is 0) or the queue's lock is poisoned, and
-    /// `BrightnessError::WindowsApi` if `PostThreadMessageW` itself fails
-    /// (e.g. the thread died between the id check and the post).
+    /// ready (id is 0), and `BrightnessError::WindowsApi` if
+    /// `PostThreadMessageW` itself fails (e.g. the thread died between the id
+    /// check and the post). A poisoned queue lock is recovered rather than
+    /// reported: the queue is plain data a panicking thread cannot leave torn.
     fn post(&mut self, command: HotkeyThreadCommand) -> Result<()> {
         let tid = self.thread_id.load(Ordering::SeqCst);
         if tid == 0 {
             return Err(BrightnessError::ChannelSend);
         }
 
-        match self.queue.lock() {
-            Ok(mut guard) => guard.push_back(command),
-            Err(_) => return Err(BrightnessError::ChannelSend),
-        }
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(command);
 
         let wake = unsafe { PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)) };
         if let Err(e) = wake {
@@ -1149,7 +1163,7 @@ pub(crate) fn key_name(vk: VIRTUAL_KEY) -> Option<String> {
 /// Returns `None` if `vk` has no name, i.e. is not a key `parse_hotkey`
 /// accepts.
 #[must_use]
-pub fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<String> {
+pub(crate) fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<String> {
     key_name(vk)?;
     Some(ParsedHotkey::new(modifiers, vk).to_string())
 }
@@ -1161,7 +1175,7 @@ pub fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<St
 /// Input that fails to parse never conflicts with anything, so a hand-edited
 /// but unparseable `config.json` entry stays as permissive as it is today.
 #[must_use]
-pub fn bindings_conflict(a: &str, b: &str) -> bool {
+pub(crate) fn bindings_conflict(a: &str, b: &str) -> bool {
     let (Ok(a), Ok(b)) = (parse_hotkey(a), parse_hotkey(b)) else {
         return false;
     };
@@ -1372,5 +1386,50 @@ mod tests {
             queue.lock().unwrap().is_empty(),
             "a post whose wake failed must not leave a command behind for a later thread to pick up"
         );
+    }
+
+    /// Poisons a queue by panicking while its guard is held.
+    fn poisoned_queue() -> HotkeyCommandQueue {
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let victim = Arc::clone(&queue);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = victim.lock().unwrap();
+            panic!("poison the queue");
+        }));
+        assert!(queue.is_poisoned(), "setup must actually poison the mutex");
+        queue
+    }
+
+    #[test]
+    fn post_on_a_poisoned_queue_still_enqueues() {
+        // The queue is plain data, so poisoning is recovered rather than
+        // reported: a panic elsewhere must not silently stop rebinds from
+        // reaching the hotkey thread. The wake still fails on the bogus tid,
+        // which is what rolls the command back out again.
+        let queue = poisoned_queue();
+        let thread_id = Arc::new(AtomicU32::new(u32::MAX));
+        let mut port = HotkeyPortImpl::new(thread_id, Arc::clone(&queue));
+
+        assert!(
+            port.resume().is_err(),
+            "the bogus thread id must still surface the wake failure"
+        );
+        assert!(
+            !matches!(port.resume(), Err(BrightnessError::ChannelSend)),
+            "poisoning must not be reported as a closed channel"
+        );
+    }
+
+    #[test]
+    fn drain_commands_on_a_poisoned_queue_still_drains() {
+        let queue = poisoned_queue();
+        queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(HotkeyThreadCommand::Resume);
+
+        let drained = drain_commands(&queue);
+
+        assert_eq!(drained.len(), 1, "a poisoned queue must still drain");
     }
 }

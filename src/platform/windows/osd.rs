@@ -111,12 +111,12 @@ impl OsdMetrics {
     /// Base values are designed for 96 DPI (100% scaling).
     #[must_use]
     pub(crate) fn for_dpi(dpi: u32) -> Self {
-        #[allow(clippy::cast_precision_loss)]
+        #[expect(clippy::cast_precision_loss)]
         let scale = dpi as f32 / 96.0;
 
         // Helper to scale and round
         let s = |val: i32| {
-            #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
             let scaled = (val as f32 * scale).round() as i32;
             scaled
         };
@@ -423,7 +423,7 @@ fn resize_osd_window(hwnd: HWND, with_error: bool) -> Result<()> {
 ///
 /// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
 pub(crate) fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
     unsafe {
         SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA).map_err(|e| {

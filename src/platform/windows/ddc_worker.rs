@@ -14,6 +14,7 @@ use crate::core::reconcile::{
     RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate, RespawnOutcome,
 };
 use crate::core::state::{BrightnessMessage, DdcCommand, MonitorId};
+use crate::error::BrightnessError;
 use crate::platform::windows::ddc::{
     DdcMonitor, enumerate_monitors, get_monitor_id, get_physical_monitors,
 };
@@ -246,23 +247,44 @@ impl DdcSupervisor {
     ///
     /// `resp_tx` is the channel the worker sends results on; the supervisor
     /// keeps a clone so it can wire replacement workers.
-    #[must_use]
-    pub fn spawn(resp_tx: Sender<BrightnessMessage>) -> Self {
-        let (cmd_tx, handle) = Self::spawn_worker(&resp_tx);
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BrightnessError::ThreadSpawn`] if the OS refuses the initial
+    /// worker thread. There is no degraded startup to fall back to — the worker
+    /// is the only path to the hardware — so the caller's only move is to
+    /// report the refusal and exit. A worker refused *later* is a different
+    /// case and not fatal; see [`DdcSupervisor::respawn`].
+    pub fn spawn(resp_tx: Sender<BrightnessMessage>) -> Result<Self, BrightnessError> {
+        let (cmd_tx, handle) =
+            Self::spawn_worker(&resp_tx).map_err(|source| BrightnessError::ThreadSpawn {
+                name: "DDC worker",
+                source,
+            })?;
+        Ok(Self {
             cmd_tx,
             handle,
             resp_tx,
             gate: RespawnGate::new(RESPAWN_WINDOW, RESPAWN_MAX),
-        }
+        })
     }
 
     /// Creates a fresh command channel and spawns a worker draining it.
-    fn spawn_worker(resp_tx: &Sender<BrightnessMessage>) -> (Sender<DdcCommand>, JoinHandle<()>) {
+    ///
+    /// # Errors
+    ///
+    /// Returns the OS error if the thread is refused. The refusal is not logged
+    /// here: the two callers handle it differently — fatal at startup, a
+    /// degraded state to report on respawn — and each logs it accordingly.
+    fn spawn_worker(
+        resp_tx: &Sender<BrightnessMessage>,
+    ) -> std::io::Result<(Sender<DdcCommand>, JoinHandle<()>)> {
         let (cmd_tx, cmd_rx) = std::sync::mpsc::channel::<DdcCommand>();
         let worker = DdcWorker::new(cmd_rx, resp_tx.clone());
-        let handle = std::thread::spawn(move || worker.run());
-        (cmd_tx, handle)
+        let handle = std::thread::Builder::new()
+            .name("ddc".to_string())
+            .spawn(move || worker.run())?;
+        Ok((cmd_tx, handle))
     }
 
     /// Sends a command to the worker.
@@ -285,7 +307,24 @@ impl DdcSupervisor {
     pub(crate) fn respawn(&mut self, now: Instant) -> RespawnOutcome {
         match self.gate.on_death(now) {
             RespawnDecision::Attempt => {
-                let (cmd_tx, handle) = Self::spawn_worker(&self.resp_tx);
+                // A refused thread is reported as an exhausted budget rather
+                // than panicking on the main thread: the caller already has a
+                // degraded mode for a worker that will not come back.
+                //
+                // The gate is deliberately not latched here, unlike the hotkey
+                // thread's. This worker has an external recovery trigger — a
+                // brightness keypress or a system resume calls `clear_backoff`,
+                // which resets the gate — so a latch would be lifted again
+                // moments later anyway. Retries stay bounded regardless,
+                // because `on_death` above already charged this attempt against
+                // the respawn budget.
+                let (cmd_tx, handle) = match Self::spawn_worker(&self.resp_tx) {
+                    Ok(pair) => pair,
+                    Err(e) => {
+                        log::error!(error:% = e; "Failed to respawn DDC worker thread");
+                        return RespawnOutcome::BackoffExceeded;
+                    }
+                };
                 self.cmd_tx = cmd_tx;
                 self.handle = handle;
                 RespawnOutcome::Respawned
@@ -338,7 +377,9 @@ mod tests {
     /// backoff tests intend to exercise.
     fn supervisor() -> (DdcSupervisor, mpsc::Receiver<BrightnessMessage>) {
         let (resp_tx, resp_rx) = mpsc::channel();
-        (DdcSupervisor::spawn(resp_tx), resp_rx)
+        let supervisor = DdcSupervisor::spawn(resp_tx)
+            .expect("test host refused a thread; nothing about the backoff logic to test");
+        (supervisor, resp_rx)
     }
 
     #[test]

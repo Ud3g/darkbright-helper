@@ -106,9 +106,15 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
         log::info!("Shutdown signal received");
-        if let Ok(guard) = SHUTDOWN_SENDER.lock()
-            && let Some(tx) = &*guard
-        {
+        // Neither holder of this lock can panic while holding it, so poisoning
+        // is not reachable today; recovering rather than skipping keeps the
+        // one policy the process uses (see architecture.md, Thread Conventions)
+        // and means a future holder that can panic does not silently turn
+        // shutdown into a no-op.
+        let guard = SHUTDOWN_SENDER
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(tx) = &*guard {
             let _ = tx.send(BrightnessMessage::Shutdown);
             return BOOL::from(true);
         }
@@ -319,18 +325,24 @@ fn build_file_logger(config: &Config) -> std::io::Result<env_logger::Logger> {
 ///
 /// * `tx` - Channel sender to notify the main thread of power events.
 fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
-    std::thread::spawn(move || {
-        match PowerEventListener::new(tx) {
-            Ok(listener) => {
-                log::info!("Power event listener started");
-                listener.run_message_loop();
+    let spawned = std::thread::Builder::new()
+        .name("power".to_string())
+        .spawn(move || {
+            match PowerEventListener::new(tx) {
+                Ok(listener) => {
+                    log::info!("Power event listener started");
+                    listener.run_message_loop();
+                }
+                Err(e) => {
+                    log::error!(error:% = e; "Failed to create power event listener");
+                    // Non-fatal: app works without resume detection
+                }
             }
-            Err(e) => {
-                log::error!(error:% = e; "Failed to create power event listener");
-                // Non-fatal: app works without resume detection
-            }
-        }
-    });
+        });
+    if let Err(e) = spawned {
+        // Non-fatal, same as a listener that fails to start: no resume detection.
+        log::error!(error:% = e; "Failed to spawn power listener thread");
+    }
 }
 
 /// Spawns the system tray icon thread.
@@ -347,21 +359,31 @@ fn spawn_tray_thread(
     tx: mpsc::Sender<BrightnessMessage>,
     status_tx: mpsc::Sender<TrayStatusHandle>,
 ) {
-    std::thread::spawn(move || {
-        match TrayIcon::new(tx) {
-            Ok(tray) => {
-                log::info!("System tray icon created");
-                let _ = status_tx.send(tray.status_handle());
-                if let Err(e) = tray.run_message_loop() {
-                    log::error!(error:% = e; "Tray message loop error");
+    let spawned = std::thread::Builder::new()
+        .name("tray".to_string())
+        .spawn(move || {
+            match TrayIcon::new(tx) {
+                Ok(tray) => {
+                    log::info!("System tray icon created");
+                    if let Err(e) = status_tx.send(tray.status_handle()) {
+                        // Losing this costs every later degraded-state icon and
+                        // tooltip update, for the rest of the run.
+                        log::error!(error:% = e; "Failed to hand the tray status handle to the main thread");
+                    }
+                    if let Err(e) = tray.run_message_loop() {
+                        log::error!(error:% = e; "Tray message loop error");
+                    }
+                }
+                Err(e) => {
+                    // Non-fatal: app works without tray icon
+                    log::warn!(error:% = e; "Failed to create system tray icon, continuing without it");
                 }
             }
-            Err(e) => {
-                // Non-fatal: app works without tray icon
-                log::warn!(error:% = e; "Failed to create system tray icon, continuing without it");
-            }
-        }
-    });
+        });
+    if let Err(e) = spawned {
+        // Non-fatal, same as a tray icon that fails to create: no tray.
+        log::error!(error:% = e; "Failed to spawn tray thread");
+    }
 }
 
 /// Spawns the hotkey thread (running [`run_hotkey_thread`]) and returns its
@@ -394,9 +416,15 @@ fn start_hotkey_thread(
     // and moving on.
     let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
 
-    let handle = std::thread::spawn(move || {
-        run_hotkey_thread(up, down, intercept, tx, thread_id, queue, ready_tx);
-    });
+    let handle = std::thread::Builder::new()
+        .name("hotkey".to_string())
+        .spawn(move || {
+            run_hotkey_thread(up, down, intercept, tx, thread_id, queue, ready_tx);
+        })
+        .map_err(|e| BrightnessError::ThreadSpawn {
+            name: "hotkey",
+            source: e,
+        })?;
 
     // Wait for the registration result, but bounded: a spawn hung inside
     // window creation or registration must not block the main loop —
@@ -424,7 +452,7 @@ fn start_hotkey_thread(
 
 // Sequential startup wiring (DPI, config, threads, controller, main loop,
 // cleanup) is inherently long and reads clearest kept in one place.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn main() {
     // Declare DPI awareness before creating any windows.
     // This prevents Windows from bitmap-stretching our UI at non-100% scaling.
@@ -483,8 +511,26 @@ fn main() {
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();
 
-    // Spawn the supervised DDC worker.
-    let supervisor = DdcSupervisor::spawn(tx.clone());
+    // Spawn the supervised DDC worker. It is the only path to the hardware, so
+    // a refusal here ends startup — but it ends it with an explanation, the way
+    // a refused hotkey thread does below, not by vanishing.
+    let supervisor = match DdcSupervisor::spawn(tx.clone()) {
+        Ok(supervisor) => supervisor,
+        Err(e) => {
+            log::error!(error:% = e; "Fatal error starting the DDC worker");
+            show_error_message_box(
+                "Brightness Control - Startup Error",
+                &format!(
+                    "Brightness Control could not start:
+
+                     {e}
+
+                     The system would not start a thread, which usually means it                      is out of resources. Close some applications, or restart the                      computer, and try again."
+                ),
+            );
+            return;
+        }
+    };
     log::info!("DDC worker thread spawned");
 
     // Create controller: OSD is created here (its failure path), then injected.
@@ -541,9 +587,9 @@ fn main() {
     // Register hotkeys and start hotkey thread
 
     // Register Ctrl+C handler
-    if let Ok(mut guard) = SHUTDOWN_SENDER.lock() {
-        *guard = Some(tx.clone());
-    }
+    *SHUTDOWN_SENDER
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx.clone());
 
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), true);
@@ -560,19 +606,37 @@ fn main() {
         Ok(handle) => handle,
         Err(e) => {
             log::error!(error:% = e; "Fatal error during hotkey registration");
-            let config_path = Config::default_path().map_or_else(
-                || "config file".to_string(),
-                |p| p.to_string_lossy().to_string(),
-            );
-            let message = format!(
-                "Failed to register hotkeys:\n\n\
-                 {e}\n\n\
-                 Possible solutions:\n\
-                 • Close other applications that might be using these hotkeys\n\
-                 • Change the hotkey configuration in:\n  {config_path}\n\
-                 • Restart the application after making changes"
-            );
-            show_error_message_box("Brightness Control - Hotkey Error", &message);
+            // A refused thread is not a hotkey conflict: none of the advice
+            // below applies to it, and the title would misattribute the cause.
+            let (title, message) = if matches!(e, BrightnessError::ThreadSpawn { .. }) {
+                (
+                    "Brightness Control - Startup Error",
+                    format!(
+                        "Brightness Control could not start:\n\n\
+                     {e}\n\n\
+                     The system would not start a thread, which usually means it \
+                     is out of resources. Close some applications, or restart the \
+                     computer, and try again."
+                    ),
+                )
+            } else {
+                let config_path = Config::default_path().map_or_else(
+                    || "config file".to_string(),
+                    |p| p.to_string_lossy().to_string(),
+                );
+                (
+                    "Brightness Control - Hotkey Error",
+                    format!(
+                        "Failed to register hotkeys:\n\n\
+                         {e}\n\n\
+                         Possible solutions:\n\
+                         • Close other applications that might be using these hotkeys\n\
+                         • Change the hotkey configuration in:\n  {config_path}\n\
+                         • Restart the application after making changes"
+                    ),
+                )
+            };
+            show_error_message_box(title, &message);
             return;
         }
     };
