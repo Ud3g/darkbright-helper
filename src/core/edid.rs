@@ -20,7 +20,13 @@ pub(crate) fn parse_edid(edid: &[u8]) -> Option<MonitorId> {
     }
 
     // Manufacturer ID (bytes 8-9)
-    // Encoded as 5 bits per character (A=1, Z=26)
+    // Encoded as 5 bits per character (A=1, Z=26).
+    // The three casts below stay `as` rather than `try_from`: each operand is
+    // range-restricted to five bits before it is narrowed, so the conversion is
+    // lossless and a `try_from` would only add an error arm that cannot be
+    // reached. `clippy::cast_possible_truncation` reaches the same conclusion by
+    // range analysis and stays silent — for `char2` and `char3` the mask is what
+    // it needs to see, while `char1` is already bounded by its shift alone.
     let mfg_id = u16::from_be_bytes([edid[8], edid[9]]);
     let char1 = ((mfg_id >> 10) & 0x1F) as u8 + b'A' - 1;
     let char2 = ((mfg_id >> 5) & 0x1F) as u8 + b'A' - 1;

@@ -161,7 +161,10 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
         return Ok(Vec::new());
     }
 
-    let mut physical_monitors = vec![PHYSICAL_MONITOR::default(); count as usize];
+    let count = usize::try_from(count).map_err(|_| {
+        BrightnessError::ddc_communication("Unknown", "implausible physical-monitor count")
+    })?;
+    let mut physical_monitors = vec![PHYSICAL_MONITOR::default(); count];
 
     unsafe {
         GetPhysicalMonitorsFromHMONITOR(hmonitor, &mut physical_monitors).map_err(|e| {
@@ -508,7 +511,10 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
 
         if success {
             // Buffer contains WCHAR string
-            let len = required_size as usize / 2;
+            // A size that does not fit a `usize` cannot happen for a registry
+            // property; folding it onto 0 lets the `len > 0` guard below treat
+            // it as "no driver key here" rather than inventing a branch.
+            let len = usize::try_from(required_size).unwrap_or(0) / 2;
             if len > 0 {
                 // Trim null terminator
                 let driver_key = String::from_utf16_lossy(&buffer[..len.saturating_sub(1)]);
@@ -591,7 +597,10 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
             ));
         }
 
-        let mut buffer = vec![0u8; data_len as usize];
+        let capacity = usize::try_from(data_len).map_err(|_| {
+            BrightnessError::ddc_communication("Unknown", "implausible EDID value size")
+        })?;
+        let mut buffer = vec![0u8; capacity];
         let result = RegQueryValueExW(
             hkey,
             value_name,
