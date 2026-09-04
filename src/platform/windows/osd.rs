@@ -140,10 +140,15 @@ impl OsdMetrics {
 /// Timer ID for the auto-hide functionality.
 const HIDE_TIMER_ID: usize = 1;
 
-// Thread-local storage for OSD render state.
-// This allows the window procedure to access the current brightness values.
 thread_local! {
+    /// What the OSD currently shows. Thread-local rather than passed in
+    /// because `WM_PAINT` arrives at the window procedure with no room for
+    /// an argument; the main thread owns the OSD and is the only one that
+    /// touches this.
     static OSD_STATE: RefCell<OsdRenderState> = RefCell::new(OsdRenderState::default());
+    /// DPI-derived sizes for the monitor the OSD is on, recomputed on every
+    /// repositioning. Split from [`OSD_STATE`] because it changes on a
+    /// different occasion: display geometry, not brightness.
     static OSD_METRICS: RefCell<OsdMetrics> = RefCell::new(OsdMetrics::default());
 }
 

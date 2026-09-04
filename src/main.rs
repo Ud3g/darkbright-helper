@@ -1,3 +1,11 @@
+//! Binary entry point: startup wiring and the shell side effects that go
+//! with it. Everything reusable lives in the library crate — this file
+//! spawns the threads, builds the controller from the platform
+//! implementations, and runs the message loop.
+//!
+//! Release builds are linked as a Windows subsystem binary, so no console
+//! window appears; debug builds keep one, which is where the log output of a
+//! `cargo run` goes.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::collections::VecDeque;
@@ -38,6 +46,9 @@ use darkbright_helper::platform::windows::{
 use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 use darkbright_helper::{BrightnessError, Result};
 
+/// Channel to the main loop, published so the console control handler can
+/// reach it. `None` until the controller is wired up, and a `static` because
+/// [`ctrl_handler`] is an `extern "system"` callback that can capture nothing.
 static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>> =
     LazyLock::new(|| Mutex::new(None));
 
@@ -103,6 +114,20 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
     }
 }
 
+/// Console control handler: turns Ctrl+C and Ctrl+Break into an orderly
+/// shutdown message instead of letting Windows terminate the process, so the
+/// tray icon and the DDC handles are released.
+///
+/// Returns `TRUE` only when the shutdown message was actually handed to the
+/// main loop. Every other case — a different control event, or Ctrl+C before
+/// [`SHUTDOWN_SENDER`] has been wired up — returns `FALSE` and lets the
+/// default handler terminate the process.
+///
+/// # Safety
+///
+/// This is a Windows callback, invoked on a control-handler thread of the
+/// OS's choosing. It touches only [`SHUTDOWN_SENDER`], which is
+/// synchronised.
 unsafe extern "system" fn ctrl_handler(ctrl_type: u32) -> BOOL {
     if ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT {
         log::info!("Shutdown signal received");
@@ -450,6 +475,16 @@ fn start_hotkey_thread(
     Ok(handle)
 }
 
+/// Starts the application: claims the single-instance guard, loads the
+/// config, brings up the worker threads and the tray, then runs the
+/// controller's message loop until shutdown.
+///
+/// Returns no error, because there is nobody to return one to: a failure
+/// that leaves the app unable to work — the DDC worker, the OSD window or
+/// the hotkey thread refusing to start — shows a message box and returns
+/// early. A second instance is not one of those; it exits the same way but
+/// reports it as information, not an error. Anything the app can run
+/// degraded without is logged and carried on with instead.
 // Sequential startup wiring (DPI, config, threads, controller, main loop,
 // cleanup) is inherently long and reads clearest kept in one place.
 #[expect(clippy::too_many_lines)]

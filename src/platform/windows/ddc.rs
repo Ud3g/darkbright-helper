@@ -68,7 +68,14 @@ pub fn enumerate_monitors() -> Result<Vec<HMONITOR>> {
     }
 }
 
-/// Callback for `EnumDisplayMonitors`.
+/// Callback for `EnumDisplayMonitors`: appends each enumerated monitor to the
+/// caller's vector and asks for the enumeration to continue.
+///
+/// # Safety
+///
+/// This is a Windows callback. `lparam` must be the `*mut Vec<HMONITOR>` the
+/// caller passed to `EnumDisplayMonitors`, which is what the safe wrapper
+/// above guarantees.
 unsafe extern "system" fn monitor_enum_proc(
     hmonitor: HMONITOR,
     _hdc: HDC,

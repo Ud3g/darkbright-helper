@@ -19,8 +19,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_OEM_MINUS, VK_OEM_PLUS, VK_PRIOR, VK_RETURN, VK_RIGHT, VK_SPACE, VK_TAB, VK_UP,
 };
 
-// Standard Windows Virtual Key codes for brightness (not always in windows crate)
+/// Virtual-key codes for the dedicated brightness keys many laptop keyboards
+/// carry. Spelled out here because the `windows` crate does not name them.
 pub(crate) const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
+/// Companion of [`VK_BRIGHTNESS_UP`].
 pub(crate) const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 
 /// Hook code indicating the hook procedure must process the message.
@@ -256,6 +258,14 @@ unsafe extern "system" fn low_level_keyboard_proc(
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Window procedure for the hotkey message window.
+///
+/// `WM_HOTKEY` is handled in the thread's message loop rather than here — a
+/// message-only window needs no painting or input behaviour of its own — so
+/// every message goes straight to the default procedure.
+///
+/// # Safety
+///
+/// This is a Windows callback. The caller (Windows) ensures `hwnd` is valid.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,

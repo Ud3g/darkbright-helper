@@ -30,6 +30,10 @@ static REGISTER_CLASS_ONCE: OnceLock<Result<()>> = OnceLock::new();
 ///
 /// Since the overlay is a passive visual element (click-through),
 /// we delegate almost everything to the default window procedure.
+///
+/// # Safety
+///
+/// This is a Windows callback. The caller (Windows) ensures `hwnd` is valid.
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
