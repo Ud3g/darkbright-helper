@@ -60,6 +60,16 @@ version:
 - Logging: structured key-value form, log at the point of handling, never log PII —
   monitor serials at `debug` only, and only via `MonitorId::full_identity()`.
 
+## Changelog
+
+If a user could notice your change, it gets a `CHANGELOG.md` entry in the same PR, under
+`[Unreleased]` in the Added / Changed / Fixed section that fits. Write it for the person
+running the app, not for a reviewer: say what it does now and what it did before, not which
+function moved. Pure refactors, tests, and dependency bumps get no entry.
+
+Leave the version heading and the date alone — those are added when a release is cut, and
+`RELEASING.md` covers that.
+
 ## Commits and privacy
 
 - **Please commit with your GitHub noreply address** (`<id>+<user>@users.noreply.github.com`,

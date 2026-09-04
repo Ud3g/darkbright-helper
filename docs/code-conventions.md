@@ -40,6 +40,24 @@ See `architecture.md` for the specific directory structure.
 - Default to private; use `pub` only when needed
 - Use `pub(crate)` for internal-only sharing between modules
 
+### Naming a controller seam
+
+The suffix says what kind of boundary it is, and the three in use are not interchangeable:
+
+- **`…Sink`** — a one-way effect the controller fires and does not wait on: `OsdSink`,
+  `OverlaySink`, `SettingsSink`.
+- **`…Port`** — a two-way channel whose result comes back later as a `BrightnessMessage`
+  rather than as a return value: `DdcPort`, `HotkeyPort`.
+- **A plain domain noun** for a query or a store, where neither of the above fits:
+  `MonitorLocator`, `ConfigStore`.
+
+Name the Windows implementation for what it *is*, not for the trait it satisfies —
+`OsdWindow`, `DdcSupervisor`, `CursorLocator`, `WindowsConfigStore`. Two implementations
+(`HotkeyPortImpl`, `SettingsSinkImpl`) are named after their trait instead, and two spellings
+of the `impl` header are in use, fully qualified (`impl crate::core::controller::OsdSink for
+…`) and imported. Both splits are cosmetic and neither is worth a sweeping rename; prefer the
+domain noun and the imported form in new code.
+
 ### `pub` means "the binary or `tests/` names it"
 
 This crate is a library plus a separate binary crate that consumes it, so `pub`
@@ -303,11 +321,18 @@ can only be silenced at such a site, never satisfied, so the correctness argumen
 made by the code: bound the value, `.round()` it, and only then cast — see the OSD's opacity
 handling in `osd.rs` and the overlay's in `overlay.rs`.
 
-**A lint suppression is narrow and carries its reason.** Attach it to the smallest item that
-needs it, never a module or the crate root, and say why the lint is wrong *here* — "the
-truncation is bounded by a checked range", not "clippy complains". Prefer
-`#[expect(lint, reason = "…")]` over `#[allow]`: with `-D warnings` in CI, an `expect` fails
-the build once it becomes unnecessary, which is the only way a suppression ever gets removed.
+**A lint suppression is narrow, is an `#[expect]`, and carries its reason.** Attach it to the
+smallest item that needs it, never a module or the crate root, and say why the lint is wrong
+*here* — "the truncation is bounded by a checked range", not "clippy complains". The reason
+goes inline as `reason = "…"` when it fits in a phrase, and in a comment directly above when
+it needs a sentence, which is the common case here.
+
+`#[allow]` is not used: with `-D warnings` in CI, an `#[expect]` fails the build once its
+lint stops firing, which is the only mechanism by which a suppression ever gets removed
+again. An `#[allow]` whose reason has evaporated is invisible forever. Note that an
+expectation is evaluated per build configuration — a lint that fires only under
+`--all-targets` will report an unfulfilled expectation elsewhere, so check a suppression
+against the full command set rather than one invocation.
 
 ---
 
