@@ -65,7 +65,7 @@ fn delete_value_ignoring_not_found(subkey: PCWSTR, function: &str) -> Result<()>
 /// A Task-Manager-disabled entry still reads as enabled — see the module
 /// docs for why. Toggling off then back on heals it.
 #[must_use]
-pub fn is_enabled() -> bool {
+pub(crate) fn is_enabled() -> bool {
     // SAFETY: `RUN_SUBKEY` and `VALUE_NAME` are static NUL-terminated
     // literals. No output buffer is requested, so this only probes for the
     // value's existence and type rather than reading its data.
@@ -140,7 +140,7 @@ pub fn enable() -> Result<()> {
 ///
 /// Returns an error if the registry delete fails for a reason other than the
 /// value already being absent.
-pub fn disable() -> Result<()> {
+pub(crate) fn disable() -> Result<()> {
     delete_value_ignoring_not_found(RUN_SUBKEY, "RegDeleteKeyValueW (Run)")
 }
 

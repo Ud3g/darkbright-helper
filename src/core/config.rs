@@ -704,7 +704,7 @@ impl Config {
     /// Never swaps in [`Config::default()`] wholesale: `monitors` entries are
     /// a user-visible, hand-editable part of `config.json` and must survive a
     /// restore, and `version` is preserved rather than reset.
-    pub fn restore_defaults(&mut self) {
+    pub(crate) fn restore_defaults(&mut self) {
         self.hotkeys.brightness_up = default_hotkey_up();
         self.hotkeys.brightness_down = default_hotkey_down();
         self.hotkeys.intercept_brightness_keys = false;
@@ -724,7 +724,7 @@ impl Config {
     /// changed onto whatever is currently on disk (which may have been
     /// hand-edited concurrently), instead of overwriting the whole file with
     /// a possibly stale in-memory snapshot.
-    pub fn overlay_dirty(&self, disk: &mut Config, dirty: &SettingsDirty) {
+    pub(crate) fn overlay_dirty(&self, disk: &mut Config, dirty: &SettingsDirty) {
         if dirty.step_percent {
             disk.brightness.step_percent = self.brightness.step_percent;
         }

@@ -123,7 +123,10 @@ impl BrightnessError {
     }
 
     /// Creates a new hotkey registration error.
-    pub fn hotkey_registration(hotkey: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn hotkey_registration(
+        hotkey: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self::HotkeyRegistration {
             hotkey: hotkey.into(),
             message: message.into(),
@@ -176,7 +179,7 @@ impl BrightnessError {
     }
 
     /// Creates a new invalid config error.
-    pub fn config_invalid(field: impl Into<String>, message: impl Into<String>) -> Self {
+    pub(crate) fn config_invalid(field: impl Into<String>, message: impl Into<String>) -> Self {
         Self::ConfigInvalid {
             field: field.into(),
             message: message.into(),

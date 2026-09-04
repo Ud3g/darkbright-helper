@@ -418,7 +418,7 @@ where
     /// clamping into range (a value written outside it by hand-editing the
     /// config file must still display sanely).
     #[must_use]
-    pub fn settings_snapshot(&self) -> SettingsSnapshot {
+    pub(crate) fn settings_snapshot(&self) -> SettingsSnapshot {
         let opacity_percent = (self.config.osd.opacity * 100.0).round().clamp(10.0, 100.0);
         // The clamp above bounds this to 10.0..=100.0, well within u8 range.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

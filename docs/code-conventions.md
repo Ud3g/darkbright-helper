@@ -43,8 +43,12 @@ See `architecture.md` for the specific directory structure.
 ### `pub` means "the binary or `tests/` names it"
 
 This crate is a library plus a separate binary crate that consumes it, so `pub`
-has a precise meaning here: reachable from `src/main.rs`, `tests/`, or the
-`lib.rs` doc example. Nothing else earns it.
+has a precise meaning here: named by `src/main.rs`, `tests/`, or the `lib.rs` doc
+example — **or required by the signature of something they do name.** The second
+half is not a loophole. `MonitorId`, `SaveResult`, the seam traits and the
+`Config` sub-structs are all `pub` without appearing in the binary by name,
+because they sit in the types it uses; making them `pub(crate)` would only move
+the error to `private_interfaces`. Nothing beyond those two cases earns `pub`.
 
 This is load-bearing rather than tidiness. Every `pub` item in a `pub mod` counts
 as externally reachable, so rustc reports it as used no matter what — an
@@ -59,10 +63,43 @@ consequences to keep in mind when adding code:
   the signature is API. Narrowing a function to `pub(crate)` is what lets them
   fire.
 
-To verify after changing visibility: `RUSTFLAGS="-W unreachable_pub" cargo clippy
---lib` should report nothing, and `cargo clippy --all-targets -- -D warnings`
-must stay clean. Note that `--all-targets` does **not** compile doc examples, so
-run `cargo test` too — a doc example is a consumer like any other.
+**There is no lint for this. The check is to demote and rebuild.**
+
+`unreachable_pub` cannot help: it only fires on `pub` items inside *private*
+modules, and the modules here are `pub mod`, so it stays silent by construction —
+the very same reason `dead_code` goes blind. A recipe built on it sat in this
+document for a long time and could never have reported anything.
+
+What does work is asking the compiler directly. Narrow the item to `pub(crate)`
+and build; it answers both questions at once:
+
+- **"private type in public interface"** or `E0603` — the item is required after
+  all, by a signature the binary or `tests/` reaches. Put the `pub` back, and say
+  in a doc comment *which* public type drags it out, so the next reader does not
+  repeat the experiment.
+- **Clean build** — the narrowing was right. Keep it, and note that `dead_code`
+  and lints like `unnecessary_wraps` (which skip `pub` fns, treating the signature
+  as API) now apply to that item for the first time.
+
+Batch it: demote every candidate at once, build, and put back only what the
+compiler names. Run `cargo test` as well as `cargo clippy --all-targets`, because
+`--all-targets` does not compile doc examples and a doc example is a consumer like
+any other.
+
+A rough candidate list is worth generating before that, but only as a starting
+point: grep the `pub` items declared under `src/` (excluding `main.rs` and
+`#[cfg(test)]` blocks) and subtract every name that appears in `src/main.rs`,
+`tests/` or `src/lib.rs`. It over-reports badly, because it cannot see the
+"required by a signature" case above — the last run of it flagged 28 items, of
+which 19 were legitimate and 9 were genuinely too wide. Every type it flagged was
+legitimate; every real hit was a function or a constant. Treat it as a list of
+things to test, never as a verdict.
+
+One more reason not to trust a green build here: widening visibility is silent.
+Narrowing something that is needed fails loudly, but a `pub` that should have been
+`pub(crate)` compiles, passes CI, and simply switches the checks off for that item.
+Nothing will ever tell you. That asymmetry is why this is a periodic audit rather
+than a gate.
 
 ---
 

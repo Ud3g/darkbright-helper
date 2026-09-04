@@ -20,8 +20,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 
 // Standard Windows Virtual Key codes for brightness (not always in windows crate)
-pub const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
-pub const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
+pub(crate) const VK_BRIGHTNESS_UP: VIRTUAL_KEY = VIRTUAL_KEY(0xE8);
+pub(crate) const VK_BRIGHTNESS_DOWN: VIRTUAL_KEY = VIRTUAL_KEY(0xE9);
 
 /// Hook code indicating the hook procedure must process the message.
 /// Used in low-level keyboard hook callbacks.
@@ -50,16 +50,16 @@ pub const BRIGHTNESS_UP_ID: i32 = 1;
 pub const BRIGHTNESS_DOWN_ID: i32 = 2;
 
 /// Hotkey ID for the secondary (dedicated key) brightness up command.
-pub const BRIGHTNESS_UP_ALT_ID: i32 = 3;
+pub(crate) const BRIGHTNESS_UP_ALT_ID: i32 = 3;
 
 /// Hotkey ID for the secondary (dedicated key) brightness down command.
-pub const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
+pub(crate) const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
 
 /// Thread message posted to wake the hotkey message loop and make it drain
 /// [`HotkeyCommandQueue`]. Delivered via `PostThreadMessageW`, so it always
 /// arrives with `MSG::hwnd` null — that is what distinguishes it from a
 /// window message in `run_message_loop`.
-pub const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
+pub(crate) const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // In-Place Rebind Command Queue
@@ -71,6 +71,10 @@ pub const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
 /// thread boundary and the hotkey thread is the one place equipped to parse
 /// and act on them; a string that fails to parse is reported back as a
 /// failed [`BrightnessMessage::HotkeyRebindResult`] rather than panicking.
+///
+/// `pub` even though the binary never names it: it appears inside
+/// [`HotkeyCommandQueue`], which the binary does name, so narrowing this to
+/// `pub(crate)` makes that alias expose a private type.
 #[derive(Debug, Clone)]
 pub enum HotkeyThreadCommand {
     /// Re-register with new bindings and/or a new intercept setting.
@@ -352,7 +356,7 @@ impl HotkeyManager {
     /// # Errors
     ///
     /// Returns `BrightnessError::WindowsApi` if registration fails.
-    pub fn register_hotkey(
+    pub(crate) fn register_hotkey(
         &mut self,
         id: i32,
         modifiers: HOT_KEY_MODIFIERS,
@@ -379,7 +383,7 @@ impl HotkeyManager {
     /// # Errors
     ///
     /// Returns `BrightnessError::WindowsApi` if `SetWindowsHookExW` fails.
-    pub fn install_brightness_hook(&mut self) -> Result<()> {
+    fn install_brightness_hook(&mut self) -> Result<()> {
         // Initialize thread-local context for the hook callback
         set_hook_context(self.sender.clone());
 
@@ -1153,7 +1157,7 @@ pub(crate) fn key_name(vk: VIRTUAL_KEY) -> Option<String> {
 /// Returns `None` if `vk` has no name, i.e. is not a key `parse_hotkey`
 /// accepts.
 #[must_use]
-pub fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<String> {
+pub(crate) fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<String> {
     key_name(vk)?;
     Some(ParsedHotkey::new(modifiers, vk).to_string())
 }
@@ -1165,7 +1169,7 @@ pub fn hotkey_string(modifiers: HOT_KEY_MODIFIERS, vk: VIRTUAL_KEY) -> Option<St
 /// Input that fails to parse never conflicts with anything, so a hand-edited
 /// but unparseable `config.json` entry stays as permissive as it is today.
 #[must_use]
-pub fn bindings_conflict(a: &str, b: &str) -> bool {
+pub(crate) fn bindings_conflict(a: &str, b: &str) -> bool {
     let (Ok(a), Ok(b)) = (parse_hotkey(a), parse_hotkey(b)) else {
         return false;
     };
