@@ -59,6 +59,11 @@ pub(crate) const BRIGHTNESS_DOWN_ALT_ID: i32 = 4;
 /// [`HotkeyCommandQueue`]. Delivered via `PostThreadMessageW`, so it always
 /// arrives with `MSG::hwnd` null — that is what distinguishes it from a
 /// window message in `run_message_loop`.
+///
+/// Because it is thread-addressed rather than class-addressed, its value has
+/// to be free across every window class hosted on this thread, which is
+/// `DarkBrightHotkeyWindow` alone. Adding another class here, or another
+/// thread message, means re-checking that.
 pub(crate) const WM_APP_HOTKEY_WAKE: u32 = WM_APP + 10;
 
 // ─────────────────────────────────────────────────────────────────────────────

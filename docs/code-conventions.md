@@ -204,6 +204,28 @@ The rule is about *ownership*, not about every handle-typed value:
   a plain `isize` and deliberately has no `Drop`: it exists so the platform-agnostic core can
   carry a monitor's identity across a thread boundary, which a real handle type could not do.
 
+### Allocating a `WM_APP` message
+
+A custom window message is `WM_APP + n`, named `WM_<MODULE>_<PURPOSE>`, and defined in the
+module that owns the window class receiving it — next to that class, not in a shared
+constants file. `WM_APP + n` only has to be unique among the messages one class handles, so
+modules do not coordinate their numbering; the ranges currently in use happen to be disjoint,
+and nothing depends on that.
+
+Two things do need care, and both are about delivery rather than the number:
+
+- **Keep a module's values contiguous** if anything drains or filters them as a range. The
+  settings messages are drained by a `PeekMessageW` range filter to reclaim heap payloads,
+  and a compile-time assertion beside the constants enforces the span — extend the assertion
+  deliberately when adding one, never work around it.
+- **A message delivered by `PostThreadMessageW` is not a window message.** It arrives with a
+  null `hwnd` and no window proc will ever see it, so it must be handled in the message loop
+  body behind an explicit `msg.hwnd.is_invalid()` test, and its value must be unique across
+  *every* window class hosted on that thread. List those classes in a comment next to the
+  constant. There is exactly one such message today (`WM_APP_HOTKEY_WAKE`); see the
+  Threading Model section of `docs/architecture.md` for the full allocation table and why the
+  guard runs in the direction it does.
+
 ### FFI calls should be wrapped in safe functions as close to their point of use as possible
 
 FFI calls should be wrapped in safe functions as close to their point of use as possible, typically within the feature module that requires them. This promotes locality of reasoning and keeps domain-specific logic together.

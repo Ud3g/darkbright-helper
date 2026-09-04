@@ -302,6 +302,39 @@ a deadlock, and one hotkey spawn is already abandoned on purpose when it fails t
 time — see `start_hotkey_thread` in `main.rs` for that case. A thread that genuinely needs
 joining needs a design discussion first.
 
+**`WM_APP` messages are allocated per receiving window class, and the one
+thread-addressed message is the exception that needs a guard.** Three modules define custom
+messages, and the values are read from four files today:
+
+| Constant | Value | Owning thread | Receiving class | Delivery |
+|---|---|---|---|---|
+| `WM_APP_SETTINGS_REFRESH` … `_TOPMOST` | `WM_APP + 1` … `+ 5` | settings | `DarkBrightSettings` | `PostMessageW` to the window |
+| `WM_APP_HOTKEY_WAKE` | `WM_APP + 10` | hotkey | none — see below | **`PostThreadMessageW` to the thread** |
+| `WM_TRAY_CALLBACK` / `WM_TRAY_STATUS` | `WM_APP + 100` / `+ 101` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
+
+For a window-addressed message, `WM_APP + n` only has to be unique among the messages that
+one *class* handles; two classes may reuse a value without interfering, which is why the
+settings thread can host both `DarkBrightSettings` and `DarkBrightHotkeyCapture` without a
+shared numbering scheme. The disjoint bases above are therefore convenience, not a
+requirement.
+
+A thread-addressed message is different, and `WM_APP_HOTKEY_WAKE` is the only one in the
+process. The hotkey thread does host a class of its own (`DarkBrightHotkeyWindow`, a
+message-only window used for `RegisterHotKey`), but the wake is deliberately not addressed to
+it: it arrives with a null `hwnd`, so `DispatchMessageW` can deliver it nowhere and it is
+handled in the loop body or dropped. That is what keeps it from being confused with a
+window message. The `msg.hwnd.is_invalid()` test in `run_message_loop` guards the converse
+case — a window message that happens to carry the same value being mistaken for a wake — and
+is the reason the wake value must be unique across *every* class on that thread, not merely
+within one. Introducing a second thread-addressed message means repeating that check and
+re-checking every class hosted on the receiving thread.
+
+One allocation carries a further constraint that is not obvious from the values: the five
+settings messages are a contiguous, ordered range because `drain_pending_payload_messages`
+reclaims their heap payloads with a `PeekMessageW` range filter over `[REFRESH, TOPMOST]`. A
+constant added outside that span would be skipped and its `Box` leaked, so a compile-time
+assertion beside the constants pins the ordering and the width.
+
 ### State Management
 
 Message-passing with single ownership:

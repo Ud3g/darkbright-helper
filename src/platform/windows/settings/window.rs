@@ -76,6 +76,19 @@ pub(super) const WM_APP_SETTINGS_HK_NOTICE: u32 = WM_APP + 4;
 /// Re-assert `HWND_TOPMOST`; no payload.
 pub(super) const WM_APP_SETTINGS_TOPMOST: u32 = WM_APP + 5;
 
+// These five must stay one contiguous, ordered range with REFRESH lowest and
+// TOPMOST highest: `drain_pending_payload_messages` reclaims the leaked
+// `Box` payloads by filtering `PeekMessageW` on exactly that span, so a
+// constant added outside it would never be drained and its payload would
+// leak. Adding a sixth message means extending the range here, deliberately.
+const _: () = {
+    assert!(WM_APP_SETTINGS_REFRESH < WM_APP_SETTINGS_FOCUS);
+    assert!(WM_APP_SETTINGS_FOCUS < WM_APP_SETTINGS_HK_ERROR);
+    assert!(WM_APP_SETTINGS_HK_ERROR < WM_APP_SETTINGS_HK_NOTICE);
+    assert!(WM_APP_SETTINGS_HK_NOTICE < WM_APP_SETTINGS_TOPMOST);
+    assert!(WM_APP_SETTINGS_TOPMOST - WM_APP_SETTINGS_REFRESH == 4);
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Window Class Registration
 // ─────────────────────────────────────────────────────────────────────────────
