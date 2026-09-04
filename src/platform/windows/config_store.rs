@@ -69,7 +69,10 @@ impl WindowsConfigStore {
                 SaveResult::Saved
             }
             Err(e) => {
-                log::error!(error:% = e; "Failed to save config");
+                // The controller is the handling point and logs `Failed`
+                // results at error level; this line only keeps the
+                // store-side timeline visible.
+                log::debug!(error:% = e; "Failed to save config");
                 SaveResult::Failed(e.to_string())
             }
         }
@@ -79,7 +82,10 @@ impl WindowsConfigStore {
 impl ConfigStore for WindowsConfigStore {
     fn save(&mut self, config: &Config, dirty: &SettingsDirty, force: bool) -> SaveResult {
         let Some(path) = self.path.clone() else {
-            log::error!("No config path available (APPDATA unset?); cannot save settings");
+            // The controller is the handling point and logs `Failed`
+            // results at error level; this line only keeps the
+            // store-side timeline visible.
+            log::debug!("No config path available (APPDATA unset?); cannot save settings");
             return SaveResult::Failed("no config path available".to_string());
         };
 
@@ -120,7 +126,10 @@ impl ConfigStore for WindowsConfigStore {
                             SaveResult::Saved
                         }
                         Err(e) => {
-                            log::error!(error:% = e; "Failed to save merged config");
+                            // The controller is the handling point and logs
+                            // `Failed` results at error level; this line only
+                            // keeps the store-side timeline visible.
+                            log::debug!(error:% = e; "Failed to save merged config");
                             SaveResult::Failed(e.to_string())
                         }
                     }
@@ -139,7 +148,10 @@ impl ConfigStore for WindowsConfigStore {
                 }
             },
             Err(e) => {
-                log::error!(error:% = e; "Failed to read config for merge");
+                // The controller is the handling point and logs `Failed`
+                // results at error level; this line only keeps the
+                // store-side timeline visible.
+                log::debug!(error:% = e; "Failed to read config for merge");
                 SaveResult::Failed(e.to_string())
             }
         }

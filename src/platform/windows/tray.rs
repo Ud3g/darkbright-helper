@@ -962,8 +962,7 @@ fn show_context_menu(hwnd: HWND) {
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
 
         // Handle selection (menu item IDs are non-negative)
-        #[expect(clippy::cast_sign_loss)]
-        let menu_cmd = cmd.0 as u32;
+        let menu_cmd = cmd.0.cast_unsigned();
         handle_menu_selection(menu_cmd);
     }
 }

@@ -1210,7 +1210,11 @@ where
                 state.force_revert();
             }
             self.show_error_on_visible_osd();
-            return Err(e);
+            // Handled, so reported as handled: the value is reverted and the
+            // OSD says so. Propagating the error as well would have the main
+            // loop log the same event a second time, with less to say about
+            // it. The DDC send failure below takes the same shape.
+            return Ok(());
         }
 
         // Re-borrow: `overlay_update` needs `&mut self` (it may also touch
@@ -2356,9 +2360,11 @@ mod tests {
         let prior_overlay = c.states[&id].overlay_opacity;
         c.overlay.fail_update = true;
 
-        let err = c.handle_adjust(None, -10, base).unwrap_err();
+        // A failed overlay call is fully handled here — reverted and shown on
+        // the OSD — so the press reports success and the main loop has nothing
+        // left to log.
+        c.handle_adjust(None, -10, base).unwrap();
 
-        assert!(matches!(err, BrightnessError::ChannelSend));
         assert_eq!(
             c.states[&id].overlay_opacity, prior_overlay,
             "opacity must not be committed when the platform call fails"
@@ -2398,9 +2404,8 @@ mod tests {
         // changes both, so it sets a real hardware pending before the
         // overlay call fails; the failure must revert that pending.
         c.overlay.fail_update = true;
-        let err = c.handle_adjust(None, 15, base).unwrap_err();
+        c.handle_adjust(None, 15, base).unwrap();
 
-        assert!(matches!(err, BrightnessError::ChannelSend));
         assert!(
             c.states[&id].pending.is_none(),
             "hardware pending set this press must be reverted"

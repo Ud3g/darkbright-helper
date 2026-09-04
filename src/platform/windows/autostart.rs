@@ -99,7 +99,7 @@ pub(crate) fn is_enabled() -> bool {
 ///
 /// Returns an error if the current exe path cannot be determined, or if
 /// either registry write fails.
-pub fn enable() -> Result<()> {
+pub(crate) fn enable() -> Result<()> {
     let exe_path = std::env::current_exe().map_err(|e| {
         BrightnessError::windows_api(
             "GetModuleFileNameW",
