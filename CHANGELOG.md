@@ -5,6 +5,8 @@ history lives in the git log.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-05
+
 ### Added
 
 - The tray menu's "Settings" item now opens a settings window instead of
@@ -25,11 +27,11 @@ history lives in the git log.
   under the current user's `Run` key. There had been no way to start it
   automatically short of placing a shortcut in the Startup folder by hand.
 - Builds that are not a released version now say so. The tray menu's version
-  row shows `Brightness Control v0.9.0+55.gc4687e5 (dev)` — the release it
+  row shows `Brightness Control v0.10.0+55.gc4687e5 (dev)` — the release it
   followed, the number of commits since, and the commit it was built from —
   instead of the bare release number, and the same string opens the log file so
   a bug report identifies the exact build whichever way it is written. A
-  release binary is unaffected and still reads `Brightness Control v0.9.0`.
+  release binary is unaffected and still reads `Brightness Control v0.10.0`.
 - The settings window footer now shows the version, greyed, left of the
   buttons. It had shown none before.
 - The tray context menu now follows the Windows light/dark setting instead of
