@@ -323,6 +323,10 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
         if spec.id == ID_LOG_LEVEL {
             for level in LOG_LEVELS {
                 let level_wide = wide(level);
+                // SAFETY: `CB_ADDSTRING` copies the NUL-terminated string
+                // `lparam` points at into the combo's own storage. The message
+                // is sent, not posted, so `level_wide` still owns that buffer
+                // while the copy happens.
                 unsafe {
                     SendMessageW(
                         child,
@@ -728,6 +732,9 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
     let dpi = dpi_from_wparam(wparam.0);
 
     let suggested_ptr: *const RECT = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+    // SAFETY: `WM_DPICHANGED` documents `lParam` as a `RECT` with the
+    // suggested new window rect; the sender owns it for the duration of the
+    // message and it is only read here. `as_ref` guards against null.
     if let Some(suggested) = unsafe { suggested_ptr.as_ref() } {
         unsafe {
             let _ = SetWindowPos(
@@ -769,6 +776,10 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
             }
         }
 
+        // SAFETY: freeing the fonts the window owned until a moment ago. The
+        // position of this block is the invariant: GDI requires a font outlive
+        // the last `WM_SETFONT` that points at it, and the loop above has just
+        // moved every control onto the new handles.
         unsafe {
             let _ = DeleteObject(old_regular.into());
             let _ = DeleteObject(old_bold.into());
@@ -788,6 +799,12 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
 fn handle_refresh_message(lparam: LPARAM) {
     let ptr: *mut SettingsSnapshot =
         std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
+    // SAFETY: `lparam` is the pointer `post_boxed` produced with
+    // `Box::into_raw` for exactly this message id. Exactly one of three
+    // mutually exclusive reclaims runs: this one on delivery, `post_boxed`'s
+    // own on a failed post, or `drain_pending_payload_messages`' — and that
+    // last one only for a message it removed from the queue, which is
+    // therefore never delivered here.
     let snapshot = unsafe { Box::from_raw(ptr) };
     with_window_state(|state| apply_snapshot(state, &snapshot));
 }
@@ -800,6 +817,7 @@ fn handle_refresh_message(lparam: LPARAM) {
 /// handler, not here. Same reclaim contract as [`handle_refresh_message`].
 fn handle_hotkey_message_text(lparam: LPARAM) {
     let ptr: *mut String = std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
+    // SAFETY: one delivery, one reclaim, as in [`handle_refresh_message`].
     let message = unsafe { Box::from_raw(ptr) };
     with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, &message));
 }
@@ -1313,6 +1331,15 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
 /// `NM_CUSTOMDRAW`).
 fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
     let hdr_ptr: *const NMHDR = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+    // SAFETY: `WM_NOTIFY`'s `lParam` points at an `NMHDR` the notifying
+    // control owns and keeps alive for the duration of the message; nothing
+    // here holds a reference past it. Each arm below widens that pointer to a
+    // larger struct, and what guarantees the sender really allocated one
+    // differs by arm: for `UDN_DELTAPOS`/`NM_CUSTOMDRAW` the notification code
+    // alone does it, but `NM_CLICK` is generic and carries a bare `NMHDR` from
+    // most controls — the `NMLINK` widening is sound only because the guard
+    // also pins the sender to the `SysLink` by control id. Do not drop that id
+    // test on the grounds that the notification code is enough.
     let Some(hdr) = (unsafe { hdr_ptr.as_ref() }) else {
         return 0;
     };
@@ -1401,6 +1428,11 @@ unsafe extern "system" fn footer_link_subclass_proc(
     _id: usize,
     _refdata: usize,
 ) -> LRESULT {
+    // SAFETY: called by the common-controls subclass dispatcher, which
+    // upholds the same contract as a window procedure: `hwnd` is the live
+    // `SysLink` this subclass is installed on, and `wparam`/`lparam` mean
+    // what `msg` documents. Forwarding to `DefSubclassProc` is only valid
+    // from inside such a call, which is the invariant this block rests on.
     unsafe {
         match msg {
             // Gaining focus (Tab in from either direction) always starts on
@@ -1519,6 +1551,10 @@ fn set_footer_link_focus(hwnd: HWND, focused: i32) {
 /// per-key routing.
 fn get_dlg_code_query_vkey(lparam: LPARAM) -> usize {
     let msg_ptr: *const MSG = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+    // SAFETY: on a per-key `WM_GETDLGCODE`, `lparam` points at the `MSG`
+    // `IsDialogMessageW` is asking about, alive for the duration of the query
+    // and only read here; `as_ref` covers the zero `lparam` of the
+    // context-free form of the query documented above.
     unsafe { msg_ptr.as_ref() }.map_or(0, |msg| msg.wParam.0)
 }
 
@@ -1570,6 +1606,10 @@ fn handle_destroy() {
             if let Err(e) = state.sender.send(BrightnessMessage::SettingsClosed) {
                 log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
             }
+            // SAFETY: the window owns both fonts and frees each exactly once.
+            // Reaching this only on `WM_DESTROY` is what makes it sound: no
+            // control can still have one selected, since they are gone with
+            // the window.
             unsafe {
                 let _ = DeleteObject(state.font_regular.get().into());
                 let _ = DeleteObject(state.font_bold.get().into());
@@ -1599,6 +1639,11 @@ unsafe extern "system" fn settings_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows is the caller, so `hwnd` is a live window of this
+    // class and `wparam`/`lparam` carry whatever `msg` documents them to.
+    // Matching on `msg` first is what makes that reading correct, and it is
+    // the guarantee the per-message handlers below are written against —
+    // they take a bare `LPARAM` and cannot re-establish it themselves.
     unsafe {
         match msg {
             DM_GETDEFID => {
@@ -1810,6 +1855,11 @@ fn drain_pending_payload_messages(hwnd: HWND) {
     .as_bool()
     {
         match msg.message {
+            // SAFETY (both arms): these messages were removed from the queue
+            // by `PeekMessageW` above, so their wndproc arms will never run
+            // and no other reclaim of these pointers exists. Each `lparam` is
+            // the `Box::into_raw` pointer `post_boxed` produced for that
+            // message id, which is what makes the type of each cast correct.
             WM_APP_SETTINGS_REFRESH => {
                 let ptr: *mut SettingsSnapshot =
                     std::ptr::with_exposed_provenance_mut(msg.lParam.0.cast_unsigned());
@@ -1930,6 +1980,12 @@ impl SettingsSinkImpl {
         let Some(hwnd) = self.target_hwnd() else {
             return;
         };
+        // SAFETY: `hwnd` was reconstituted from the `AtomicIsize` the
+        // settings thread stored, so this posts to another thread's window.
+        // `PostMessageW` is one of the few window APIs documented as callable
+        // from any thread, and it fails cleanly rather than misbehaving if
+        // that window has since been destroyed — which is the whole reason
+        // the handle may cross the boundary as a bare `isize` at all.
         unsafe {
             if let Err(e) = PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0)) {
                 log::debug!(error:% = e; "Settings window post failed (window gone?)");
@@ -1958,6 +2014,12 @@ impl SettingsSinkImpl {
         };
         let ptr = Box::into_raw(Box::new(value));
         let lparam = LPARAM(ptr.expose_provenance().cast_signed());
+        // SAFETY: cross-thread `PostMessageW` as in [`Self::post_simple`].
+        // Additionally, ownership of the box travels in `lparam`: on success
+        // the receiving arm's single `Box::from_raw` frees it, and on failure
+        // the branch below does, so the value is freed exactly once either
+        // way. `T` must match what the receiver casts `lparam` back to, which
+        // the per-message-id call sites are responsible for.
         unsafe {
             if let Err(e) = PostMessageW(Some(hwnd), msg, WPARAM(0), lparam) {
                 log::debug!(error:% = e; "Settings window post failed (window gone?)");

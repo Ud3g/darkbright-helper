@@ -136,6 +136,12 @@ impl Palette {
     /// `handle_destroy` — the same single-owner convention as the window's
     /// two fonts.
     pub(super) fn destroy(&self) {
+        // SAFETY: the palette owns both brushes it created in `new` and this
+        // is the only place they are deleted, so each is freed exactly once.
+        // The caller owes an ordering guarantee the doc comment above does not
+        // state: nothing may still reference either brush, in particular the
+        // class background slot — which is why `handle_destroy` re-points it
+        // via [`set_class_background`] before calling this.
         unsafe {
             let _ = DeleteObject(self.window_bg.into());
             let _ = DeleteObject(self.control_bg.into());
@@ -292,6 +298,10 @@ pub(super) fn set_class_background(hwnd: HWND, dark: bool, palette: &Palette) {
     } else {
         unsafe { GetSysColorBrush(COLOR_BTNFACE) }
     };
+    // SAFETY: both handles are safe to park in class-wide state for the reason
+    // the doc comment above gives — plus one it does not: a `GetSysColorBrush`
+    // handle belongs to the system and must never be deleted, so the light
+    // branch leaves nothing behind to clean up.
     unsafe {
         SetClassLongPtrW(
             hwnd,
@@ -795,6 +805,12 @@ unsafe extern "system" fn combo_subclass_proc(
     _id: usize,
     _refdata: usize,
 ) -> LRESULT {
+    // SAFETY: called by the common-controls subclass dispatcher, which upholds
+    // a window procedure's contract: `hwnd` is the live combo this subclass is
+    // installed on, and `wparam`/`lparam` mean what `msg` documents. The
+    // `WM_ERASEBKGND` arm rests on that directly — it reads `wparam` back as
+    // the `HDC` the sender owns for the duration of the message, which holds
+    // only because the match has pinned the message first.
     unsafe {
         match msg {
             WM_ERASEBKGND => {

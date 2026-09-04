@@ -688,6 +688,11 @@ impl Drop for HotkeyManager {
     fn drop(&mut self) {
         self.unregister_all();
         if !self.hwnd.is_invalid() {
+            // SAFETY: this manager created the window and owns it, and the
+            // hotkeys registered against it were just unregistered above.
+            // `DestroyWindow` only works from the thread that created the
+            // window, which holds here because the manager is created, used
+            // and dropped entirely on the hotkey thread.
             unsafe {
                 let _ = DestroyWindow(self.hwnd);
             }

@@ -522,6 +522,11 @@ impl BadgeCanvas {
 
 impl Drop for BadgeCanvas {
     fn drop(&mut self) {
+        // SAFETY: this type owns the memory DC and the DIB section it created
+        // in `new`, and frees each exactly once. Restoring the original bitmap
+        // first is required: GDI will not delete an object still selected into
+        // a DC. Any `bits` pointer handed out by `new` is invalid after this,
+        // which is why the canvas outlives every use of it.
         unsafe {
             SelectObject(self.dc, self.old);
             let _ = DeleteObject(self.dib.into());
@@ -549,6 +554,13 @@ fn create_warning_icon(base: HICON) -> Result<HICON> {
         // Flush pending GDI drawing before touching the DIB bits directly.
         let _ = GdiFlush();
 
+        // SAFETY: `canvas.bits` is the pixel buffer `CreateDIBSection`
+        // allocated for a 32-bit top-down bitmap of exactly
+        // `WARNING_ICON_SIZE` square, so the length recomputed here is the
+        // buffer's real size — the two are only kept in step by both deriving
+        // from that one constant. The buffer stays alive as long as
+        // `canvas`, which outlives this slice, and the `GdiFlush` above is
+        // what makes it safe to bypass GDI and write the bits directly.
         let pixels =
             std::slice::from_raw_parts_mut(canvas.bits, WARNING_ICON_SIZE * WARNING_ICON_SIZE * 4);
         paint_warning_badge(pixels, WARNING_ICON_SIZE);
@@ -1074,6 +1086,11 @@ unsafe extern "system" fn tray_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows is the caller, so `hwnd` is a live window of this
+    // class and `wparam`/`lparam` carry whatever `msg` documents them to.
+    // Matching on `msg` first is what makes that reading correct, and it is
+    // the guarantee the per-message handlers below are written against —
+    // they take a bare `LPARAM` and cannot re-establish it themselves.
     unsafe {
         match msg {
             WM_TRAY_CALLBACK => {
@@ -1287,6 +1304,10 @@ impl TrayStatusHandle {
     /// Posts the current warnings to the tray thread (fire-and-forget).
     pub fn notify(self, warnings: HealthWarnings) {
         let bits = warnings_to_bits(warnings);
+        // SAFETY: the handle travels to other threads as a bare `isize`
+        // because `PostMessageW` is callable from any thread and reports a
+        // destroyed window as an error instead of misbehaving; the payload is
+        // a plain bit set in `wparam`, so nothing is leaked when it fails.
         unsafe {
             if let Err(e) = PostMessageW(
                 Some(hwnd_from_isize(self.0)),

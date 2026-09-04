@@ -118,6 +118,11 @@ impl PhysicalMonitor {
 
 impl Drop for PhysicalMonitor {
     fn drop(&mut self) {
+        // SAFETY: this type owns the handle `GetPhysicalMonitorsFromHMONITOR`
+        // wrote into `self.inner` and is the only path that releases it, so
+        // the close happens exactly once. The handle is process-scoped rather
+        // than thread-affine (see the `unsafe impl Send` above), so the
+        // releasing thread does not have to be the one that opened it.
         unsafe {
             // DestroyPhysicalMonitors takes a slice of PHYSICAL_MONITOR entries.
             let _ = DestroyPhysicalMonitors(std::slice::from_ref(&self.inner));
@@ -425,6 +430,9 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
 struct SafeDevInfo(HDEVINFO);
 impl Drop for SafeDevInfo {
     fn drop(&mut self) {
+        // SAFETY: the wrapper owns the `HDEVINFO` returned by
+        // `SetupDiGetClassDevsW` and nothing else destroys it; the list is
+        // still live here because every borrow of it ends before this drop.
         unsafe {
             let _ = SetupDiDestroyDeviceInfoList(self.0);
         }
@@ -468,6 +476,12 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
         let mut required_size = 0;
         let mut property_type = 0;
 
+        // SAFETY: `SetupDiGetDeviceRegistryPropertyW` wants a byte buffer, but
+        // the property is a wide string, so the storage is declared as `u16`
+        // to get `WCHAR` alignment and only the view handed to the API is
+        // bytes. `size_of_val` derives the byte length from that same array,
+        // so pointer and length cannot drift apart, and the view borrows
+        // `buffer` for no longer than the call.
         let success = unsafe {
             let buffer_u8 = std::slice::from_raw_parts_mut(
                 buffer.as_mut_ptr().cast::<u8>(),
@@ -512,6 +526,9 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
 struct SafeHKey(HKEY);
 impl Drop for SafeHKey {
     fn drop(&mut self) {
+        // SAFETY: the wrapper owns the `HKEY` opened by
+        // `SetupDiOpenDevRegKey` — it is never duplicated or closed
+        // elsewhere, so this closes it exactly once.
         unsafe {
             let _ = RegCloseKey(self.0);
         }
@@ -545,6 +562,10 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
     let mut data_type = REG_VALUE_TYPE::default();
     let mut data_len = 0;
 
+    // SAFETY: the two calls below are the documented size-then-read protocol
+    // for `RegQueryValueExW`. In the second, `data_len` is both the length
+    // `buffer` was allocated with and the in/out size the call is given, so
+    // the API cannot write past the allocation.
     unsafe {
         // First call to get size
         let _ = RegQueryValueExW(

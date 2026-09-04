@@ -156,10 +156,12 @@ boundary so callers never see a `windows` crate type.
 
 ### Write a `// SAFETY:` comment where the invariant is not local
 
-Not every `unsafe` block needs one, and pretending otherwise is a large part of why so
-few have one: there are ~290 `unsafe` blocks against 28 `// SAFETY:` comments, and which
-ones are annotated tracks the file rather than the difficulty. Turning on
-`clippy::undocumented_unsafe_blocks` would demand roughly 260 new comments, most of them
+Not every `unsafe` block needs one, and pretending otherwise is a large part of what would
+make the marker worthless: there are ~290 `unsafe` blocks against ~66 `// SAFETY:`
+comments (the count is worth re-deriving rather than trusting), and the ones that carry a
+comment are the ones whose correctness rests on
+something outside the block rather than the ones that happen to sit in a well-tended file.
+Turning on `clippy::undocumented_unsafe_blocks` would demand roughly 225 more, most of them
 restating that a Win32 call was handed two integers — noise that teaches a reviewer to
 skim past the handful that carry a real argument.
 

@@ -140,6 +140,9 @@ fn capture_state(hwnd: HWND) -> CaptureState {
     if ptr.is_null() {
         CaptureState::default()
     } else {
+        // SAFETY: non-null means `WM_CREATE` has run and `WM_NCDESTROY` has
+        // not, so `ptr` points at that live box. `CaptureState` is `Copy`, so
+        // this reads a copy out and keeps no reference past the call.
         unsafe { *ptr }
     }
 }
@@ -153,6 +156,10 @@ fn capture_state(hwnd: HWND) -> CaptureState {
 fn with_capture_state_mut(hwnd: HWND, f: impl FnOnce(&mut CaptureState)) {
     let ptr = capture_state_ptr(hwnd);
     if !ptr.is_null() {
+        // SAFETY: same live-box argument as [`capture_state`]. The `&mut` is
+        // exclusive for the duration of `f`: a window's state is reachable only
+        // through its own wndproc, which runs on one thread, and nothing `f`
+        // does re-enters that wndproc (see the note above on `InvalidateRect`).
         unsafe { f(&mut *ptr) }
     }
 }
@@ -492,6 +499,11 @@ fn handle_capture_getdlgcode(hwnd: HWND, lparam: LPARAM) -> u32 {
     let mut code = DLGC_BUTTON;
     if lparam.0 != 0 {
         let msg_ptr: *const MSG = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
+        // SAFETY: on a per-key `WM_GETDLGCODE`, `lparam` points at the `MSG`
+        // the dispatcher (`IsDialogMessageW`) is asking about; the dispatcher
+        // owns that struct and keeps it alive across the query, and it is only
+        // read here. The zero `lparam` of the general "what does this control
+        // want?" form is excluded above, and `as_ref` re-checks for null.
         if let Some(msg) = unsafe { msg_ptr.as_ref() } {
             let wants_key = matches!(msg.message, WM_KEYDOWN | WM_SYSKEYDOWN)
                 && matches!(vk_from_wparam(msg.wParam), VK_SPACE | VK_RETURN);
@@ -641,9 +653,20 @@ pub(super) unsafe extern "system" fn capture_wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows is the caller, so `hwnd` is a live window of this
+    // class and `wparam`/`lparam` carry whatever `msg` documents them to.
+    // Matching on `msg` first is what makes that reading correct, and it is
+    // the guarantee the per-message handlers below are written against —
+    // they take a bare `LPARAM` and cannot re-establish it themselves.
     unsafe {
         match msg {
             WM_CREATE => {
+                // SAFETY: the box is deliberately leaked into `GWLP_USERDATA`,
+                // which becomes its only owner for the window's lifetime. The
+                // `WM_NCDESTROY` arm below is the single place that reclaims
+                // it, and Windows delivers that message exactly once and last
+                // for a window, so the pointer is neither freed twice nor used
+                // after being freed.
                 let ptr = Box::into_raw(Box::new(CaptureState::default()));
                 let _ =
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, ptr.expose_provenance().cast_signed());
@@ -652,6 +675,11 @@ pub(super) unsafe extern "system" fn capture_wnd_proc(
             WM_NCDESTROY => {
                 let ptr = capture_state_ptr(hwnd);
                 if !ptr.is_null() {
+                    // SAFETY: reclaims the box leaked in the `WM_CREATE` arm
+                    // above — the pointer came from `Box::into_raw` of a
+                    // `CaptureState` and nothing else frees it. `WM_NCDESTROY`
+                    // arrives exactly once, and the slot is zeroed immediately
+                    // after, so a later read cannot see a dangling pointer.
                     drop(Box::from_raw(ptr));
                     let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 }

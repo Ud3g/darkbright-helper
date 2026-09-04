@@ -174,6 +174,8 @@ unsafe extern "system" fn wnd_proc(
     wparam: WPARAM,
     lparam: LPARAM,
 ) -> LRESULT {
+    // SAFETY: Windows is the caller, so `hwnd` is a live OSD window and
+    // `wparam` means what `msg` documents.
     unsafe {
         match msg {
             WM_PAINT => {
@@ -221,6 +223,9 @@ unsafe fn paint_osd(hwnd: HWND, hdc: HDC) {
 
     let state = OSD_STATE.with(|s| s.borrow().clone());
     let metrics = OSD_METRICS.with(|m| *m.borrow());
+    // SAFETY: `osd_render::paint` requires a live paint DC; this function's
+    // own contract requires the same of `hdc` and the only caller satisfies
+    // it, so forwarding the handle discharges the precondition.
     unsafe { osd_render::paint(hdc, &rect, &state, &metrics) };
 }
 
@@ -443,6 +448,11 @@ pub(crate) fn set_osd_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
 /// * `hwnd` - The window handle to apply rounded corners to.
 fn apply_rounded_corners(hwnd: HWND) {
     let preference = DWMWCP_ROUND;
+    // SAFETY: the attribute value is passed as an untyped pointer with its
+    // size as a separate argument; both are taken from the same local, so
+    // DWM reads exactly the bytes that exist, and the local outlives the
+    // call. `DWMWA_WINDOW_CORNER_PREFERENCE` is the attribute whose value
+    // type matches that of `preference`.
     let result = unsafe {
         DwmSetWindowAttribute(
             hwnd,
