@@ -1687,10 +1687,8 @@ themed tooltip would not.
 
 ### Unit Tests
 
-Run all unit tests with:
-```bash
-cargo test
-```
+`cargo test --locked` runs them; `.github/workflows/ci.yml` is the authority on the full
+check set, and `docs/code-conventions.md` §8 covers how the tests themselves are built.
 
 Key test areas:
 - **Config validation**: Ensures invalid values are clamped to defaults
@@ -1701,6 +1699,21 @@ Key test areas:
 ### Integration Testing (Manual)
 
 Controller orchestration is unit-tested (see above); what remains hardware-dependent and must be tested manually is DDC/CI I/O against real monitors, the DDC worker's EDID enumeration (including the `enumerated` set it reports), and topology changes:
+
+**Keeping these procedures true.** For DDC, the OSD, the overlay, the tray and power events
+these procedures are the whole verification story, because CI cannot run any of them. So
+a change to one of those paths updates its procedure in the same PR. In practice that means
+the **Expected** line rather than the steps: the steps age slowly — a monitor is still
+unplugged by unplugging it — while the expected observation goes stale the moment a log
+message or a visible behaviour changes. A procedure whose Expected line no longer matches is
+worse than no procedure at all, because it fails on a correct build and teaches whoever runs
+it to wave the failure through.
+
+There is deliberately **no record of which procedure last ran against which version**. Such a
+note is only ever as good as its upkeep, and a stale one claiming a verification that never
+happened would be worse than the silence it replaced — the same failure this document's
+freshness rule exists to prevent. The verification history therefore lives in the commit and
+release history, not in a table here.
 
 #### Periodic Refresh Test
 1. Set `refresh.periodic_seconds` to a low value (e.g., 10) in config

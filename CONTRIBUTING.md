@@ -44,7 +44,8 @@ CI also checks all targets on the MSRV and audits dependencies for advisories.
   needs a manual test on real hardware — see "Integration Testing" in
   [docs/architecture.md](docs/architecture.md). Say in the PR what you tested on which
   setup; untested hardware-path changes will wait until I can verify them myself, which
-  may take long.
+  may take long. If your change moves what one of those procedures should observe, update
+  the procedure in the same PR.
 
 ## Code conventions
 

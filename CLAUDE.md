@@ -29,7 +29,7 @@ cargo check --release --locked     # only configuration in which the hidden-cons
 RUST_LOG=debug cargo run     # run with debug logging (env_logger)
 ```
 
-Tests live in-module (`#[cfg(test)]`) under `src/` plus integration tests in `tests/` (`ddc_test.rs`, `hotkey_test.rs`, `single_instance_test.rs`); the crate-root example in `src/lib.rs` is a real doctest. Hardware-dependent DDC/refresh behavior is verified **manually** — see the "Integration Testing" section of `docs/architecture.md`.
+Tests live in-module (`#[cfg(test)]`) under `src/` plus integration tests in `tests/` (`ddc_test.rs`, `hotkey_test.rs`, `single_instance_test.rs`); the crate-root example in `src/lib.rs` is a real doctest. Hardware-dependent DDC/refresh behavior is verified **manually** — see the "Integration Testing" section of `docs/architecture.md`; changing such a path updates its procedure in the same PR.
 
 Releases are cut by pushing a bare-semver tag (`0.8.0`, no `v` prefix), which triggers the release workflow — see `RELEASING.md`.
 
