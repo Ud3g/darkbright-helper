@@ -1141,6 +1141,10 @@ instance of it. What differs is not the policy but the way back out:
   resume) and the gate reopens. The supervisor itself only translates a
   decision into an action — spawn a replacement, or report that none was
   spawned — because `RespawnOutcome` is what the controller needs to know.
+  Deliberately, a failed restart *attempt* does **not** latch here, unlike the
+  hotkey case below: the next keypress or resume would lift the latch moments
+  later anyway, and the attempt has already been charged against the respawn
+  budget, so the retries stay bounded without it.
 - The **hotkey thread** has no such trigger and never resets: once its restarts
   are exhausted the tray says "restart the app" and means it. A failed restart
   *attempt* latches immediately (`record_spawn_failure`) — a second attempt

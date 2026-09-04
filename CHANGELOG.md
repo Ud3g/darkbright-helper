@@ -54,6 +54,11 @@ history lives in the git log.
 
 ### Fixed
 
+- If the system refused to start the app's monitor-communication thread at
+  startup, the app died without saying anything — in a release build, with no
+  console, it simply never appeared. It now explains what happened and suggests
+  closing some applications or restarting, the same way a refused hotkey thread
+  already did.
 - If the system refused to start the settings window's thread, the window
   stayed unopenable for the rest of the session: the click had been recorded as
   "opening" and nothing ever cleared it. The failure is now logged and the next

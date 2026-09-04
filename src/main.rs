@@ -511,8 +511,26 @@ fn main() {
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();
 
-    // Spawn the supervised DDC worker.
-    let supervisor = DdcSupervisor::spawn(tx.clone());
+    // Spawn the supervised DDC worker. It is the only path to the hardware, so
+    // a refusal here ends startup — but it ends it with an explanation, the way
+    // a refused hotkey thread does below, not by vanishing.
+    let supervisor = match DdcSupervisor::spawn(tx.clone()) {
+        Ok(supervisor) => supervisor,
+        Err(e) => {
+            log::error!(error:% = e; "Fatal error starting the DDC worker");
+            show_error_message_box(
+                "Brightness Control - Startup Error",
+                &format!(
+                    "Brightness Control could not start:
+
+                     {e}
+
+                     The system would not start a thread, which usually means it                      is out of resources. Close some applications, or restart the                      computer, and try again."
+                ),
+            );
+            return;
+        }
+    };
     log::info!("DDC worker thread spawned");
 
     // Create controller: OSD is created here (its failure path), then injected.
