@@ -101,6 +101,11 @@ impl SelectedFont {
 
 impl Drop for SelectedFont {
     fn drop(&mut self) {
+        // SAFETY: `self.hdc` is the DC this font was selected into and it
+        // outlives the wrapper (the wrapper lives inside one paint call). The
+        // order matters and is the reason this is a `Drop` at all: the font
+        // must be deselected before it is deleted, because GDI refuses to
+        // delete an object that is still selected into a DC.
         unsafe {
             SelectObject(self.hdc, self.old);
             let _ = DeleteObject(self.font.into());
@@ -168,6 +173,10 @@ impl BackBuffer {
 
 impl Drop for BackBuffer {
     fn drop(&mut self) {
+        // SAFETY: this type owns the memory DC and the bitmap it created, and
+        // releases each exactly once. The order is load-bearing: the original
+        // bitmap goes back into the DC first (GDI will not delete a selected
+        // object), then the bitmap, then the DC that held it.
         unsafe {
             SelectObject(self.mem_dc, self.old_bitmap);
             let _ = DeleteObject(self.bitmap.into());

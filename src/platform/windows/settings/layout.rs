@@ -768,6 +768,10 @@ fn set_updown_accel(hwnd: HWND, id: u16, accel: &[UDACCEL]) {
     let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
         return;
     };
+    // SAFETY: `UDM_SETACCEL` reads `wparam` entries from the `UDACCEL` array
+    // `lparam` points at; both come from the same slice here, so the control
+    // cannot read past it. The message is sent, not posted, so `accel` is
+    // still borrowed when the control copies the table.
     unsafe {
         SendMessageW(
             child,

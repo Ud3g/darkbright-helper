@@ -242,6 +242,12 @@ impl PowerEventListener {
 
 impl Drop for PowerEventListener {
     fn drop(&mut self) {
+        // SAFETY: the listener owns both handles it created. Unregistering the
+        // suspend/resume subscription first is deliberate — it names this
+        // window as its delivery target, so it must be gone before the window
+        // is. `DestroyWindow` has thread affinity, and the listener is always
+        // created and dropped on one thread — the power thread in production,
+        // the test thread in this module's own tests.
         unsafe {
             let _ = UnregisterSuspendResumeNotification(self.notification);
         }
