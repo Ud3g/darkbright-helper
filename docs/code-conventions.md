@@ -384,6 +384,76 @@ deliberately sets `logging.file_level` to `debug` for a diagnostic session.
 
 ---
 
+## 8. Testing
+
+`docs/architecture.md` §Testing says *what* is covered and where the unit/manual line falls.
+This section is the mechanics: how a test in this codebase is built, so the next one looks
+like the last 370.
+
+### Fakes, not mocks
+
+The controller is generic over seven seams, and each has a hand-written `Fake…` in the test
+module of `core/controller.rs`. There are no mocking crates and, deliberately, **no
+`[dev-dependencies]` at all**. That is not frugality — it is what keeps `core/` testable on
+any host: the suite compiles and runs without a Windows target or a physical monitor, and
+a mocking framework with a proc-macro or a platform-specific backend would quietly end that.
+
+A fake is a plain struct that records what it was told and answers what it was configured to
+answer:
+
+```rust
+#[derive(Default)]
+struct FakeOverlay {
+    updates: Vec<(MonitorId, u8)>,
+    removed: Vec<MonitorId>,
+    fail_update: bool,
+}
+```
+
+- **Record into plain fields.** `Vec<…>` for calls worth inspecting in order, a counter for
+  calls worth only counting. No `Arc<Mutex<…>>`, no `RefCell`, no interior mutability: the
+  controller owns its seams exclusively and every method that records takes `&mut self`, so
+  shared mutability would be modelling a concurrency that does not exist here — and would
+  hide the single-owner property the whole design rests on. The seam methods that take
+  `&self` are the pure queries (`is_visible`, `is_alive`, `monitor_under_cursor`), and a fake
+  that only answers them needs no fields at all — `FakeLocator` is two configured values.
+- **Inject failure with a flag**, named for what it breaks (`fail_send`, `fail_update`). When
+  only the next call should fail, use the one-shot form: a `fail_next` field consumed through
+  `std::mem::take`, as `FakeHotkeyPort` does.
+- **Assert against the recorder**, never against log output. Logging is a side effect the
+  tests do not own.
+
+Shared setup lives beside the fakes as ordinary functions — `test_controller(base)`,
+`test_id()`, `seed()`, `deliver_refresh()` — taking an explicit `Instant` rather than reading
+the clock, which is why the watchdog and refresh timing tests are deterministic.
+
+### On the Windows side, test the pure helpers
+
+Thirteen of the `platform/windows/` files have tests, and with two exceptions they test only
+pure helpers — parsing, formatting, layout arithmetic — never a live window or a real device.
+The two exceptions are deliberate and are the whole list:
+
+- `power.rs` calls `power_wnd_proc` directly to prove resume events reach the main thread.
+- `ddc.rs` enumerates real monitors, written to pass on a headless machine by asserting only
+  that the call succeeds.
+
+Anything else that needs a window, a device, or a theme belongs in the manual checklists in
+`docs/architecture.md`, not in a `#[test]`.
+
+Filesystem tests build their own path with a helper that mixes in `process::id()` (see
+`unique_path` in `config_store.rs`), because `cargo test` runs them in parallel within one
+process and a fixed temp filename makes two tests fight over one file.
+
+### Naming
+
+Descriptive names in the present tense, stating the behaviour and its outcome:
+`refresh_send_failure_aborts`, `periodic_refresh_gates_on_enumerated_not_readable`. Around
+80 older tests still carry a `test_` prefix; rename one opportunistically when you are
+already editing it, but **do not** do a sweeping rename — the churn costs more than the
+inconsistency, and the newest modules are already prefix-free throughout.
+
+---
+
 ## Quick Checklist
 
 The four commands in section 1 pass — they are the mechanical half and the only half worth

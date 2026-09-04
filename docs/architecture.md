@@ -123,6 +123,37 @@ The portability boundary is the set of controller seams in `core/controller.rs`
 `platform/windows/` provides the real implementations. A port to another OS implements those
 seams plus its own hotkey/power/tray equivalents and binary wiring.
 
+**Adding a seam**
+
+The seam count went from four to seven in a single feature, so this is a path that gets
+walked. A new seam is one trait and six other edits; the compiler catches all but the last
+two, and the two it misses are the ones that rot:
+
+In `core/controller.rs`:
+
+1. The trait, with a doc comment saying which side of the boundary owns the work and whether
+   a result comes back later as a `BrightnessMessage`.
+2. A type parameter on `Controller<…>` and on its `impl` block's bounds.
+3. A field on the struct and a parameter on `Controller::new`.
+4. A `Fake…` in the test module, plus its line in the `TestController` alias and its argument
+   in `test_controller()`. See section 8 of `docs/code-conventions.md` for what a fake in
+   this codebase may and may not do — the short version is a plain struct with `Vec` fields
+   and no interior mutability.
+
+In `platform/windows/` and `main.rs`:
+
+5. The real implementation, and the wiring that injects it.
+
+In the docs:
+
+6. The seam list in the paragraph above, the `controller.rs` line of the module tree, **and**
+   the seam enumeration under §Testing. Three places name this set; the §Testing copy is the
+   one that was left saying "four" after the settings window shipped, so treat all three as a
+   single edit.
+
+Note what is deliberately absent: no rule about how many tests a seam needs, and no coverage
+claim here — §Testing owns the unit-vs-manual boundary.
+
 ### Threading Model
 
 Dedicated threads for I/O, main thread owns state and UI:
@@ -1632,7 +1663,7 @@ Key test areas:
 - **Config validation**: Ensures invalid values are clamped to defaults
 - **Brightness calculations**: Tests adjustment logic in `core/brightness.rs`
 - **State management**: Tests `MonitorState` transitions
-- **Controller orchestration**: `core/controller.rs` drives the optimistic-update, supervision, watchdog, refresh, and ghost-pruning sequences against fakes for the OSD/overlay/DDC/locator seams — the message-driven control flow is unit-tested on any host, no Windows target or physical monitor required
+- **Controller orchestration**: `core/controller.rs` drives the optimistic-update, supervision, watchdog, refresh, and ghost-pruning sequences against fakes for all seven seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`, `SettingsSink`, `HotkeyPort`, `ConfigStore`) — the message-driven control flow is unit-tested on any host, no Windows target or physical monitor required
 
 ### Integration Testing (Manual)
 
