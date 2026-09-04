@@ -136,18 +136,42 @@ rather than a `BOOL` check, `Some(hwnd)` for an optional handle parameter, `u32:
 `.cast_unsigned()` instead of `as`, and the error mapped into `BrightnessError` at the
 boundary so callers never see a `windows` crate type.
 
-### Unsafe Blocks in Unsafe Functions (Rust 2024)
+### Write a `// SAFETY:` comment where the invariant is not local
 
-In Rust 2024, `unsafe fn` does not imply an `unsafe` block for its body. You must explicitly wrap unsafe operations in `unsafe { ... }` even inside an `unsafe fn`.
+Not every `unsafe` block needs one, and pretending otherwise is a large part of why so
+few have one: there are ~290 `unsafe` blocks against 28 `// SAFETY:` comments, and which
+ones are annotated tracks the file rather than the difficulty. Turning on
+`clippy::undocumented_unsafe_blocks` would demand roughly 260 new comments, most of them
+restating that a Win32 call was handed two integers — noise that teaches a reviewer to
+skim past the handful that carry a real argument.
 
-```rust
-// Correct
-unsafe fn my_unsafe_fn() {
-    unsafe {
-        ffi_call();
-    }
-}
-```
+The line worth drawing is whether the block's correctness depends on something the block
+itself does not show. Those get a `// SAFETY:` immediately above, naming the invariant
+*and* what guarantees it:
+
+- the provenance or lifetime of a raw pointer — the `lparam` round-trip through
+  `EnumDisplayMonitors` in `ddc.rs` is the canonical case;
+- a buffer whose length travels as a separate argument;
+- a handle whose validity or thread affinity the compiler cannot see;
+- a `transmute`, or a function pointer resolved at run time — the undocumented ordinals
+  in `theme.rs`;
+- the `hwnd`/`wParam`/`lParam` contract of a window procedure or other callback;
+- an `unsafe impl` — `unsafe impl Send for PhysicalMonitor` in `ddc.rs` is the one
+  load-bearing invariant in the crate, and carries the longest comment for that reason.
+
+A block that only wraps a Win32 call taking scalars, string literals, or a handle an RAII
+wrapper has already validated needs no comment; adding one there is what dilutes the
+marker until nobody reads it.
+
+`// SAFETY:` is reserved for `unsafe`. A cast that needs a range argument, or a lint
+suppression that needs a reason, gets an ordinary comment — the marker is how a reviewer
+finds the memory-safety claims in a 290-block codebase, and spending it on
+`msg.wParam.0 as i32` empties it.
+
+The two mechanical halves of this are gates, not prose: an exported `unsafe fn` must
+carry a `# Safety` doc section (`clippy::missing_safety_doc`, already implied by
+`clippy::all`), and an unsafe operation inside an `unsafe fn` body still needs its own
+`unsafe { }` block (`unsafe_op_in_unsafe_fn`, denied in `Cargo.toml`).
 
 ### Wrap handles in RAII types
 
@@ -371,6 +395,9 @@ What the tooling cannot check, and a reviewer therefore has to:
       serde `default_*` helpers and tests are exempt
 - [ ] `unsafe` is isolated behind safe wrappers, and a handle that outlives its expression
       has a `Drop` (see section 3 for what the rule does *not* cover)
+- [ ] Any `unsafe` block whose correctness rests on something outside it — pointer
+      provenance, a separately passed length, a handle's validity or thread affinity, a
+      callback contract — has a `// SAFETY:` naming the invariant and its guarantor
 - [ ] Log statements sit at the point of handling, at the level section 7 describes
 - [ ] No PII: no serials or absolute paths above `debug!`
 - [ ] Any new lint suppression is narrow, is an `#[expect]`, and says why

@@ -644,8 +644,9 @@ impl HotkeyManager {
                     break;
                 }
                 if msg.message == WM_HOTKEY {
-                    // Safety: WPARAM for WM_HOTKEY is the identifier of the hotkey.
-                    // Cast is safe as we only register small positive IDs (1-4).
+                    // WPARAM for WM_HOTKEY is the identifier of the hotkey; the
+                    // cast cannot lose anything because we only ever register
+                    // small positive IDs (1-4).
                     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                     let id = msg.wParam.0 as i32;
                     log::debug!(hotkey_id = id; "Received WM_HOTKEY");
