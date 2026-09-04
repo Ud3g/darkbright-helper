@@ -181,6 +181,23 @@ A block that only wraps a Win32 call taking scalars, string literals, or a handl
 wrapper has already validated needs no comment; adding one there is what dilutes the
 marker until nobody reads it.
 
+Two boundaries of that exception are worth stating, because reading the rule alone leaves
+them open:
+
+- **The destructor of a wrapper is not a user of it.** A `Drop` — or a hand-rolled
+  `destroy()` — is where the ownership claim actually lives: that this handle is ours, that
+  nothing else still refers to it, and that it is released exactly once. That is an invariant
+  the block cannot show, so it gets a `// SAFETY:` — which is why the `SafeHwnd::drop` shown
+  under "Wrap handles in RAII types" below carries one. Code that merely *uses* a handle such a wrapper hands it does not. Where the
+  release also has an ordering requirement — a brush that must leave
+  `GCLP_HBRBACKGROUND` before it is deleted, a font that must outlive the last `WM_SETFONT`
+  that points at it — say so, because that is the part a later edit can break.
+- **A parameter that is only forwarded does not need one at every handler.** The `HDC` that
+  arrives in `wParam` on `WM_CTLCOLOR*` and goes straight into `SetTextColor` is covered by
+  the message contract of the window procedure that unpacked it; repeating that argument at
+  each of the handlers would state one fact seven times. Put it at the window procedure, not
+  at the leaves.
+
 `// SAFETY:` is reserved for `unsafe`. A cast that needs a range argument, or a lint
 suppression that needs a reason, gets an ordinary comment — the marker is how a reviewer
 finds the memory-safety claims in a 290-block codebase, and spending it on
@@ -292,12 +309,24 @@ These rules describe how the bindings behave, not one release of them:
 
 ## 4. Documentation
 
-Document all items with `///` doc comments, not only public ones. Clippy enforces the
-`# Errors` and `# Panics` sections on the public surface; everything else here is convention,
-since rustc's `missing_docs` is not enabled — and it is followed unevenly, with perhaps a
-dozen private helpers (several of the subclass procedures in `settings/dark.rs`, for
-instance) still undocumented. Treat those as debt to pay off when you touch them, not as
-precedent. Exempt by rule: trait-impl boilerplate, serde `default_*` helpers, and tests.
+Document with `///`, not only the public surface. Clippy enforces the `# Errors` and
+`# Panics` sections on public items; the rest is convention, since rustc's `missing_docs` is
+not enabled. What that convention covers, stated precisely because an unscoped "document
+everything" is neither followed nor worth following:
+
+- **Every function, type, trait and module** gets one, private ones included.
+- **Struct fields** get one where the field's job is not obvious from its name and type. That
+  is why `Controller` documents all of its — several hold non-obvious invariants — while a
+  two-field paint helper documents none.
+- **A run of related constants** may share one block comment instead of one each; the control
+  ids and style bits in `settings/layout.rs` are the case this exists for.
+- **Exempt:** trait-impl boilerplate, serde `default_*` helpers, and tests.
+
+Compliance is partial and the gap is larger than it looks: roughly thirty functions, statics
+and type aliases carry no `///`, alongside a long tail of undocumented private struct fields —
+the subclass procedures in `settings/dark.rs` and the state statics in `settings/window.rs`
+are the densest clusters. That is debt to pay off on contact, not precedent to follow.
+
 Include:
 - Brief description
 - `# Arguments` for non-obvious parameters
@@ -378,9 +407,15 @@ Prefer key-value pairs over string interpolation for machine-parseable logs:
 // Preferred: structured fields
 // For types implementing Display, use `key:% = value` syntax
 // For types implementing Debug, use `key:? = value` syntax
-log::info!(monitor_id:% = monitor.id(), brightness = new_value; "Brightness adjusted");
-log::error!(vcp_code = 0x10, attempts = 3; "DDC write failed");
-log::debug!(message:? = msg; "Received message");
+log::debug!(monitor_id:% = monitor_id, brightness = brightness; "Monitor found during refresh");
+log::warn!(
+    monitor:% = monitor,
+    attempt = attempts,
+    max_attempts = DDC_MAX_ATTEMPTS,
+    retry_delay_ms = DDC_RETRY_DELAY_MS,
+    error:% = e;
+    "DDC operation failed, retrying"
+);
 
 // Acceptable: simple messages without dynamic data
 log::info!("Application started");
@@ -391,16 +426,25 @@ log::info!("Brightness adjusted: monitor={}, value={}", monitor.id(), new_value)
 
 ### Field Naming
 
-Use `snake_case` for all log field names. Common patterns:
+Use `snake_case`. This table is a registry of the names already in use, so that the same
+thing keeps the same name — check here before inventing one. It deliberately carries no
+frequencies: a count is a fact about today that nothing keeps true.
 
-| Field | Usage |
-|-------|-------|
-| `monitor_id` | Monitor identification |
-| `brightness` | Brightness value (0-100) |
-| `vcp_code` | DDC VCP code |
-| `error_code` | Windows API error code |
-| `attempts` | Retry attempt count |
-| `duration_ms` | Operation timing |
+| Field | Carries |
+|-------|---------|
+| `error` | The error being reported, as `error:% = e`. By far the most common field. |
+| `monitor_id` | A `MonitorId`, as `:%` — never `:?`, which would print the serial |
+| `monitor` | A monitor rendered for a message where the full id is not wanted |
+| `brightness` | A percentage 0-100; `hardware_brightness` / `overlay_opacity` when both layers appear in one statement |
+| `error_code` | A raw Windows API error code |
+| `field`, `value`, `min`, `max`, `default` | Config validation: which key was wrong, what it held, and what replaced it |
+| `reason` | Why a decision went the way it did, where no error object exists |
+| `path` | A **file name only** — never a full path above `debug!`, see below |
+| `hotkey_id` | A registration id (1-4) |
+| `elapsed_seconds` | The one timing field in use |
+
+One inconsistency worth resolving on contact rather than propagating: the DDC retry path
+uses `attempt` / `max_attempts` while a few other statements use `attempts`.
 
 ### Never Log Sensitive Data
 
@@ -482,7 +526,7 @@ the clock, which is why the watchdog and refresh timing tests are deterministic.
 
 Thirteen of the `platform/windows/` files have tests, and most of them test only pure
 helpers — parsing, formatting, layout arithmetic. What is never tested is a live window, a
-real device, or a theme. Three files go further than pure helpers, deliberately, and they are
+real device, or a theme. Four files go further than pure helpers, deliberately, and they are
 the whole list:
 
 - `power.rs` calls `power_wnd_proc` directly to prove resume events reach the main thread.
@@ -491,6 +535,9 @@ the whole list:
 - `config_store.rs` drives real file I/O against a temp path, because the save-with-merge
   contract *is* filesystem behaviour and a fake would test nothing. Cheap and host-portable,
   unlike a window or a device.
+- `ddc_worker.rs` starts real OS threads through `DdcSupervisor::spawn`, because the thing
+  under test is the respawn budget and a fake supervisor would only be testing `RespawnGate`,
+  which `core/reconcile.rs` already covers directly.
 
 Anything else that needs a window, a device, or a theme belongs in the manual checklists in
 `docs/architecture.md`, not in a `#[test]`.

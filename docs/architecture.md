@@ -84,6 +84,7 @@ src/
 ├── lib.rs
 ├── error.rs              # Centralized error types
 ├── core/                 # Platform-agnostic logic
+│   ├── mod.rs            # Declares the core submodules; `edid` stays crate-internal
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
 │   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc,Set,Hk,Store>: message-driven orchestration behind the seams below, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
@@ -146,10 +147,13 @@ In `platform/windows/` and `main.rs`:
 
 In the docs:
 
-6. Four places name this set and all four are one edit: the seam list in the paragraph
-   above, the `controller.rs` line of the module tree, the seam enumeration under §Testing,
-   and the module map in `CLAUDE.md`. The §Testing copy is the one that was still saying
-   "four" long after the settings window shipped.
+6. Six places name this set, and they are one edit: the seam list in the paragraph above,
+   the `controller.rs` line of the module tree, the seam enumeration under §Testing, the
+   seam table in §14, the module doc comment at the top of `src/platform/mod.rs`, and the
+   module map in `CLAUDE.md`. Two of them have already rotted once: the §Testing copy still
+   said "four" long after the settings window shipped, and `platform/mod.rs` named only the
+   original four seams. Neither is reachable from the compiler, which is why they are
+   listed by name here.
 
 Note what is deliberately absent: no rule about how many tests a seam needs, and no coverage
 claim here — §Testing owns the unit-vs-manual boundary.
@@ -159,35 +163,35 @@ claim here — §Testing owns the unit-vs-manual boundary.
 Dedicated threads for I/O, main thread owns state and UI:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Main Thread                            │
-│  ┌───────────────────────────────────────────────────────┐  │
-│  │        Controller (owner, in core/controller.rs)      │  │
-│  │    - processes messages from all threads              │  │
-│  │    - owns MonitorState map                            │  │
-│  │    - updates overlay/OSD (UI always responsive)       │  │
-│  │    - sends DdcCommand to worker                       │  │
-│  │    - checks periodic/inactivity refresh triggers      │  │
-│  └───────────────────────────────────────────────────────┘  │
-│              ▲                              │                │
-│       recv() │                              │ send()         │
-│              │                              ▼                │
-└──────────────┼──────────────────────────────┼────────────────┘
-               │                              │
-      BrightnessMessage                  DdcCommand
-               │                              │
-    ┌──────────┼──────────┬──────────┐        │
-    │          │          │          │        │
-┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───┴───────────────────────────┐
-│  Hotkey   │ │  Power    │ │   Tray    │ │       DDC Worker Thread       │
-│  Thread   │ │  Thread   │ │  Thread   │ │  ┌───────────────────────┐    │
-│           │ │           │ │           │ │  │  - owns monitor HashMap│   │
-│ send()    │ │ send()    │ │ send()    │ │  │  - executes DDC I/O   │    │
-│  │        │ │  │        │ │  │        │ │  │  - sends results back │    │
-│  │        │ │  │        │ │  │        │ │  └───────────────────────┘    │
-└──┼────────┘ └──┼────────┘ └──┼────────┘ └───────────────────────────────┘
-   │             │             │                      │
-   └─────────────┴─────────────┴──────────────────────┘
+┌───────────────────────────────────────────────────────────────────────────┐
+│                               Main Thread                                 │
+│  ┌───────────────────────────────────────────────────────┐                │
+│  │        Controller (owner, in core/controller.rs)      │                │
+│  │    - processes messages from all threads              │                │
+│  │    - owns MonitorState map                            │                │
+│  │    - updates overlay/OSD (UI always responsive)       │                │
+│  │    - sends DdcCommand to worker                       │                │
+│  │    - checks periodic/inactivity refresh triggers      │                │
+│  └───────────────────────────────────────────────────────┘                │
+│             ▲                                             │               │
+│      recv() │                                             │ send()        │
+│             │                                             ▼               │
+└─────────────┼─────────────────────────────────────────────┼───────────────┘
+              │                                             │
+     BrightnessMessage                                 DdcCommand
+              │                                             │
+   ┌──────────┴──┬─────────────┬─────────────┐              │
+   │             │             │             │              │
+┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───────────┐ ┌───┴───────────────────────────┐
+│  Hotkey   │ │  Power    │ │   Tray    │ │ Settings  │ │       DDC Worker Thread       │
+│  Thread   │ │  Thread   │ │  Thread   │ │  Thread   │ │  ┌────────────────────────┐   │
+│           │ │           │ │           │ │(per open) │ │  │  - owns monitor HashMap│   │
+│ send()    │ │ send()    │ │ send()    │ │ send()    │ │  │  - executes DDC I/O    │   │
+│  │        │ │  │        │ │  │        │ │  │        │ │  │  - sends results back  │   │
+└──┼────────┘ └──┼────────┘ └──┼────────┘ └──┼────────┘ │  └────────────────────────┘   │
+   │             │             │             │          └───────────────────────────────┘
+   │             │             │             │                        │
+   └─────────────┴─────────────┴─────────────┴────────────────────────┘
               (all send BrightnessMessage)
 ```
 
@@ -197,6 +201,8 @@ Dedicated threads for I/O, main thread owns state and UI:
 - DDC worker thread keeps main thread responsive for OSD/overlay updates
 - Power thread listens for system resume events (sleep/hibernate wake)
 - Tray thread handles system tray icon and context menu
+- Settings thread hosts the settings window and its own `GetMessageW` loop, so a modal
+  dialog blocks only itself; it is spawned per open and exits with the window (§14)
 - Single owner of state eliminates data races at compile time
 - MPSC channels provide natural backpressure
 
@@ -340,17 +346,30 @@ assertion beside the constants pins the ordering and the width.
 Message-passing with single ownership:
 
 ```rust
-// Messages TO main thread (from hotkey thread, DDC worker, power thread, or tray thread)
+// Messages TO main thread (from the hotkey, DDC worker, power, tray, or settings thread)
 enum BrightnessMessage {
-    Adjust { monitor_id: Option<MonitorId>, delta: i8 },      // None = monitor under cursor
-    DdcSetResult { monitor_id, value, seq, success, error }, // DDC worker → main
-    DdcRefreshResult { generation, monitors, enumerated },   // DDC worker → main
+    // Brightness and cache
+    Adjust { monitor_id: Option<MonitorId>, delta: i8 },       // None = monitor under cursor
+    AdjustStep { direction: i8 },                              // One configured step, cursor monitor
+    DdcSetResult { monitor_id, value, seq, success, error },    // DDC worker → main
+    DdcRefreshResult { generation, monitors, enumerated },      // DDC worker → main
     Refresh,
-    SystemResumed,                                            // Power thread → main
-    TrayOpenSettings,                                         // Tray thread → main
-    TrayOpenLogFolder,                                        // Tray thread → main
-    TrayRequestQuit,                                          // Tray thread → main
-    TrayMenuOpening { reply_tx: Sender<TrayMenuData> },       // Tray thread ↔ main (request/response)
+    SystemResumed,                                             // Power thread → main
+
+    // Tray thread → main
+    TrayOpenSettings,
+    TrayOpenLogFolder,
+    TrayRequestQuit,
+    TrayMenuOpening { reply_tx: Sender<TrayMenuData> },         // request/response
+
+    // Settings window
+    SettingChanged(SettingChange),                             // Settings thread → main
+    HotkeyRebindResult { op, success, fallback_active, error }, // Hotkey thread → main (ack)
+    SettingsClosed,                                            // Flush pending save, end capture
+    HotkeyCaptureStarted,                                      // Suspend interception while capturing
+    HotkeyCaptureEnded,                                        // Capture ended with no new binding
+    OpenConfigFile,                                            // Shell side effect, like TrayOpenLogFolder
+
     Shutdown,
 }
 
@@ -439,25 +458,35 @@ Primary hotkey *registration* failures (e.g. the combination is already taken by
 An *invalid hotkey string* in the config is **not** fatal: it is repaired to the default with an error log at load time (`Config::repair_hotkeys`, fed by the platform parser), per the "Invalid Config Handling" contract in section 4. The parse step before registration remains only as a defensive guard.
 
 ```rust
-// Register primary hotkeys (fail = fatal error with message box)
-hotkey_manager.register(BRIGHTNESS_UP_ID, MOD_CTRL | MOD_SHIFT, VK_UP)?;
-hotkey_manager.register(BRIGHTNESS_DOWN_ID, MOD_CTRL | MOD_SHIFT, VK_DOWN)?;
+// In `apply_bindings`, used for the initial registration and every rebind.
+// A primary that will not register is fatal: the app cannot do its job.
+self.register_hotkey(BRIGHTNESS_UP_ID, up.modifiers, up.vk_code)
+    .map_err(|e| BrightnessError::hotkey_registration(up.to_string(), e.to_string()))?;
 
-// Attempt secondary hotkeys (fail = log and continue)
-if let Err(e) = hotkey_manager.register(BRIGHTNESS_UP_ALT_ID, 0, VK_BRIGHTNESS_UP) {
-    log::debug!("VK_BRIGHTNESS_UP not available: {}", e);
-}
-if let Err(e) = hotkey_manager.register(BRIGHTNESS_DOWN_ALT_ID, 0, VK_BRIGHTNESS_DOWN) {
-    log::debug!("VK_BRIGHTNESS_DOWN not available: {}", e);
+// The dedicated brightness keys are best-effort: another app or the shell may
+// already own them, or the low-level hook may be handling them instead.
+fn register_secondary_brightness_hotkeys(&mut self) {
+    if let Err(e) =
+        self.register_hotkey(BRIGHTNESS_UP_ALT_ID, HOT_KEY_MODIFIERS(0), VK_BRIGHTNESS_UP)
+    {
+        log::debug!(error:% = e; "Secondary brightness up hotkey not registered");
+    }
+    // … the same for BRIGHTNESS_DOWN_ALT_ID / VK_BRIGHTNESS_DOWN
 }
 ```
 
 **Technical Details:**
 - Dedicated listener thread calls `RegisterHotKey()` API
 - Receives `WM_HOTKEY` messages in thread message loop
-- Secondary brightness keys (`VK_BRIGHTNESS_UP`/`DOWN`) use `SetWindowsHookExW(WH_KEYBOARD_LL)`
-  to intercept before Shell handling (user-mode hook, not kernel-mode)
-- Hook is **opt-in** via `hotkeys.intercept_brightness_keys` config option (default: `false`)
+- Secondary brightness keys (`VK_BRIGHTNESS_UP`/`DOWN`) are, by default, registered through
+  the same plain `RegisterHotKey` path as the primaries
+  (`register_secondary_brightness_hotkeys`), so the Shell sees them first and the app only
+  gets what the Shell leaves over
+- Intercepting them *ahead of* the Shell instead requires the low-level keyboard hook
+  (`SetWindowsHookExW(WH_KEYBOARD_LL)` — a user-mode hook, not kernel-mode), which is
+  **opt-in** via `hotkeys.intercept_brightness_keys` (default: `false`). When the hook is
+  requested but cannot be installed, the dedicated keys fall back to plain registration and
+  the failure is reported as a notice rather than an error
 - Rationale for opt-in: Some antivirus software may flag low-level keyboard hooks;
   disabled by default to avoid false positives for users who don't need the feature
 
@@ -491,6 +520,10 @@ Location: `%APPDATA%\BrightnessControl\config.json`
   }
 }
 ```
+
+JSON rather than a binary or bespoke format for two reasons that both outlive the MVP: the
+file is human-readable, so a user chasing a problem can inspect and hand-edit it without a
+tool, and it is portable to Linux, where a future port would read the very same file.
 
 **`version` Field:** No migration logic exists yet. A value other than the current schema version logs a warning at load; the fields are interpreted as the current schema (unknown fields are dropped by the parser) and the value is reset to the current version, so later writes describe what the file actually contains.
 
@@ -549,7 +582,7 @@ a serde default fails the whole parse for every user whose file predates it, whi
 
 **Invalid Config Handling: Error and Use Default**
 
-When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: -5`):
+When a config value is invalid (e.g., `step_percent: 999`, `timeout_ms: 50`):
 - Log an error describing the invalid value and which default is being used
 - Use the default value for that field
 - Continue startup normally
@@ -579,14 +612,23 @@ unattended startup), while the dialog *clamps to the nearest bound* on focus los
 policy for a user mid-edit). Same never-fatal spirit, deliberately different mechanism — don't
 "fix" one to match the other.
 
-Example log output for invalid config:
+Two spinner ranges deliberately do *not* match the table, and the mismatch is the point: in
+`settings/layout.rs` the periodic-resync spinner is bounded 1–3600 and the inactivity-resync
+spinner 1–600, while the config accepts 0 for both. Zero means "disabled" there, and in the
+dialog that state is expressed by clearing the field's checkbox rather than by typing a `0`
+into it — so the spinner never has to produce a value whose meaning is not a duration. Every
+other range appears identically in all three places.
+
+Example log output for an invalid value, as the structured `key=value` sink renders it:
 ```
-[ERROR] Invalid config: brightness.step_percent=999 exceeds maximum 50, using default 5
-[ERROR] Invalid config: osd.timeout_ms=-5 below minimum 100, using default 1000
+[ERROR] Invalid config value, using default field=brightness.step_percent value=999 min=1 max=50 default=5
+[ERROR] Invalid config value exceeds maximum, using default field=refresh.periodic_seconds value=99999 max=3600 default=60
 ```
 
-- Human-readable for debugging
-- Portable to Linux
+A *type* error never reaches this path. `osd.timeout_ms` is a `u32`, so a hand-written `-5`
+fails in serde before `validate_and_fix` ever runs; the file is then treated as unparseable
+and goes down the backup-recovery route described below, not the repair route described here.
+Only a value that parses and then falls outside its range is repaired against the table.
 
 **Atomic Writes & Backup Recovery**
 
@@ -626,8 +668,9 @@ In the controller and the settings window, if the field is user-editable:
 6. A `ControlSpec` row in `settings/layout.rs`'s `CONTROLS` table — creation order is also
    tab order.
 7. For a numeric field, a `RangeSpec` in the same file's `RANGE_SPECS`. This is the third
-   place the range appears, after the validator and the table above; all three must agree,
-   and they enforce it differently on purpose (see the note under the table).
+   place the range appears, after the validator and the table above; all three must agree —
+   apart from a documented "0 means disabled" spinner exception — and they enforce it
+   differently on purpose (see the notes under the table).
 
 In the docs:
 
@@ -1133,8 +1176,11 @@ reconciles to the correct final value.
 **One restart policy, two supervised threads.** `RespawnGate`
 (`core/reconcile.rs`) holds the whole rule — deaths spaced apart restart
 indefinitely, a rapid crash loop within `RESPAWN_WINDOW` latches into a
-give-up state — and both the DDC worker and the hotkey thread run on that one
-instance of it. What differs is not the policy but the way back out:
+give-up state — and both the DDC worker and the hotkey thread are gated by it.
+One policy, two *separate* instances of it: `DdcSupervisor` owns its own gate as
+a field, `main.rs` builds a second one (`hotkey_gate`) for the hotkey thread.
+Nothing is shared between them, so one subsystem's crash loop can never spend
+the other's respawn budget. What differs is not the policy but the way back out:
 
 - The **DDC worker** has external recovery triggers, so `DdcSupervisor` calls
   `RespawnGate::reset()` when one fires (a brightness keypress or a system
@@ -1390,8 +1436,8 @@ user reopens Settings. A second "Settings" click while the window already
 exists focuses it instead of spawning a duplicate.
 
 **Message flow.** The controller stays the sole owner of the runtime
-`Config`. Three new host-fakeable seams join `OsdSink`/`OverlaySink`/`DdcPort`
-in `core/controller.rs`:
+`Config`. Three new host-fakeable seams join `OsdSink`/`OverlaySink`/`DdcPort`/
+`MonitorLocator` in `core/controller.rs`, bringing the total to seven:
 
 | Seam | Responsibility | Windows implementation |
 |---|---|---|
@@ -1578,8 +1624,9 @@ room. A released build needs 30px of it.
 **Module placement.** `src/platform/windows/settings/` is a directory
 module: `mod.rs` (module wiring, `pub use` re-exports), `layout.rs`
 (declarative control table + DPI geometry, no window logic), `window.rs`
-(window creation and the per-open `std::thread::spawn`, control wiring, the
-message loop, `SettingsSinkImpl`), `capture.rs` (the hotkey-capture control,
+(window creation and the per-open named `settings` thread — a
+`thread::Builder`, per the naming rule under Thread Conventions — control
+wiring, the message loop, `SettingsSinkImpl`), `capture.rs` (the hotkey-capture control,
 its own subclassed window class), `dark.rs` (all dark-mode painting: custom
 draw, subclassing, the `WM_CTLCOLOR*` colour table). Two supporting pieces
 live outside the directory, alongside the platform module's other
