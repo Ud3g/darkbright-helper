@@ -384,6 +384,11 @@ impl Config {
         found
     }
 
+    /// Walks `file` and `schema` in parallel, appending the dotted path of
+    /// every key present in the file but not in the schema to `found`.
+    ///
+    /// Recurses into objects that exist on both sides; `prefix` carries the
+    /// dotted path built so far, and is empty at the top level.
     fn collect_unknown_keys(
         file: &serde_json::Value,
         schema: &serde_json::Value,

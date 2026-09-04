@@ -324,10 +324,19 @@ everything" is neither followed nor worth following:
   ids and style bits in `settings/layout.rs` are the case this exists for.
 - **Exempt:** trait-impl boilerplate, serde `default_*` helpers, and tests.
 
-Compliance is partial and the gap is larger than it looks: roughly thirty functions, statics
-and type aliases carry no `///`, alongside a long tail of undocumented private struct fields —
-the subclass procedures in `settings/dark.rs` and the state statics in `settings/window.rs`
-are the densest clusters. That is debt to pay off on contact, not precedent to follow.
+Two things this scoping is worth stating outright, because a raw grep for items without a
+`///` badly over-reports against it:
+
+- **A module is documented by its own `//!`,** not by a `///` on the `mod` declaration. Every
+  file under `src/` opens with one, so the `mod` lines are not a gap — a grep for
+  undocumented `mod` declarations reports every module in the crate and means nothing.
+- **A field whose job the type's own doc comment already states needs nothing of its own.**
+  That is the usual case here, not the exception: `NumericField`'s doc walks through what
+  each of its fields is for, and `DdcSupervisor`'s names both of its senders. What is left after that test is the
+  handful of fields carrying an invariant the type doc does not reach.
+
+Function-local `const`s and `static`s inside an already-documented function are exempt on the
+same reasoning as a run of constants: the enclosing item carries the explanation.
 
 Include:
 - Brief description

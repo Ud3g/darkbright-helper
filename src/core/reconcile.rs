@@ -80,6 +80,9 @@ pub enum RespawnDecision {
 /// crash loops do.
 #[derive(Debug)]
 pub struct RespawnGate {
+    /// When the deaths still inside the sliding `window` happened. Pruned on
+    /// every check, so its length is the count the `max` below is tested
+    /// against.
     recent: Vec<Instant>,
     gave_up: bool,
     window: Duration,
@@ -152,9 +155,19 @@ pub enum RespawnOutcome {
 pub(crate) struct RefreshTracker {
     in_progress: bool,
     generation: u64,
+    /// When the in-flight refresh began, for the watchdog — `None` whenever
+    /// none is in flight, which is what makes a timeout unaskable then.
     started_at: Option<Instant>,
+    /// When the last refresh *completed*, which is what the periodic
+    /// interval is measured from. Unlike the two flags below, an abort
+    /// leaves it alone: nothing completed, so nothing restarts the clock.
     last_refresh: Instant,
+    /// Whether the last completed refresh found any monitors.
     last_successful: bool,
+    /// Whether the last completed refresh enumerated any monitor at all,
+    /// readable or not — the weaker of the two flags, since every monitor
+    /// counted by `last_successful` is also counted here. Read together with
+    /// it to tell "nothing plugged in" from "present but answering nothing".
     last_enumerated: bool,
 }
 

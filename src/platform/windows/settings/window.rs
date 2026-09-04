@@ -93,8 +93,14 @@ const _: () = {
 // Window Class Registration
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Window class of the settings window itself. Registered by this module
+/// rather than taken from a dialog resource — the window is a plain
+/// top-level, not a real dialog.
 const SETTINGS_CLASS_NAME: PCWSTR = w!("DarkBrightSettings");
 
+/// Ensures the settings window class is registered exactly once, and
+/// remembers the outcome so a second attempt reports the original failure
+/// rather than retrying.
 static REGISTER_CLASS_ONCE: OnceLock<Result<()>> = OnceLock::new();
 
 /// Registers the settings window class exactly once, including the
@@ -142,8 +148,13 @@ fn ensure_settings_class_registered() -> Result<PCWSTR> {
     Ok(SETTINGS_CLASS_NAME)
 }
 
+/// Window class of the two hotkey capture controls. A custom class rather
+/// than an `EDIT`, because the control has to swallow every key it is given
+/// instead of typing it.
 const CAPTURE_CLASS_NAME: PCWSTR = w!("DarkBrightHotkeyCapture");
 
+/// Same register-once-and-remember role as [`REGISTER_CLASS_ONCE`], for the
+/// capture control's class.
 static REGISTER_CAPTURE_CLASS_ONCE: OnceLock<Result<()>> = OnceLock::new();
 
 /// Registers the hotkey capture control's window class exactly once.
@@ -530,7 +541,7 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// Lives in a thread-local because the window's own dedicated thread is the
 /// only thread that ever touches it, and a plain `extern "system"` wndproc
 /// has no other way to reach it — the same pattern `tray.rs`/`osd.rs` use
-/// for their thread-local render/sender state. Every field except the eight
+/// for their thread-local render/sender state. Every field except the twelve
 /// `Cell`s is written once (at construction) and only ever read afterward,
 /// which is what lets every reader below use `RefCell::borrow` (any number
 /// of these can be held at once) instead of `borrow_mut` (which panics if a
@@ -541,6 +552,11 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 pub(super) struct WindowState {
     pub(super) hwnd: HWND,
     sender: Sender<BrightnessMessage>,
+    /// The slot [`SettingsSinkImpl`] posts through, shared with the
+    /// controller's thread. Held here so `WM_DESTROY` can clear it back to
+    /// `0` and let Settings be reopened — and clear it only if it still
+    /// holds *this* window, which is why the window needs the slot rather
+    /// than just its own handle.
     hwnd_slot: Arc<AtomicIsize>,
     /// The current-DPI regular-weight font, read live by every paint path
     /// that draws text with it (the hotkey capture fields, the combo's
@@ -594,6 +610,9 @@ pub(super) struct WindowState {
 }
 
 thread_local! {
+    /// The open window's [`WindowState`], or `None` before creation finishes
+    /// and after `WM_DESTROY`. Reached through [`with_window_state`], never
+    /// borrowed directly.
     static WINDOW_STATE: RefCell<Option<WindowState>> = const { RefCell::new(None) };
 
     /// Set for the duration of `apply_snapshot`, so an edit/checkbox/combo
@@ -854,6 +873,11 @@ pub(super) struct NumericField {
     last_posted: fn(&WindowState) -> &Cell<Option<u32>>,
 }
 
+/// The five numeric fields, in tab order. Table-driven so the edit, its
+/// spinner, its optional enabling checkbox and the message it produces stay
+/// declared in one place; both commit paths (`EN_KILLFOCUS` and
+/// `UDN_DELTAPOS`) look their field up here instead of matching on control
+/// ids, though the display and checkbox paths still address controls by id.
 pub(super) const NUMERIC_FIELDS: &[NumericField] = &[
     NumericField {
         edit_id: ID_STEP_EDIT,
@@ -1395,6 +1419,8 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
 /// `<a>` markup has exactly two: "Open config file" and "Open log folder".
 const FOOTER_LINK_COUNT: i32 = 2;
 
+/// Subclass id for the footer link. Ids only have to be unique per control,
+/// so this may repeat the ones `dark.rs` uses for its own subclasses.
 const FOOTER_LINK_SUBCLASS_ID: usize = 1;
 
 thread_local! {
@@ -1420,6 +1446,16 @@ fn install_footer_link_subclass(hwnd: HWND) {
     }
 }
 
+/// Subclass procedure for the footer `SysLink`: takes over Tab and Enter so
+/// both embedded links are reachable from the keyboard, which the control's
+/// own handling gets wrong past the first link (see the section comment
+/// above), and removes itself on `WM_NCDESTROY`.
+///
+/// # Safety
+///
+/// This is a Windows callback, invoked by the common-controls subclass
+/// dispatcher. The caller ensures `hwnd` is valid and that `wparam`/`lparam`
+/// match `msg`.
 unsafe extern "system" fn footer_link_subclass_proc(
     hwnd: HWND,
     msg: u32,

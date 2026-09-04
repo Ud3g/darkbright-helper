@@ -439,6 +439,15 @@ fn is_numeric_edit_id(id: u16) -> bool {
     )
 }
 
+/// The text colour a `STATIC` control should be drawn in, or `None` to leave
+/// it to the system.
+///
+/// Four groups differ: the hotkey status line is red in either theme, the
+/// hint and version labels are grey in both, a disabled numeric edit (which
+/// Windows re-routes through this path — see [`is_numeric_edit_id`]) is grey
+/// on the control background, and everything else follows the theme's
+/// ordinary text colour. In light mode only the first two are answered at
+/// all; the rest is left to the system.
 fn static_color(id: u16, dark: bool) -> Option<StaticColor> {
     if id == ID_HK_ERROR {
         return Some(StaticColor::Fixed(if dark {
@@ -704,6 +713,8 @@ fn checkbox_state_id(checked: bool, item_state: NMCUSTOMDRAW_DRAW_STATE_FLAGS) -
 // Numeric Edit Border (WM_NCPAINT subclass)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Subclass id for the numeric edits. Ids only have to be unique per
+/// control, so the three in this file may repeat each other's values.
 const EDIT_SUBCLASS_ID: usize = 1;
 
 /// Installs the numeric edits' border subclass. Called once per edit at
@@ -716,6 +727,14 @@ pub(super) fn install_edit_border_subclass(hwnd: HWND) {
     }
 }
 
+/// Subclass procedure for the numeric edits: hand-paints the border on
+/// `WM_NCPAINT` while dark mode is on, and removes itself on `WM_NCDESTROY`.
+///
+/// # Safety
+///
+/// This is a Windows callback, invoked by the common-controls subclass
+/// dispatcher. The caller ensures `hwnd` is valid and that `wparam`/`lparam`
+/// match `msg`.
 unsafe extern "system" fn edit_border_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -785,18 +804,31 @@ pub(super) fn paint_edit_border(hwnd: HWND) {
 // Combo Closed Face (WM_PAINT / WM_ERASEBKGND subclass)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Subclass id for the log-level combo; see [`EDIT_SUBCLASS_ID`].
 const COMBO_SUBCLASS_ID: usize = 2;
 
 /// Horizontal inset, in device pixels, between the combo's client edge and
 /// where its text is drawn — matches a native combo's own left margin.
 const COMBO_TEXT_INSET: i32 = 4;
 
+/// Installs the log-level combo's dark-mode painting subclass. Called once at
+/// control creation; like the edits' subclass it checks the live dark flag on
+/// every paint, so it needs no reinstalling when the theme changes.
 pub(super) fn install_combo_subclass(hwnd: HWND) {
     unsafe {
         let _ = SetWindowSubclass(hwnd, Some(combo_subclass_proc), COMBO_SUBCLASS_ID, 0);
     }
 }
 
+/// Subclass procedure for the log-level combo: fills its background and
+/// paints its closed state in the dark palette, and removes itself on
+/// `WM_NCDESTROY`.
+///
+/// # Safety
+///
+/// This is a Windows callback, invoked by the common-controls subclass
+/// dispatcher. The caller ensures `hwnd` is valid and that `wparam`/`lparam`
+/// match `msg`.
 unsafe extern "system" fn combo_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -1126,14 +1158,25 @@ fn draw_combo_text_fallback(hdc: HDC, mut rect: RECT, text: &str, color: u32, fo
 // Updown Spinner Buttons (WM_PAINT / WM_ERASEBKGND subclass)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Subclass id for the spinners; see [`EDIT_SUBCLASS_ID`].
 const UPDOWN_SUBCLASS_ID: usize = 3;
 
+/// Installs the spinners' dark-mode painting subclass. Called once per
+/// spinner at control creation, on the same terms as the other two.
 pub(super) fn install_updown_subclass(hwnd: HWND) {
     unsafe {
         let _ = SetWindowSubclass(hwnd, Some(updown_subclass_proc), UPDOWN_SUBCLASS_ID, 0);
     }
 }
 
+/// Subclass procedure for the up-down spinners: hand-paints them in the dark
+/// palette, and removes itself on `WM_NCDESTROY`.
+///
+/// # Safety
+///
+/// This is a Windows callback, invoked by the common-controls subclass
+/// dispatcher. The caller ensures `hwnd` is valid and that `wparam`/`lparam`
+/// match `msg`.
 unsafe extern "system" fn updown_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -1172,6 +1215,9 @@ unsafe extern "system" fn updown_subclass_proc(
     }
 }
 
+/// Hand-paints a spinner in the dark palette: control background, then an
+/// arrow glyph in each half. Replaces the control's own painting entirely,
+/// which is why it also draws the arrows the theme would otherwise supply.
 fn paint_updown(hwnd: HWND) {
     let mut ps = PAINTSTRUCT::default();
     let hdc = unsafe { BeginPaint(hwnd, &raw mut ps) };

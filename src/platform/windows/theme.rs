@@ -74,9 +74,15 @@ const APP_MODE_ALLOW_DARK: i32 = 1;
 /// The shape `GetProcAddress` hands back before it is given its real type.
 type RawProc = unsafe extern "system" fn() -> isize;
 
+/// Signature of ordinal 135: takes a `PreferredAppMode`, returns the previous
+/// one. Only [`APP_MODE_ALLOW_DARK`] is ever passed.
 type SetPreferredAppModeFn = unsafe extern "system" fn(i32) -> i32;
+/// Signature of ordinal 133: opts one window into dark mode, returns the
+/// previous setting for it.
 type AllowDarkModeForWindowFn = unsafe extern "system" fn(HWND, BOOL) -> BOOL;
+/// Signature of ordinal 136: takes and returns nothing.
 type FlushMenuThemesFn = unsafe extern "system" fn();
+/// Signature of ordinal 104: takes and returns nothing.
 type RefreshImmersiveColorPolicyStateFn = unsafe extern "system" fn();
 
 /// The entry points, resolved together or not at all.
