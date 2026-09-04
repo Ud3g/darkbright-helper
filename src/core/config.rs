@@ -57,7 +57,7 @@ const REFRESH_INACTIVITY_MAX: u32 = 600;
 // Each flag maps 1:1 to one of the ten independently toggleable settings
 // fields below; a state machine or paired enums would not fit a set of
 // independent booleans that are OR'd and copied field-by-field.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SettingsDirty {
     /// `brightness.step_percent` was changed.

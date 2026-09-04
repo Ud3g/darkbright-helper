@@ -486,7 +486,7 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
     let width = client_rect.right - client_rect.left;
     // Approximate text width (~7 pixels per character at this font size)
     // Scaling approximation: original was 7px for 18pt font. Ratio ~0.38
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let approx_char_width = (f64::from(font_size) * 0.38).round() as i32;
     let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
 

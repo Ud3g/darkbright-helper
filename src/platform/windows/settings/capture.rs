@@ -194,7 +194,7 @@ fn has_required_modifier(modifiers: HOT_KEY_MODIFIERS) -> bool {
 /// structs — there is no hidden state machine or invalid combination to
 /// model instead; a two-variant-enum-per-field refactor would just be this
 /// same struct with extra ceremony.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ModifierFlags {
     ctrl: bool,

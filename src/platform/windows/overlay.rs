@@ -267,7 +267,7 @@ pub(crate) fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
 
     // Convert to 0-255 safely
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity * 255.0).round() as u8;
 
     unsafe {

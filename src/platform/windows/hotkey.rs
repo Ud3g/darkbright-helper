@@ -208,13 +208,13 @@ unsafe extern "system" fn low_level_keyboard_proc(
     if code == HC_ACTION {
         // Check for key-down events only (ignore key-up to avoid double-firing)
         // Message types (WM_KEYDOWN, WM_SYSKEYDOWN) are well-defined u32 constants.
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(clippy::cast_possible_truncation)]
         let msg_type = wparam.0 as u32;
         if msg_type == WM_KEYDOWN || msg_type == WM_SYSKEYDOWN {
             // SAFETY: When code == HC_ACTION, lparam points to a valid KBDLLHOOKSTRUCT
             let kb_struct = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
             // Virtual key codes are 16-bit values (0x00-0xFF typical, max 0xFFFF).
-            #[allow(clippy::cast_possible_truncation)]
+            #[expect(clippy::cast_possible_truncation)]
             let vk_code = VIRTUAL_KEY(kb_struct.vkCode as u16);
 
             // Check if this is a brightness key we want to intercept
@@ -652,7 +652,7 @@ impl HotkeyManager {
                     // WPARAM for WM_HOTKEY is the identifier of the hotkey; the
                     // cast cannot lose anything because we only ever register
                     // small positive IDs (1-4).
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    #[expect(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                     let id = msg.wParam.0 as i32;
                     log::debug!(hotkey_id = id; "Received WM_HOTKEY");
 
@@ -769,7 +769,7 @@ impl std::fmt::Display for ParsedHotkey {
 // so the caller hands over the shared cells and the startup values outright
 // instead of keeping borrows alive across the thread boundary, even though
 // the body itself only ever reads through most of them afterward.
-#[allow(clippy::needless_pass_by_value)]
+#[expect(clippy::needless_pass_by_value)]
 pub fn run_hotkey_thread(
     up: String,
     down: String,

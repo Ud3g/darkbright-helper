@@ -452,7 +452,7 @@ fn start_hotkey_thread(
 
 // Sequential startup wiring (DPI, config, threads, controller, main loop,
 // cleanup) is inherently long and reads clearest kept in one place.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn main() {
     // Declare DPI awareness before creating any windows.
     // This prevents Windows from bitmap-stretching our UI at non-100% scaling.

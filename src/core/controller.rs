@@ -205,7 +205,7 @@ enum SaveFailureStage {
 // The bools below are independent latches/flags (degraded-subsystem state,
 // dialog session state), not a state machine with mutually exclusive modes —
 // an enum would not fit them any better than it does `SettingsDirty`.
-#[allow(clippy::struct_excessive_bools)]
+#[expect(clippy::struct_excessive_bools)]
 pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     /// Current state (brightness, overlay, absence evidence) per monitor.
     states: HashMap<MonitorId, MonitorState>,
@@ -288,7 +288,7 @@ where
     Store: ConfigStore,
 {
     /// Creates a controller; `now` stamps the activity/health/refresh baselines.
-    #[allow(clippy::too_many_arguments)] // one independent seam per parameter
+    #[expect(clippy::too_many_arguments)] // one independent seam per parameter
     #[must_use]
     pub fn new(
         config: Config,
@@ -421,7 +421,7 @@ where
     pub(crate) fn settings_snapshot(&self) -> SettingsSnapshot {
         let opacity_percent = (self.config.osd.opacity * 100.0).round().clamp(10.0, 100.0);
         // The clamp above bounds this to 10.0..=100.0, well within u8 range.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let osd_opacity_percent = opacity_percent as u8;
 
         SettingsSnapshot {
@@ -890,7 +890,7 @@ where
     // The caller destructures an owned `enumerated: Vec<MonitorId>` straight out
     // of the refresh-result message; taking it by value here avoids an extra
     // borrow indirection even though this function only ever reads it.
-    #[allow(clippy::needless_pass_by_value)]
+    #[expect(clippy::needless_pass_by_value)]
     fn handle_ddc_refresh_result(
         &mut self,
         generation: u64,

@@ -786,7 +786,7 @@ fn refresh_open_menu() {
 
     for (index, text) in updates {
         // Menu IDs are u32; index won't exceed monitor count (typically < 10)
-        #[allow(clippy::cast_possible_truncation)]
+        #[expect(clippy::cast_possible_truncation)]
         let menu_id = MENU_ID_MONITOR_BASE + (index as u32);
         if let Err(e) = set_menu_item_text(hmenu, menu_id, &text) {
             let _ = with_session(|session| session.refreshing = false);
@@ -815,7 +815,7 @@ fn append_separator(hmenu: HMENU) {
 /// * `hwnd` - Window handle for menu ownership and message routing.
 // Building the menu is one straight-line sequence of rows in display order;
 // splitting it into helpers would only scatter that order.
-#[allow(clippy::too_many_lines)]
+#[expect(clippy::too_many_lines)]
 fn show_context_menu(hwnd: HWND) {
     // The shell can post a second right-click callback that the modal loop
     // dispatches; a nested menu would take over the session slot and the
@@ -846,7 +846,7 @@ fn show_context_menu(hwnd: HWND) {
             let warn_lines = warning_menu_lines(data.warnings);
             for (index, line) in warn_lines.iter().enumerate() {
                 // Menu IDs are u32; the warning count is at most 2
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_WARNING_BASE + (index as u32);
                 append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, line);
             }
@@ -858,7 +858,7 @@ fn show_context_menu(hwnd: HWND) {
             for (index, monitor) in data.monitors.iter().enumerate() {
                 let monitor_text = monitor_menu_line(monitor);
                 // Menu IDs are u32; index won't exceed monitor count (typically < 10)
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_MONITOR_BASE + (index as u32);
                 append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, &monitor_text);
                 row_names.push(monitor.display_name.clone());
@@ -887,7 +887,7 @@ fn show_context_menu(hwnd: HWND) {
             let lines = usage_menu_lines(&hotkey_up, &hotkey_down);
             for (index, line) in lines.iter().enumerate() {
                 // Menu IDs are u32; this block is exactly three rows.
-                #[allow(clippy::cast_possible_truncation)]
+                #[expect(clippy::cast_possible_truncation)]
                 let menu_id = MENU_ID_USAGE_BASE + (index as u32);
                 append_menu_item(hmenu, MF_STRING | MF_GRAYED, menu_id, line);
             }
@@ -962,7 +962,7 @@ fn show_context_menu(hwnd: HWND) {
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
 
         // Handle selection (menu item IDs are non-negative)
-        #[allow(clippy::cast_sign_loss)]
+        #[expect(clippy::cast_sign_loss)]
         let menu_cmd = cmd.0 as u32;
         handle_menu_selection(menu_cmd);
     }
@@ -1112,7 +1112,7 @@ fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
 
     // The low word of lparam contains the mouse message
     // Masking with 0xFFFF ensures the value fits in u32
-    #[allow(clippy::cast_possible_truncation)]
+    #[expect(clippy::cast_possible_truncation)]
     let mouse_msg = (lparam.0 & 0xFFFF).cast_unsigned() as u32;
 
     match mouse_msg {
@@ -1142,7 +1142,7 @@ pub struct TrayIcon {
     hwnd: SafeHwnd,
     /// Handle to the loaded icon resource.
     /// Kept alive to prevent Windows from releasing the icon while the tray is active.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     icon_handle: HICON,
 }
 

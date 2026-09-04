@@ -32,7 +32,7 @@ const MUTEX_NAME: PCWSTR = w!("Local\\darkbright-helper-single-instance");
 pub struct SingleInstance {
     // Held solely to keep the mutex handle open for the process lifetime; the
     // wrapped `Owned<HANDLE>` closes it on drop.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     handle: Owned<HANDLE>,
 }
 
