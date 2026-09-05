@@ -93,7 +93,6 @@ unsafe extern "system" fn monitor_enum_proc(
 ///
 /// Ensures that `DestroyPhysicalMonitors` is called when the handle goes out of scope.
 pub struct PhysicalMonitor {
-    // The raw Windows structure containing the handle and description.
     inner: PHYSICAL_MONITOR,
 }
 
@@ -175,7 +174,6 @@ pub fn get_physical_monitors(hmonitor: HMONITOR) -> Result<Vec<PhysicalMonitor>>
         })?;
     }
 
-    // Wrap them in RAII structs
     Ok(physical_monitors
         .into_iter()
         .map(|inner| PhysicalMonitor { inner })
@@ -399,7 +397,6 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
         ..Default::default()
     };
 
-    // We need to call EnumDisplayDevices with the device name from MonitorInfo
     unsafe {
         if !EnumDisplayDevicesW(PCWSTR(mi.szDevice.as_ptr()), 0, &raw mut dd, 0).as_bool() {
             return Err(last_error_as_brightness_error("EnumDisplayDevicesW"));
@@ -480,7 +477,6 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
     while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &raw mut devinfo_data).is_ok() } {
         index += 1;
 
-        // Get Driver Key (SPDRP_DRIVER)
         // Use a u16 buffer for WCHAR alignment
         let mut buffer = [0u16; 256];
         let mut required_size = 0;
@@ -522,7 +518,6 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
                 log::trace!(driver_key:% = driver_key; "Checking device driver key");
 
                 if driver_key.eq_ignore_ascii_case(target_driver_key) {
-                    // Found it! Read EDID from registry.
                     return read_edid_from_registry(hdevinfo, &devinfo_data);
                 }
             }
@@ -570,7 +565,6 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
 
     let _safe_hkey = SafeHKey(hkey);
 
-    // Read "EDID" value
     let value_name = windows::core::w!("EDID");
     let mut data_type = REG_VALUE_TYPE::default();
     let mut data_len = 0;

@@ -102,7 +102,6 @@ fn handle_power_broadcast(wparam: WPARAM) {
             notify_main(BrightnessMessage::SystemResumed);
         }
         _ => {
-            // Other power events we don't care about
             log::trace!(event_type = event_type; "Power broadcast event ignored");
         }
     }

@@ -112,7 +112,6 @@ impl DdcWorker {
             }
         };
 
-        // Send result back to main thread
         let msg = BrightnessMessage::DdcSetResult {
             monitor_id: monitor_id.clone(),
             value,
@@ -133,18 +132,15 @@ impl DdcWorker {
     fn handle_refresh_all(&mut self, generation: u64) {
         log::debug!("Refreshing all monitors");
 
-        // Clear existing state
         self.monitors.clear();
 
         let mut results: Vec<(MonitorId, u8)> = Vec::new();
         let mut enumerated: Vec<MonitorId> = Vec::new();
 
-        // Enumerate monitors
         let hmonitors = match enumerate_monitors() {
             Ok(h) => h,
             Err(e) => {
                 log::error!(error:% = e; "Failed to enumerate monitors");
-                // Send empty result
                 self.send_refresh_result(generation, results, enumerated);
                 return;
             }
@@ -166,20 +162,17 @@ impl DdcWorker {
         results: &mut Vec<(MonitorId, u8)>,
         enumerated: &mut Vec<MonitorId>,
     ) -> crate::Result<()> {
-        // Get monitor ID from EDID
         let monitor_id = get_monitor_id(hmonitor)?;
         // Identified ⇒ physically present. Push before opening the physical
         // handle: a handle-open or brightness-read failure below must count
         // as unreadable, not as absent from the topology.
         enumerated.push(monitor_id.clone());
 
-        // Get physical monitors for DDC
         let physical_monitors = get_physical_monitors(hmonitor)?;
 
         for p_mon in physical_monitors {
             let mut ddc_mon = DdcMonitor::new(p_mon, monitor_id.clone());
 
-            // Read current brightness
             match ddc_mon.get_brightness() {
                 Ok(brightness) => {
                     // The monitor's declared range travels with the value: a

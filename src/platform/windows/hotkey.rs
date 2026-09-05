@@ -206,7 +206,6 @@ unsafe extern "system" fn low_level_keyboard_proc(
         return unsafe { CallNextHookEx(None, code, wparam, lparam) };
     }
 
-    // Only process if code indicates we should (HC_ACTION = 0)
     if code == HC_ACTION {
         // Check for key-down events only (ignore key-up to avoid double-firing)
         // Message types (WM_KEYDOWN, WM_SYSKEYDOWN) are well-defined u32 constants.
@@ -219,7 +218,6 @@ unsafe extern "system" fn low_level_keyboard_proc(
             #[expect(clippy::cast_possible_truncation)]
             let vk_code = VIRTUAL_KEY(kb_struct.vkCode as u16);
 
-            // Check if this is a brightness key we want to intercept
             let direction = if vk_code == VK_BRIGHTNESS_UP {
                 Some(1)
             } else if vk_code == VK_BRIGHTNESS_DOWN {
@@ -229,7 +227,6 @@ unsafe extern "system" fn low_level_keyboard_proc(
             };
 
             if let Some(direction) = direction {
-                // Try to send brightness adjustment via thread-local context
                 let sent = with_hook_context(|ctx| {
                     // No routine logging here: with file logging at debug, a
                     // log call does mutex-guarded disk I/O, and a slow write
@@ -249,7 +246,6 @@ unsafe extern "system" fn low_level_keyboard_proc(
         }
     }
 
-    // Pass unhandled keys to the next hook in the chain
     unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
@@ -399,10 +395,8 @@ impl HotkeyManager {
     ///
     /// Returns `BrightnessError::WindowsApi` if `SetWindowsHookExW` fails.
     fn install_brightness_hook(&mut self) -> Result<()> {
-        // Initialize thread-local context for the hook callback
         set_hook_context(self.sender.clone());
 
-        // Install the low-level keyboard hook
         // SAFETY: We pass a valid callback function. The hook handle will be
         // stored in SafeHook which ensures cleanup on drop.
         let hook = unsafe {
@@ -744,7 +738,6 @@ impl std::fmt::Display for ParsedHotkey {
             parts.push("Win");
         }
 
-        // Find key name from VK code
         let key_name = VK_TO_NAME
             .iter()
             .find(|(_, vk)| *vk == self.vk_code)
@@ -1127,13 +1120,11 @@ pub fn parse_hotkey(s: &str) -> Result<ParsedHotkey> {
             continue;
         }
 
-        // Check if it's a modifier
         if let Some(&modifier) = MODIFIER_MAP.get(part.as_str()) {
             modifiers |= modifier;
             continue;
         }
 
-        // Check if it's a key
         if let Some(&vk) = KEY_MAP.get(part.as_str()) {
             if vk_code.is_some() {
                 return Err(BrightnessError::config_invalid(
@@ -1145,7 +1136,6 @@ pub fn parse_hotkey(s: &str) -> Result<ParsedHotkey> {
             continue;
         }
 
-        // Unknown part
         return Err(BrightnessError::config_invalid(
             "hotkey",
             format!("unknown key or modifier: '{part}'"),

@@ -34,7 +34,6 @@ pub mod single_instance;
 mod theme;
 pub(crate) mod tray;
 
-// Re-export commonly used types
 pub use config_store::WindowsConfigStore;
 pub use ddc_worker::DdcSupervisor;
 pub use power::PowerEventListener;

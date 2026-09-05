@@ -376,7 +376,6 @@ where
 
         let generation = self.refresh.begin(now);
 
-        // Send refresh command to worker (non-blocking).
         if let Err(e) = self.ddc.send(DdcCommand::RefreshAll { generation }) {
             log::error!(error:% = e; "Failed to send refresh command to DDC worker");
             self.refresh.abort();
@@ -392,7 +391,7 @@ where
     pub fn check_periodic_refresh(&mut self, now: Instant) {
         let periodic_seconds = self.config.refresh.periodic_seconds;
 
-        // Skip if periodic refresh is disabled (0) or refresh already in progress.
+        // A configured 0 disables periodic refresh.
         if periodic_seconds == 0 || self.refresh.in_progress() {
             return;
         }
@@ -1024,7 +1023,7 @@ where
     fn check_inactivity_refresh(&mut self, now: Instant) {
         let inactivity_seconds = self.config.refresh.inactivity_seconds;
 
-        // Skip if inactivity refresh is disabled (0) or refresh already in progress.
+        // A configured 0 disables inactivity refresh.
         if inactivity_seconds == 0 || self.refresh.in_progress() {
             return;
         }
@@ -1118,20 +1117,18 @@ where
             self.clear_degraded();
         }
 
-        // If last refresh failed, trigger a new one (user activity indicates they're back).
+        // Activity means the user is back, so a refresh that previously found
+        // nothing is worth retrying.
         if !self.refresh.last_successful() && !self.refresh.in_progress() {
             log::debug!("Triggering refresh on user activity (last refresh found no monitors)");
             self.handle_refresh(now);
         }
 
-        // Update activity timestamp for inactivity-based refresh tracking
         self.last_activity = now;
 
-        // 1. Determine target monitor and handle
         // The handle is needed for OSD and overlay positioning.
         let handle = self.locator.monitor_under_cursor()?;
 
-        // If no ID was provided, identify the monitor under the cursor.
         // A cache avoids repeated slow identity lookups.
         let target_id = match monitor_id {
             Some(id) => id,
@@ -1146,7 +1143,6 @@ where
             }
         };
 
-        // 2. Find state for this monitor
         let Some(state) = self.states.get_mut(&target_id) else {
             // Recovery after pruning: a press on an unknown monitor dispatches
             // a refresh (at most one in flight) so a following press works in
@@ -1160,7 +1156,6 @@ where
             ));
         };
 
-        // 3. Calculate new brightness
         let old_hardware = state.effective_brightness();
         let old_overlay = state.overlay_opacity;
 
@@ -1191,17 +1186,16 @@ where
             "Attempting brightness adjustment"
         );
 
-        // 4. Optimistic update (only set pending if hardware is changing)
+        // Optimistic: state advances now, the DDC result reconciles it later.
         let seq = self.next_seq;
         if new_hardware != old_hardware {
             self.next_seq += 1;
             state.set_pending(new_hardware, seq, now);
         }
 
-        // 5. Update overlay (software layer is immediately effective). Commit
-        // the opacity only once the platform call succeeds, so a failed
-        // update cannot leave the state claiming an opacity the window never
-        // received.
+        // The overlay takes effect immediately, but the opacity is committed to
+        // state only once the platform call succeeds: a failed update must not
+        // leave the state claiming an opacity the window never received.
         if new_overlay != old_overlay
             && let Err(e) = self.overlay_update(&target_id, handle, new_overlay)
         {
@@ -1227,11 +1221,11 @@ where
         };
         state.overlay_opacity = new_overlay;
 
-        // 6. Show or update OSD with optimistic values. An OSD failure is
-        // logged, not propagated: the OSD is feedback only, and bailing out
-        // between set_pending and the DDC send would leave a pending with no
-        // command in flight — the watchdog would then misread it as a set
-        // timeout and count a healthy worker toward the hung-DDC latch.
+        // An OSD failure is logged, not propagated: the OSD is feedback only,
+        // and bailing out between set_pending and the DDC send would leave a
+        // pending with no command in flight — the watchdog would then misread
+        // it as a set timeout and count a healthy worker toward the hung-DDC
+        // latch.
         self.osd_monitor = Some(target_id.clone());
         let osd_result = if self.osd.is_visible() {
             self.osd.update(state)
@@ -1242,7 +1236,6 @@ where
             log::error!(error:% = e; "OSD update failed; continuing adjustment");
         }
 
-        // 7. Send DDC command to worker (non-blocking)
         if new_hardware == old_hardware {
             log::debug!(monitor_id:% = target_id, old_overlay = old_overlay, new_overlay = new_overlay; "Adjusting overlay only");
         } else {
@@ -1541,7 +1534,6 @@ where
     /// Generates display names with duplicate suffixes (e.g., "Dell U2722D #1")
     /// when multiple monitors with identical manufacturer and model are connected.
     fn build_tray_menu_data(&self) -> TrayMenuData {
-        // Collect monitor IDs and generate unique display names
         let monitor_ids: Vec<MonitorId> = self.states.keys().cloned().collect();
         let display_names = generate_display_names(&monitor_ids);
 

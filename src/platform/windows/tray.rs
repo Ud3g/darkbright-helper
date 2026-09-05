@@ -371,13 +371,13 @@ fn request_menu_data(timeout: Duration) -> Option<TrayMenuData> {
 /// Returns `BrightnessError::TrayIconCreation` if the icon cannot be loaded
 /// from either source.
 fn load_tray_icon() -> Result<HICON> {
-    // Try loading from embedded resource first
     if let Ok(icon) = load_icon_from_resource() {
         log::debug!("Loaded tray icon from embedded resource");
         return Ok(icon);
     }
 
-    // Fall back to loading from file (development mode)
+    // File fallback for builds run without the embedded resource (a dev run
+    // from the target dir).
     if let Ok(icon) = load_icon_from_file() {
         log::debug!("Loaded tray icon from file");
         return Ok(icon);
@@ -395,7 +395,6 @@ fn load_icon_from_resource() -> Result<HICON> {
             BrightnessError::tray_icon_creation(format!("GetModuleHandleW failed: {}", e.code().0))
         })?;
 
-        // Load icon from resource by ID
         let handle = LoadImageW(
             Some(hinstance.into()),
             PCWSTR(IDI_APP_ICON as *const u16),
@@ -416,7 +415,6 @@ fn load_icon_from_resource() -> Result<HICON> {
 fn load_icon_from_file() -> Result<HICON> {
     use std::path::PathBuf;
 
-    // Try to find the icon file relative to the executable
     let icon_path = std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(PathBuf::from))
@@ -424,7 +422,6 @@ fn load_icon_from_file() -> Result<HICON> {
         .or_else(|| Some(PathBuf::from("res/icon.ico")))
         .unwrap();
 
-    // Convert path to wide string
     let path_str = icon_path.to_string_lossy();
     let wide_path: Vec<u16> = path_str.encode_utf16().chain(std::iter::once(0)).collect();
 
@@ -645,7 +642,8 @@ fn create_notify_icon_data(
         ..Default::default()
     };
 
-    // Set tooltip text (szTip is a fixed-size array)
+    // `szTip` is a fixed-size array: the text is truncated to fit, leaving
+    // room for the terminator.
     let tooltip_wide: Vec<u16> = tooltip.encode_utf16().collect();
     let copy_len = tooltip_wide.len().min(nid.szTip.len() - 1);
     nid.szTip[..copy_len].copy_from_slice(&tooltip_wide[..copy_len]);
@@ -845,13 +843,11 @@ fn show_context_menu(hwnd: HWND) {
     theme::refresh_menu_theme();
 
     unsafe {
-        // Create popup menu
         let Ok(hmenu) = CreatePopupMenu() else {
             log::error!(error_code = super::get_last_error_code(); "Failed to create popup menu");
             return;
         };
 
-        // Request current monitor data from main thread
         let menu_data = request_menu_data(MENU_DATA_TIMEOUT);
 
         let mut row_names: Vec<String> = Vec::new();
@@ -870,7 +866,6 @@ fn show_context_menu(hwnd: HWND) {
                 append_separator(hmenu);
             }
 
-            // Monitor info rows (disabled/non-clickable)
             for (index, monitor) in data.monitors.iter().enumerate() {
                 let monitor_text = monitor_menu_line(monitor);
                 // Menu IDs are u32; index won't exceed monitor count (typically < 10)
@@ -914,12 +909,10 @@ fn show_context_menu(hwnd: HWND) {
         append_menu_item(hmenu, MF_STRING, MENU_ID_OPEN_LOGS, "Open Log Folder");
         append_menu_item(hmenu, MF_STRING, MENU_ID_QUIT, &format!("Quit {APP_NAME}"));
 
-        // Version line (grayed, informational)
         append_separator(hmenu);
         let version_text = format!("{APP_NAME} v{}", version_string());
         append_menu_item(hmenu, MF_STRING | MF_GRAYED, MENU_ID_VERSION, &version_text);
 
-        // Get cursor position for menu placement
         let mut cursor_pos = POINT::default();
         if GetCursorPos(&raw mut cursor_pos).is_err() {
             log::warn!(error_code = super::get_last_error_code(); "GetCursorPos failed, using default position");
@@ -954,7 +947,6 @@ fn show_context_menu(hwnd: HWND) {
             );
         }
 
-        // Show menu and wait for selection
         let cmd = TrackPopupMenu(
             hmenu,
             TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD,
@@ -1223,7 +1215,6 @@ impl TrayIcon {
         // Store sender in thread-local storage for window procedure access
         set_tray_sender(sender);
 
-        // Load the application icon
         let icon_handle = load_tray_icon()?;
 
         // Derive the warning variant; on failure the base icon doubles as the
@@ -1242,7 +1233,6 @@ impl TrayIcon {
             });
         });
 
-        // Register the tray icon with the shell
         add_tray_icon(hwnd, icon_handle)?;
 
         Ok(Self {
@@ -1273,17 +1263,13 @@ impl TrayIcon {
                     return Err(last_error_as_brightness_error("GetMessageW"));
                 }
                 0 => {
-                    // WM_QUIT received
                     log::info!("Tray message loop received WM_QUIT");
                     break;
                 }
-                _ => {
-                    // Process the message
-                    unsafe {
-                        let _ = TranslateMessage(&raw const msg);
-                        DispatchMessageW(&raw const msg);
-                    }
-                }
+                _ => unsafe {
+                    let _ = TranslateMessage(&raw const msg);
+                    DispatchMessageW(&raw const msg);
+                },
             }
         }
 
@@ -1327,7 +1313,6 @@ impl TrayStatusHandle {
 
 impl Drop for TrayIcon {
     fn drop(&mut self) {
-        // Remove tray icon from notification area
         remove_tray_icon(self.hwnd.as_raw());
         log::debug!("TrayIcon dropped");
     }
