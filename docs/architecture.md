@@ -305,8 +305,13 @@ exit is the join. Only the DDC worker is asked to stop (`Controller::shutdown_wo
 DDC transaction in flight is not cut mid-write); the tray, hotkey, power and settings threads
 are simply left to die with the process. A thread blocked in `GetMessageW` would make a join
 a deadlock, and one hotkey spawn is already abandoned on purpose when it fails to report in
-time — see `start_hotkey_thread` in `main.rs` for that case. A thread that genuinely needs
-joining needs a design discussion first.
+time — see `start_hotkey_thread` in `main.rs` for that case. That abandoned spawn is a live
+writer, not a dead one: the hotkey thread id and command queue are shared cells (the id is
+0 until a thread signals ready and reset to 0 when it exits, so a rebind against a missing
+thread ordinarily fails cleanly), and a spawn that finishes registering after its deadline
+still publishes into those same cells. The clean-failure property is therefore a strong
+default, not an absolute guarantee. A thread that genuinely needs joining needs a design
+discussion first.
 
 **`WM_APP` messages are allocated per receiving window class, and the one
 thread-addressed message is the exception that needs a guard.** Three modules define custom
@@ -1405,6 +1410,13 @@ and what keeps the rows no wider than the monitor status lines above them.
 - The rows carry no dark-mode handling of their own: they are part of the menu, which already follows the system setting (see Menu Theming above)
 - The bindings arrive with each `TrayMenuOpening` reply, so a rebind shows up the next time the menu opens; if the request times out, the tray thread keeps a thread-local copy of the last pair it did receive and shows that rather than nothing
 - Disabled (`MF_GRAYED`) throughout — informational, never clickable
+- The live refresh of the monitor rows above decides whether a row still means the same
+  monitor by comparing the display-name vector between polls, and gives up (silently, at
+  `debug`) if the vector differs. That rests on a contract in `core/state.rs`: display-name
+  generation sorts by (manufacturer, model, serial) before assigning `#N` suffixes, so the
+  numbering is independent of the caller's `HashMap` iteration order and two identical
+  panels cannot swap numbers between one reading and the next. Both that sort and the one
+  ordering the menu rows have to stay stable together.
 
 A modeless window held these two lines before, opened from a "Usage" menu item.
 It was removed with the move: a window class, centring, focus handling and a
@@ -1466,7 +1478,12 @@ applies without the hotkey thread knowing about it. Saves are debounced
 dialog session actually touched are marked dirty, and a run that never opens
 the dialog never rewrites `config.json`. Close and quit flush a pending save
 immediately regardless of the debounce window — the flush itself is still
-dirty-gated, so a session with nothing to save still writes nothing.
+dirty-gated, so a session with nothing to save still writes nothing. When a
+hotkey rebind fails and the controller reverts the hotkey fields, the dirty
+flags the dialog just set are deliberately left set: the reverted config is
+what belongs on disk, so saving it is a no-op if nothing else was pending and
+correct if an earlier, still-unsaved change sits in the same fields — clearing
+the flags would silently drop that earlier change.
 
 **Merge-on-external-change.** `WindowsConfigStore` tracks the config file's
 identity (length + modified time — cheap to stat, and any edit that matters
@@ -1482,7 +1499,11 @@ survives on disk. If the changed file no longer parses at all, the save
 result is `SaveResult::Deferred` (stays dirty, retried on the next change) —
 except with `force: true` (close/quit), which overwrites rather than losing
 the session's changes; an unparseable file would be default-substituted at
-next start anyway, and the `.bak` recovery path (§4) still applies.
+next start anyway, and the `.bak` recovery path (§4) still applies. A failed stat on a
+file the store has a baseline for counts as "possibly changed", not "unchanged": a
+transient permissions error or momentary lock must not fall through to a full overwrite of
+a file that may have just been hand-edited. A genuine not-found (the file was deleted)
+is not a stat failure in that sense and keeps the direct write.
 
 **Capture suspension protocol.** While `RegisterHotKey` owns a combination,
 pressing it delivers `WM_HOTKEY` to the hotkey thread instead of a keystroke
@@ -1497,9 +1518,14 @@ deadline **per posted round-trip** — each `Suspend`/`Resume`/`Rebind` gets its
 own ack — never a bound on capture itself, which is user-paced and
 unbounded: a user may sit in "Press a key combination…" for a minute without
 the controller silently re-registering hotkeys underneath the field or
-declaring hotkeys degraded. The controller reconciles the races: hotkey
-thread respawned while suspended → immediately re-post suspend to the new
-thread; settings window gone while suspended → post resume. Known
+declaring hotkeys degraded. While capturing, the control also swallows
+`WM_KEYUP`/`WM_SYSKEYUP` itself instead of passing them to `DefWindowProcW`:
+releasing Alt mid-capture would otherwise raise `SC_KEYMENU`, pop the
+window's system menu, steal focus and thereby fire `WM_KILLFOCUS` — silently
+cancelling a capture the user was still in the middle of. The controller
+reconciles the races: hotkey thread respawned while suspended → immediately
+re-post suspend to the new thread; settings window gone while suspended →
+post resume. Known
 unverified: killing the hotkey thread while a capture is suspended, to
 confirm the respawn-then-re-suspend race above end to end, is not something
 that can be staged safely against a live thread — `RespawnGate` itself is
@@ -1537,8 +1563,13 @@ under un-themed light controls would be dark-on-dark and unreadable. Within
 that gate: `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE)` for the
 title bar; `SetWindowTheme` plus `WM_CTLCOLOR*` handlers for buttons, edits
 and the combo's popup list; checkbox labels are custom-drawn via
-`NM_CUSTOMDRAW` (a plain checkbox control cannot recolour its own label
-text); the combo face (arrow + selected text) is drawn through
+`NM_CUSTOMDRAW` — a themed `BUTTON`-class control paints its own text via
+`DrawThemeText` and ignores `WM_CTLCOLORSTATIC`'s colour entirely; in the
+dark-mode spike its labels measured 1.27:1 contrast against the dark
+background while plain `STATIC` labels in the same window measured 14.3:1.
+`NM_CUSTOMDRAW` on buttons is a Microsoft-documented surface since Windows
+Vista, not part of the undocumented-ordinal surface `theme.rs` isolates; the
+combo face (arrow + selected text) is drawn through
 `DrawThemeBackground`/`DrawThemeTextEx` against the `DarkMode_CFD::COMBOBOX`
 theme class, with a hand-drawn GDI fallback whenever `OpenThemeData` or the
 theme draw call fails — that fallback path has been exercised on real
@@ -1564,7 +1595,12 @@ instead — which also removes any z-order dependency between a frame and the
 controls inside it. The window handles live `WM_SETTINGCHANGE`
 (`"ImmersiveColorSet"`) and re-themes immediately; unlike the tray's popup
 menu (§13), this is a genuine top-level window and does receive the
-broadcast, so no per-open refresh trick is needed here.
+broadcast, so no per-open refresh trick is needed here. One ordering
+constraint at creation: the window state is published to its thread-local
+*before* the first theme application, because `apply_theme`'s `RedrawWindow`
+synchronously re-enters every child's paint path, and each of those reads the
+live dark flag through that thread-local — while it is still empty the very
+first repaint would fall back to light regardless of the actual setting.
 
 The footer's merged SysLink also needed its own keyboard-activation
 subclass, unrelated to theming: past the first embedded link, the control's
@@ -1584,7 +1620,13 @@ font handle), and relayouts every control from the same baseline table
 window across two monitors at different DPIs has not been exercised on real
 hardware; `WM_DPICHANGED` has instead been confirmed through a live
 per-monitor scale-factor change on a single monitor, which drives the same
-handler.
+handler. Placement centres the window on the *work area* (`rcWork`, taskbar
+excluded — the area shell dialogs centre on) of the monitor under the cursor,
+clamped so the top-left corner always stays inside it; the clamp's upper
+bound is itself floored at the work area's origin, because this window is
+tall enough that on a short work area at high DPI (150% on 1920×1080) it can
+exceed the work area, and it must then start at the top-left corner rather
+than be pushed above or left of the screen.
 
 **Focus save/restore.** A programmatic (non-template) `CreateWindowExW`
 window gets none of a real dialog's automatic keyboard-focus bookkeeping: a
@@ -1596,6 +1638,15 @@ found the hard way (focus stranding on the window after a message box
 closed) and is now handled by hand: `WM_ACTIVATE` saves the focused child on
 deactivate and restores it on reactivate, and `WM_SETFOCUS` self-heals
 whenever focus lands on the top level through some other path.
+
+**Uncommitted edits on Close.** A value typed into a numeric edit but not yet
+committed (no `EN_KILLFOCUS` yet) still survives Close or Esc without an
+explicit commit step: `DestroyWindow` moves focus off the focused edit before
+tearing the window down, so that edit's `EN_KILLFOCUS` — and the commit it
+triggers — is processed before `WM_DESTROY` clears the window state and posts
+`SettingsClosed`. Verified on hardware, but it is a dependency on Windows'
+message ordering; should a future build ever deliver `WM_DESTROY` first, the
+Close handler would need an explicit commit before posting `WM_CLOSE`.
 
 **Autostart** (`platform/windows/autostart.rs`) is registry-backed, not a
 config field: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, value
