@@ -74,3 +74,5 @@ Read `docs/architecture.md` for full design rationale (it is the source of truth
 ## Code comments
 
 Do not cite ephemeral planning labels (phase/step/wave/feature IDs like `F.6`, `WB0.4`) in code comments — state the rationale in self-contained domain terms. (The existing docs use such labels; that's fine for docs, but don't propagate them into code comments.)
+
+Inline `//` comments carry only what the code cannot show — a rationale, an invariant, a Win32 quirk, an ordering constraint. Do not narrate steps (`// Create channels`, `// Send result back`); a well-named call is its own label. Where a comment would restate a passage of `docs/architecture.md`, state the local hook in one sentence and name the section instead. Doc comments (`///`) follow `docs/code-conventions.md` §4 and are not affected by this rule.
