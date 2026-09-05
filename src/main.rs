@@ -744,15 +744,11 @@ fn main() {
             }
         }
 
-        // Wait for the next message, but bounded: the OSD and overlay both
-        // live on this thread with no message loop of their own, so the Win32
-        // queue has to be polled — a thread cannot block on both it and an
-        // MPSC channel. This interval is *not* input latency; any send
-        // wakes the recv immediately. It only bounds how late an unsolicited
-        // message is noticed, of which the OSD's auto-hide timer is the tightest
-        // (osd.timeout_ms may be configured down to 100 ms). Measured idle cost
-        // is ~0.0017% of a core; see the main-loop cadence notes in
-        // docs/architecture.md before changing it.
+        // Bounded wait: this thread must service both the MPSC channel and
+        // the Win32 queue of the OSD and overlay, so one of them has to be
+        // polled. The interval is not input latency — any send wakes the recv
+        // immediately. See docs/architecture.md, "Main-Loop Cadence", before
+        // changing the value.
         match rx.recv_timeout(Duration::from_millis(16)) {
             Ok(msg) => {
                 // An open tray menu asks for its rows four times a second. At

@@ -666,17 +666,11 @@ pub(super) fn with_window_state(f: impl FnOnce(&WindowState)) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Focus Bookkeeping (WM_ACTIVATE / WM_SETFOCUS)
 // ─────────────────────────────────────────────────────────────────────────────
-// This window is a plain CreateWindowExW top-level, not a real dialog, so
-// none of the automatic keyboard-focus bookkeeping a dialog manager gives
-// you for free (DefDlgProc) applies here: when a modal MessageBoxW child
-// closes, or the window is deactivated and reactivated (Alt+Tab), Windows'
-// only fallback is to hand focus to the top-level window itself, which
-// IsDialogMessageW's Tab handling then can never move out of again — there
-// is no dialog-manager state saying which control was last focused. The
-// functions below reimplement that bookkeeping by hand: save the focused
-// child on deactivate, restore it (or fall back to the first tab stop) on
-// reactivate, and self-heal on WM_SETFOCUS in case focus ever lands on the
-// top level through some other path.
+// A plain CreateWindowExW top-level gets none of a dialog manager's focus
+// bookkeeping, so the functions below do it by hand: save the focused child
+// on deactivate, restore it (or fall back to the first tab stop) on
+// reactivate, and self-heal on WM_SETFOCUS. See docs/architecture.md §14,
+// "Focus save/restore", for why focus would otherwise get stuck.
 
 /// Whether `hwnd` is a live, focusable child of `state.hwnd` — still a real
 /// window, still a descendant, and not disabled. A handle saved earlier in
@@ -844,14 +838,14 @@ fn handle_hotkey_message_text(lparam: LPARAM) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Control Wiring (Instant Apply)
 // ─────────────────────────────────────────────────────────────────────────────
-// Every control applies its change immediately and the controller persists
-// it on a debounce timer — there is no OK/Apply button, only "Restore
-// defaults" and "Close". The hotkey capture fields (`ID_HK_UP`/`ID_HK_DOWN`)
-// are wired separately, in the "Hotkey Capture Control" section below (their
-// own custom-drawn window class, not one of the controls this section
-// applies to). The two explainer statics below are created with just their
-// text; their colour (grayed, or red for an error) comes from `dark.rs`'s
-// `WM_CTLCOLORSTATIC` handling, in both light and dark mode.
+// Instant apply, debounce-persisted by the controller — see
+// docs/architecture.md §14, "Instant apply, debounced saves". The hotkey
+// capture fields (`ID_HK_UP`/`ID_HK_DOWN`) are wired separately, in the
+// "Hotkey Capture Control" section below (their own custom-drawn window
+// class, not one of the controls this section applies to). The two explainer
+// statics below are created with just their text; their colour (grayed, or
+// red for an error) comes from `dark.rs`'s `WM_CTLCOLORSTATIC` handling, in
+// both light and dark mode.
 
 /// One spinner+edit control pair wired to instant apply: its edit id, valid
 /// range (a [`RangeSpec`] from the layout table, keyed by the matching
@@ -1404,16 +1398,14 @@ fn handle_notify(hwnd: HWND, lparam: LPARAM) -> u32 {
 // ─────────────────────────────────────────────────────────────────────────────
 // Footer Link Keyboard Activation (SysLink subclass)
 // ─────────────────────────────────────────────────────────────────────────────
-// SysLink's own keyboard handling for a control with more than one embedded
-// link is unreliable once focus has moved past the first: pressing Enter
-// while the second link is internally focused produces no notification at
-// all (mouse clicks on either link work correctly — that path is untouched,
-// still handled by `NM_CLICK` above). Rather than depend on the control's
-// own internal link-focus state machine for the keyboard path, this
-// subclass tracks which of the two links is keyboard-focused itself, drives
-// the control's `LIS_FOCUSED` bit to match (so the native paint still draws
-// the focus indicator on the right link), and dispatches Enter directly
-// instead of waiting for a notification that may never arrive.
+// SysLink's own Enter handling is unreliable past the first embedded link
+// (mouse clicks are unaffected, still handled by `NM_CLICK` above) — see
+// the footer SysLink note in docs/architecture.md §14. Rather than depend
+// on the control's own internal link-focus state machine, this subclass
+// tracks which of the two links is keyboard-focused itself, drives the
+// control's `LIS_FOCUSED` bit to match (so the native paint still draws the
+// focus indicator on the right link), and dispatches Enter directly instead
+// of waiting for a notification that may never arrive.
 
 /// Number of embedded links the merged footer `SysLink` carries — its
 /// `<a>` markup has exactly two: "Open config file" and "Open log folder".

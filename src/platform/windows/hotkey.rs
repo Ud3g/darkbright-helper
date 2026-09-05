@@ -635,10 +635,9 @@ impl HotkeyManager {
             // 0: WM_QUIT received
             // -1: Error
             //
-            // Both exit paths are logged: when this loop ends, the hotkey
-            // thread dies and the app loses its primary input, so the exit
-            // must never be silent. The main loop's liveness check detects
-            // the dead thread and attempts a restart.
+            // Both exit paths are logged: this thread is the app's primary
+            // input, and the main loop's liveness check restarts it — see
+            // docs/architecture.md §12, "Hotkey thread liveness".
             loop {
                 let ret = GetMessageW(&raw mut msg, None, 0, 0).0;
                 if ret == 0 {
