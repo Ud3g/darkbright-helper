@@ -89,10 +89,6 @@ pub enum BrightnessError {
     HotkeyThreadUnresponsive,
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helper Methods for Error Construction
-// ─────────────────────────────────────────────────────────────────────────────
-
 impl BrightnessError {
     /// Creates a new DDC communication error.
     pub(crate) fn ddc_communication(

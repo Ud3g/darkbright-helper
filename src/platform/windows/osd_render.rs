@@ -208,18 +208,14 @@ pub(super) unsafe fn paint(
     };
     let mem_dc = buffer.dc();
 
-    // Fill background
     fill_rect(mem_dc, client_rect, super::osd::OSD_BACKGROUND_COLOR);
 
-    // Draw progress bar(s)
     draw_brightness_bars(mem_dc, client_rect, state, metrics);
 
-    // Draw error message if in error state
     if state.is_error {
         draw_error_message(mem_dc, client_rect, ERROR_MESSAGE, metrics);
     }
 
-    // Copy to screen
     buffer.blit_to(hdc);
 }
 
@@ -248,10 +244,8 @@ fn draw_brightness_bars(
     // When expanded for errors, the extra space is at the bottom for the error message.
     let bar_top = (metrics.height - metrics.bar_height) / 2;
 
-    // Draw left side (overlay section)
     draw_overlay_section(hdc, client_rect, bar_top, state.overlay_opacity, metrics);
 
-    // Draw right side (hardware section)
     draw_hardware_section(
         hdc,
         client_rect,
@@ -277,7 +271,6 @@ fn draw_hardware_section(
 ) {
     let width = client_rect.right - client_rect.left;
 
-    // Calculate layout positions
     let padding = metrics.padding;
     let percent_text_width = metrics.percent_text_width;
     let icon_width = metrics.icon_width;
@@ -289,10 +282,8 @@ fn draw_hardware_section(
     let total_bar_width = content_width - (percent_text_width * 2) - (icon_width * 2) - bar_gap;
     let single_bar_width = total_bar_width / 2;
 
-    // Right bar starts after: pad + pct + ico + left_bar + gap
     let bar_left = padding + percent_text_width + icon_width + single_bar_width + bar_gap;
 
-    // Draw the bar (fills left-to-right)
     draw_single_bar(
         hdc,
         bar_left,
@@ -326,7 +317,6 @@ fn draw_overlay_section(
 ) {
     let width = client_rect.right - client_rect.left;
 
-    // Calculate layout positions
     let padding = metrics.padding;
     let percent_text_width = metrics.percent_text_width;
     let icon_width = metrics.icon_width;
@@ -338,10 +328,8 @@ fn draw_overlay_section(
     let total_bar_width = content_width - (percent_text_width * 2) - (icon_width * 2) - bar_gap;
     let single_bar_width = total_bar_width / 2;
 
-    // Left bar starts after: pad + pct + ico
     let bar_left = padding + percent_text_width + icon_width;
 
-    // Draw the bar background
     let bg_rect = RECT {
         left: bar_left,
         top: bar_top,
@@ -387,13 +375,11 @@ fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str, metrics: &OsdMetrics) {
     // Select an emoji font; the guard restores + deletes on drop.
     let _font = SelectedFont::new(hdc, font_size, FontFace::Emoji);
 
-    // Set text properties
     unsafe {
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(TEXT_COLOR));
     }
 
-    // Draw icon
     let wide_text: Vec<u16> = icon.encode_utf16().collect();
     let text_y = y + (bar_height - font_size) / 2;
     unsafe {
@@ -403,7 +389,6 @@ fn draw_icon(hdc: HDC, x: i32, y: i32, icon: &str, metrics: &OsdMetrics) {
 
 /// Draws a single progress bar.
 fn draw_single_bar(hdc: HDC, x: i32, y: i32, width: i32, height: i32, percent: u8, is_error: bool) {
-    // Draw background
     let bg_rect = RECT {
         left: x,
         top: y,
@@ -412,7 +397,6 @@ fn draw_single_bar(hdc: HDC, x: i32, y: i32, width: i32, height: i32, percent: u
     };
     fill_rect(hdc, &bg_rect, BAR_BACKGROUND_COLOR);
 
-    // Draw filled portion
     let fill_width = i32::try_from(i64::from(width) * i64::from(percent) / 100).unwrap_or(0);
     if fill_width > 0 {
         let filled = RECT {
@@ -454,16 +438,13 @@ fn draw_percentage_text(
     let _font = SelectedFont::new(hdc, font_size, FontFace::Text);
 
     unsafe {
-        // Set text properties
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(TEXT_COLOR));
 
-        // Set text alignment
         let align = if right_align { TA_RIGHT } else { TA_LEFT };
         SetTextAlign(hdc, align);
     }
 
-    // Format and draw text
     let text = format!("{percent}%");
     let wide_text: Vec<u16> = text.encode_utf16().collect();
 
@@ -488,7 +469,6 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
     // Select the text font; the guard restores + deletes on drop.
     let _font = SelectedFont::new(hdc, font_size, FontFace::Text);
 
-    // Convert message to wide string
     let wide_text: Vec<u16> = message.encode_utf16().collect();
 
     // Calculate position - centered horizontally, in footer area at bottom
@@ -500,11 +480,10 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
     let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
 
     let x = (width - approx_text_width) / 2;
-    // Position in error row area: bottom of window minus row height, centered vertically
     let y = client_rect.bottom - error_row_height + (error_row_height - font_size) / 2;
 
     unsafe {
-        // Set text properties - use red color for error visibility
+        // Red so the error row reads as an error.
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(ERROR_TEXT_COLOR));
         let _ = TextOutW(hdc, x, y, &wide_text);

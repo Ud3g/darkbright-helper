@@ -69,13 +69,10 @@ use super::window::{
 //       twice.
 //   capturing --rejected non-modifier keydown--> capturing (unchanged;
 //       shows an inline message on ID_HK_ERROR, no post)
-// A fifth path — the settings window itself closing while capture is still
-// active — needs no explicit `HotkeyCaptureEnded` from this control at all:
-// `WM_DESTROY` (`handle_destroy`) always sends `SettingsClosed`, and the
-// controller already ends capture on that message unconditionally. That is
-// the safety net under every path above, not just this one: even if a
-// future bug skipped one of the explicit posts, closing the window still
-// resumes interception.
+// Closing the window is the safety net under every path above: `WM_DESTROY`
+// (`handle_destroy`) always sends `SettingsClosed`, and the controller ends
+// capture on it unconditionally (docs/architecture.md §14, "Capture
+// suspension protocol").
 
 /// Per-control capture state, stored in `GWLP_USERDATA`. `Copy` so every
 /// reader/writer below takes a snapshot or writes one field at a time

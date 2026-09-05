@@ -278,7 +278,6 @@ pub(crate) fn ensure_osd_class_registered() -> Result<PCWSTR> {
                     BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
                 })?;
 
-                // A gray brush for the default background.
                 let background_brush = CreateSolidBrush(COLORREF(OSD_BACKGROUND_COLOR));
 
                 let wnd_class = WNDCLASSEXW {
@@ -357,11 +356,9 @@ pub(crate) fn create_osd_window() -> Result<SafeHwnd> {
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetMonitorInfoW` or `SetWindowPos` fails.
 pub(crate) fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bool) -> Result<()> {
-    // Get DPI for the target monitor and update thread-local metrics
     let dpi = get_monitor_dpi(hmonitor);
     update_osd_metrics(dpi);
 
-    // Retrieve scaled metrics
     let (width, height, bottom_margin) = with_metrics(|m| {
         let height = if with_error {
             m.height_with_error
@@ -386,7 +383,6 @@ pub(crate) fn position_osd_window(hwnd: HWND, hmonitor: HMONITOR, with_error: bo
         let rect = mi.rcMonitor;
         let monitor_width = rect.right - rect.left;
 
-        // Calculate center-x and bottom-y position
         let x = rect.left + (monitor_width - width) / 2;
         let y = rect.bottom - height - bottom_margin;
 
@@ -578,10 +574,9 @@ impl OsdWindow {
     /// Returns an error if window resizing fails.
     pub(crate) fn update(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, false);
-        // Resize to compact height (in case we were showing an error before)
+        // The window may still be at the taller error height from an earlier update.
         resize_osd_window(self.hwnd.as_raw(), false)?;
         unsafe {
-            // Invalidate the entire window to trigger WM_PAINT
             let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);
             self.reset_timer();
         }
@@ -601,7 +596,6 @@ impl OsdWindow {
     /// Returns an error if window resizing fails.
     pub(crate) fn update_error(&mut self, state: &MonitorState) -> Result<()> {
         update_osd_state(state, true);
-        // Resize to expanded height to show error message
         resize_osd_window(self.hwnd.as_raw(), true)?;
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd.as_raw()), None, true);

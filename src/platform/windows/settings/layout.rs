@@ -630,9 +630,8 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     // `core::version` output for this one id.
     //
     // `w` is what is left before "Restore defaults" starts, and it is the
-    // binding constraint: the longest string this can carry is a
-    // three-digit commit count on a dirty tree, measured at 165px in the
-    // dialog font at 96 DPI. A released build shows just "v0.9.0" (30px).
+    // binding constraint; the width budget is measured in
+    // docs/architecture.md §14, "Version line".
     ControlSpec {
         id: ID_VERSION,
         class: "STATIC",

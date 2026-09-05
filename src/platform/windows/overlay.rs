@@ -53,7 +53,6 @@ unsafe extern "system" fn wnd_proc(
 ///
 /// Returns `BrightnessError::WindowsApi` if `GetModuleHandleW` or `RegisterClassExW` fails.
 pub(crate) fn ensure_overlay_class_registered() -> Result<PCWSTR> {
-    // Initialize the registration once.
     REGISTER_CLASS_ONCE
         .get_or_init(|| {
             unsafe {
@@ -61,8 +60,7 @@ pub(crate) fn ensure_overlay_class_registered() -> Result<PCWSTR> {
                     BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
                 })?;
 
-                // Use the stock BLACK_BRUSH for the background.
-                // This ensures the window is black by default, which is what we want for dimming.
+                // Black by default: this window is the dimming veil.
                 let black_brush = HBRUSH(GetStockObject(BLACK_BRUSH).0);
 
                 let wnd_class = WNDCLASSEXW {
@@ -136,7 +134,6 @@ pub(crate) fn create_overlay_window() -> Result<SafeHwnd> {
         )
         .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
-        // Wrap in SafeHwnd for automatic cleanup
         Ok(SafeHwnd::new_owned(hwnd))
     }
 }
@@ -198,7 +195,6 @@ impl WindowsOverlay {
         let hwnd = create_overlay_window()?;
         position_window_fullscreen(hwnd.as_raw(), hmonitor)?;
 
-        // Initialize as transparent
         set_window_opacity(hwnd.as_raw(), 0.0)?;
 
         Ok(Self {
@@ -267,10 +263,9 @@ pub(crate) fn hide_window(hwnd: HWND) {
 ///
 /// Returns `BrightnessError::WindowsApi` if `SetLayeredWindowAttributes` fails.
 pub(crate) fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
-    // Clamp opacity to 0.0 - 1.0
     let opacity = opacity.clamp(0.0, 1.0);
 
-    // Convert to 0-255 safely
+    // Clamped above, so the product is within 0.0..=255.0 and the cast is exact.
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity * 255.0).round() as u8;
 
@@ -324,7 +319,6 @@ impl OverlayManager {
         hmonitor: HMONITOR,
         opacity: u8,
     ) -> Result<()> {
-        // If opacity is 0, we just need to hide it if it exists.
         if opacity == 0 {
             if let Some(overlay) = self.overlays.get_mut(monitor_id) {
                 overlay.hide();
@@ -332,7 +326,6 @@ impl OverlayManager {
             return Ok(());
         }
 
-        // Create overlay if it doesn't exist
         if !self.overlays.contains_key(monitor_id) {
             let overlay = WindowsOverlay::new(hmonitor)?;
             self.overlays.insert(monitor_id.clone(), overlay);
@@ -340,10 +333,9 @@ impl OverlayManager {
 
         let overlay = self.overlays.get_mut(monitor_id).expect("Just inserted");
 
-        // Ensure correct position (topology might have changed)
+        // Topology may have changed since this overlay was created.
         position_window_fullscreen(overlay.hwnd.as_raw(), hmonitor)?;
 
-        // Update opacity and visibility
         overlay.set_opacity(f32::from(opacity) / 100.0)?;
         if !overlay.is_visible() {
             overlay.show();

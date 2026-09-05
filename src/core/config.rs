@@ -32,7 +32,6 @@ pub(crate) const DEFAULT_REFRESH_INACTIVITY_SECONDS: u32 = 30;
 /// Default level filter for the rolling log file.
 pub(crate) const DEFAULT_FILE_LOG_LEVEL: &str = "info";
 
-// Validation ranges
 const OSD_TIMEOUT_MIN: u32 = 100;
 const OSD_TIMEOUT_MAX: u32 = 10000;
 const OSD_OPACITY_MIN: f32 = 0.1;
@@ -556,7 +555,6 @@ impl Config {
     pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
         let path_str = log_safe_file_name(path);
 
-        // Create parent directory if needed
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| BrightnessError::config_write(&path_str, e))?;
@@ -597,7 +595,6 @@ impl Config {
             );
         }
 
-        // Validate OSD timeout
         if self.osd.timeout_ms < OSD_TIMEOUT_MIN || self.osd.timeout_ms > OSD_TIMEOUT_MAX {
             log::error!(
                 field = "osd.timeout_ms",
@@ -610,7 +607,6 @@ impl Config {
             self.osd.timeout_ms = DEFAULT_OSD_TIMEOUT_MS;
         }
 
-        // Validate OSD opacity
         if self.osd.opacity < OSD_OPACITY_MIN || self.osd.opacity > OSD_OPACITY_MAX {
             log::error!(
                 field = "osd.opacity",
@@ -623,7 +619,6 @@ impl Config {
             self.osd.opacity = DEFAULT_OSD_OPACITY;
         }
 
-        // Validate step percent
         if self.brightness.step_percent < STEP_PERCENT_MIN
             || self.brightness.step_percent > STEP_PERCENT_MAX
         {
@@ -638,7 +633,7 @@ impl Config {
             self.brightness.step_percent = DEFAULT_STEP_PERCENT;
         }
 
-        // Validate periodic refresh (0 is valid = disabled)
+        // 0 is a legal value meaning "off", so only the upper bound is checked.
         if self.refresh.periodic_seconds > REFRESH_PERIODIC_MAX {
             log::error!(
                 field = "refresh.periodic_seconds",
@@ -650,7 +645,7 @@ impl Config {
             self.refresh.periodic_seconds = DEFAULT_REFRESH_PERIODIC_SECONDS;
         }
 
-        // Validate inactivity refresh (0 is valid = disabled)
+        // 0 is a legal value meaning "off", so only the upper bound is checked.
         if self.refresh.inactivity_seconds > REFRESH_INACTIVITY_MAX {
             log::error!(
                 field = "refresh.inactivity_seconds",
@@ -662,7 +657,7 @@ impl Config {
             self.refresh.inactivity_seconds = DEFAULT_REFRESH_INACTIVITY_SECONDS;
         }
 
-        // Validate file log level (must parse as a `log` level, case-insensitive)
+        // Any casing is accepted: the `LevelFilter` parser is case-insensitive.
         if self.logging.file_level.parse::<log::LevelFilter>().is_err() {
             log::error!(
                 field = "logging.file_level",

@@ -61,10 +61,8 @@ pub fn calculate_adjustment(
     let delta_i16 = i16::from(delta);
 
     if delta < 0 {
-        // Decreasing brightness
         calculate_decrease(current_hardware, current_overlay, delta_i16.unsigned_abs())
     } else {
-        // Increasing brightness
         calculate_increase(current_hardware, current_overlay, delta_i16.unsigned_abs())
     }
 }
@@ -79,12 +77,10 @@ fn calculate_decrease(
     let overlay = u16::from(current_overlay);
 
     if hardware > 0 {
-        // First, decrease hardware brightness
         let new_hardware = hardware.saturating_sub(decrease_amount);
         let remaining = decrease_amount.saturating_sub(hardware);
 
         if remaining > 0 {
-            // Hardware hit 0, apply remaining to overlay
             let new_overlay = (overlay + remaining).min(100);
             // new_overlay is clamped to 100, so try_from is safe
             BrightnessAdjustment::new(0, u8::try_from(new_overlay).unwrap_or(100))
@@ -93,7 +89,6 @@ fn calculate_decrease(
             BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(0), current_overlay)
         }
     } else {
-        // Hardware already at 0, increase overlay opacity
         let new_overlay = (overlay + decrease_amount).min(100);
         BrightnessAdjustment::new(0, u8::try_from(new_overlay).unwrap_or(100))
     }
@@ -109,12 +104,10 @@ fn calculate_increase(
     let overlay = u16::from(current_overlay);
 
     if overlay > 0 {
-        // First, decrease overlay opacity
         let new_overlay = overlay.saturating_sub(increase_amount);
         let remaining = increase_amount.saturating_sub(overlay);
 
         if remaining > 0 {
-            // Overlay hit 0, apply remaining to hardware
             let new_hardware = (hardware + remaining).min(100);
             BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(100), 0)
         } else {
@@ -122,7 +115,6 @@ fn calculate_increase(
             BrightnessAdjustment::new(current_hardware, u8::try_from(new_overlay).unwrap_or(0))
         }
     } else {
-        // No overlay, increase hardware brightness
         let new_hardware = (hardware + increase_amount).min(100);
         BrightnessAdjustment::new(u8::try_from(new_hardware).unwrap_or(100), 0)
     }
