@@ -171,16 +171,11 @@ pub(crate) fn generate_display_names(ids: &[MonitorId]) -> HashMap<MonitorId, St
         *base_name_counts.entry(base).or_insert(0) += 1;
     }
 
-    // The `#N` suffix must not depend on the caller's iteration order. The
-    // only caller builds this slice from a HashMap, whose order changes
-    // whenever the map is mutated — which would let two identical panels
-    // silently swap their numbers between one reading and the next.
-    //
-    // The tray menu's live row refresh also leans on this: it compares the
-    // display-name vector between polls to decide whether a row still means
-    // the same monitor, so a name order that wobbled between calls would
-    // make the refresh give up silently (only at `debug`). Keep this sort,
-    // and the matching sort that orders the menu rows themselves, stable.
+    // The `#N` suffix must not depend on the caller's iteration order (the
+    // only caller passes HashMap keys), and the tray's live row refresh
+    // compares display-name vectors between polls — see the implementation
+    // notes under docs/architecture.md §13, "Usage Rows". Keep this sort and
+    // the one ordering the menu rows stable together.
     let mut ordered: Vec<&MonitorId> = ids.iter().collect();
     ordered.sort_by(|a, b| {
         (&a.manufacturer, &a.model_name, &a.serial_number).cmp(&(

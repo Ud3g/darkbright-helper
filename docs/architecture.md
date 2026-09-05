@@ -1511,7 +1511,10 @@ to the focused control — so typing the default `Ctrl+Shift+Up` into the
 capture field would adjust brightness instead of being captured. Entering
 capture mode posts `HotkeyOp::Suspend` to the hotkey thread; every exit path
 (capture completes, Esc, focus loss, window destroyed) posts `Resume` or a
-`Rebind`. Suspension covers everything that intercepts keys: the primary
+`Rebind`. Window destruction is the safety net under all of them: the
+controller ends capture on `SettingsClosed` unconditionally, so even a missed
+explicit post cannot leave interception suspended once the window is gone.
+Suspension covers everything that intercepts keys: the primary
 combinations, the secondary plain `VK_BRIGHTNESS_UP/DOWN` registrations, and
 the low-level hook. `REBIND_TIMEOUT` (3 s, `core/reconcile.rs`) is an ack
 deadline **per posted round-trip** — each `Suspend`/`Resume`/`Rebind` gets its

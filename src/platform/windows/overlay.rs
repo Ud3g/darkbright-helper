@@ -265,6 +265,7 @@ pub(crate) fn hide_window(hwnd: HWND) {
 pub(crate) fn set_window_opacity(hwnd: HWND, opacity: f32) -> Result<()> {
     let opacity = opacity.clamp(0.0, 1.0);
 
+    // Clamped above, so the product is within 0.0..=255.0 and the cast is exact.
     #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let alpha = (opacity * 255.0).round() as u8;
 
