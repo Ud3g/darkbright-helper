@@ -3705,6 +3705,43 @@ mod tests {
     }
 
     #[test]
+    fn hotkey_rebind_failure_reverts_the_binding_the_tray_menu_reports() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+Up".to_string())),
+            base,
+        )
+        .unwrap();
+
+        // Optimistic: the menu shows the new binding while the ack is pending.
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+        assert_eq!(reply_rx.try_recv().unwrap().hotkey_up, "Alt+Up");
+
+        c.handle_message(
+            BrightnessMessage::HotkeyRebindResult {
+                op: HotkeyOp::Rebind,
+                success: false,
+                fallback_active: false,
+                error: Some("device busy".to_string()),
+            },
+            base,
+        )
+        .unwrap();
+
+        // The usage rows are fetched live on every open, so the revert must
+        // be what the next open reports — not the binding that never took.
+        let (reply_tx, reply_rx) = mpsc::channel();
+        c.handle_message(BrightnessMessage::TrayMenuOpening { reply_tx }, base)
+            .unwrap();
+        let data = reply_rx.try_recv().expect("menu data sent");
+        assert_eq!(data.hotkey_up, DEFAULT_HOTKEY_UP);
+        assert_eq!(data.hotkey_down, DEFAULT_HOTKEY_DOWN);
+    }
+
+    #[test]
     fn pending_hotkey_op_ack_timeout_reverts_like_a_failure() {
         let base = Instant::now();
         let mut c = test_controller(base);
@@ -3968,6 +4005,33 @@ mod tests {
         c.check_pending_save(base + SAVE_DEBOUNCE + SAVE_DEBOUNCE);
         assert_eq!(c.store.saves.len(), 2);
         assert_eq!(c.pending_save_since, None);
+    }
+
+    #[test]
+    fn a_deferred_retry_stays_unforced_and_can_defer_again() {
+        let base = Instant::now();
+        let mut c = test_controller(base);
+        c.store.result = Some(SaveResult::Deferred("disk file changed".to_string()));
+
+        c.handle_message(
+            BrightnessMessage::SettingChanged(SettingChange::StepPercent(30)),
+            base,
+        )
+        .unwrap();
+        c.check_pending_save(base + SAVE_DEBOUNCE);
+        let retry = base + SAVE_DEBOUNCE * 2;
+        c.check_pending_save(retry);
+
+        // A deferral means "the on-disk file is in a state we must not
+        // clobber"; the debounced retry has to keep asking, not escalate to
+        // a forced overwrite — that is reserved for close/quit.
+        assert_eq!(c.store.saves.len(), 2);
+        assert!(!c.store.saves[1].2, "retry must not force");
+        assert!(
+            c.dirty.step_percent,
+            "still dirty after the second deferral"
+        );
+        assert_eq!(c.pending_save_since, Some(retry), "re-armed again");
     }
 
     #[test]

@@ -1217,11 +1217,129 @@ mod tests {
         let _ = fs::remove_dir_all(test_dir);
     }
 
-    #[test]
-    fn restore_defaults_preserves_monitors_and_version() {
+    /// One row per user-facing setting: its name, the setter for its
+    /// `SettingsDirty` flag, and a getter for its current value. Values are
+    /// stringified so one table covers every field type and an assertion
+    /// failure names the field that drifted.
+    #[allow(clippy::type_complexity)]
+    const USER_FIELDS: &[(&str, fn(&mut SettingsDirty), fn(&Config) -> String)] = &[
+        (
+            "hotkeys.brightness_up",
+            |d| d.hotkey_up = true,
+            |c| c.hotkeys.brightness_up.clone(),
+        ),
+        (
+            "hotkeys.brightness_down",
+            |d| d.hotkey_down = true,
+            |c| c.hotkeys.brightness_down.clone(),
+        ),
+        (
+            "hotkeys.intercept_brightness_keys",
+            |d| d.intercept = true,
+            |c| c.hotkeys.intercept_brightness_keys.to_string(),
+        ),
+        (
+            "osd.timeout_ms",
+            |d| d.osd_timeout_ms = true,
+            |c| c.osd.timeout_ms.to_string(),
+        ),
+        (
+            "osd.opacity",
+            |d| d.osd_opacity = true,
+            |c| c.osd.opacity.to_string(),
+        ),
+        (
+            "brightness.step_percent",
+            |d| d.step_percent = true,
+            |c| c.brightness.step_percent.to_string(),
+        ),
+        (
+            "refresh.periodic_seconds",
+            |d| d.refresh_periodic = true,
+            |c| c.refresh.periodic_seconds.to_string(),
+        ),
+        (
+            "refresh.inactivity_seconds",
+            |d| d.refresh_inactivity = true,
+            |c| c.refresh.inactivity_seconds.to_string(),
+        ),
+        (
+            "logging.file_enabled",
+            |d| d.log_enabled = true,
+            |c| c.logging.file_enabled.to_string(),
+        ),
+        (
+            "logging.file_level",
+            |d| d.log_level = true,
+            |c| c.logging.file_level.clone(),
+        ),
+    ];
+
+    /// The ten user-facing settings as `(field, value)` rows, in
+    /// [`USER_FIELDS`] order.
+    fn user_field_values(c: &Config) -> Vec<(&'static str, String)> {
+        USER_FIELDS
+            .iter()
+            .map(|(name, _, get)| (*name, get(c)))
+            .collect()
+    }
+
+    /// A config with every user-facing setting moved off its default.
+    fn all_fields_changed() -> Config {
         let mut cfg = Config::default();
-        cfg.brightness.step_percent = 20;
-        cfg.hotkeys.brightness_up = "Ctrl+F1".to_string();
+        cfg.hotkeys.brightness_up = "Alt+F1".to_string();
+        cfg.hotkeys.brightness_down = "Alt+F2".to_string();
+        cfg.hotkeys.intercept_brightness_keys = true;
+        cfg.osd.timeout_ms = 4321;
+        cfg.osd.opacity = 0.42;
+        cfg.brightness.step_percent = 7;
+        cfg.refresh.periodic_seconds = 333;
+        cfg.refresh.inactivity_seconds = 44;
+        cfg.logging.file_enabled = true;
+        cfg.logging.file_level = "trace".to_string();
+        cfg
+    }
+
+    #[test]
+    fn user_field_table_covers_every_dirty_flag_once_and_every_value_differs() {
+        // Every row sets one flag nobody else set. The exhaustive literal
+        // (no `..Default::default()`) fails to compile when a flag is added
+        // without a table row.
+        let mut all = SettingsDirty::default();
+        for (name, set, _) in USER_FIELDS {
+            let before = all;
+            set(&mut all);
+            assert_ne!(before, all, "{name}: sets no flag, or one already set");
+        }
+        assert_eq!(
+            all,
+            SettingsDirty {
+                step_percent: true,
+                osd_timeout_ms: true,
+                osd_opacity: true,
+                refresh_periodic: true,
+                refresh_inactivity: true,
+                hotkey_up: true,
+                hotkey_down: true,
+                intercept: true,
+                log_enabled: true,
+                log_level: true,
+            }
+        );
+
+        // `all_fields_changed` must differ in every row, otherwise the
+        // restore/overlay tests below would pass vacuously for that field.
+        for ((name, changed), (_, default)) in user_field_values(&all_fields_changed())
+            .into_iter()
+            .zip(user_field_values(&Config::default()))
+        {
+            assert_ne!(changed, default, "{name} is not moved off its default");
+        }
+    }
+
+    #[test]
+    fn restore_defaults_resets_every_user_field_and_preserves_monitors_and_version() {
+        let mut cfg = all_fields_changed();
         cfg.monitors.insert(
             "M1".to_string(),
             MonitorConfig {
@@ -1233,14 +1351,32 @@ mod tests {
 
         cfg.restore_defaults();
 
-        assert_eq!(cfg.brightness.step_percent, DEFAULT_STEP_PERCENT);
-        assert_eq!(cfg.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
+        assert_eq!(
+            user_field_values(&cfg),
+            user_field_values(&Config::default())
+        );
         assert_eq!(cfg.monitors.len(), 1);
         assert_eq!(cfg.version, CONFIG_VERSION);
     }
 
     #[test]
-    fn overlay_dirty_copies_only_flagged_fields() {
+    fn overlay_dirty_copies_exactly_the_one_flagged_field() {
+        let ours = all_fields_changed();
+        for (i, (name, set, _)) in USER_FIELDS.iter().enumerate() {
+            let mut dirty = SettingsDirty::default();
+            set(&mut dirty);
+            let mut disk = Config::default();
+
+            ours.overlay_dirty(&mut disk, &dirty);
+
+            let mut expected = user_field_values(&Config::default());
+            expected[i] = user_field_values(&ours)[i].clone();
+            assert_eq!(user_field_values(&disk), expected, "flag: {name}");
+        }
+    }
+
+    #[test]
+    fn overlay_dirty_leaves_external_edits_of_unflagged_fields_alone() {
         let mut ours = Config::default();
         ours.brightness.step_percent = 9;
         ours.osd.timeout_ms = 3000;

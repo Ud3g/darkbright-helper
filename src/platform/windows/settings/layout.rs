@@ -1070,6 +1070,9 @@ mod tests {
         // 120 = 125% DPI in the low word; a nonzero high word (Y-axis DPI,
         // always equal in practice) must not leak into the result.
         assert_eq!(dpi_from_wparam(0x0078_0078), 120);
+        // Asymmetric words: a wrong-word extraction would return 0xFF here,
+        // which the symmetric case above cannot detect.
+        assert_eq!(dpi_from_wparam(0x00FF_0078), 120);
         assert_eq!(dpi_from_wparam(96), 96);
         assert_eq!(dpi_from_wparam(144), 144);
     }
