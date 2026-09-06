@@ -65,6 +65,12 @@ impl WindowsConfigStore {
     fn write_direct(&mut self, path: &Path, config: &Config) -> SaveResult {
         match config.save_to(path) {
             Ok(()) => {
+                // The baseline is re-stat'ed after the rename, not taken from
+                // the written data: an external edit landing in that window
+                // would be recorded as our own write and
+                // silently overwritten by the next save. Accepted — closing
+                // it needs the renamed file's own handle, which `save_to`'s
+                // tmp+rename path does not expose.
                 self.last_identity = Self::identity(path);
                 SaveResult::Saved
             }

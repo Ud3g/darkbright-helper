@@ -332,7 +332,7 @@ That flag was accurate, and acting on it is what produced this pass.
 
 - **The Explorer-restart symptom itself** (C1) — reasoned from the Win32 broadcast contract plus the
   code, not reproduced. Decisive check: restart Explorer from Task Manager and see whether the icon
-  returns. Worth adding to `architecture.md` §14's manual list once fixed.
+  returns. Worth adding to `architecture.md`'s "Integration Testing (Manual)" list once fixed.
 - **Ghost-icon persistence after Quit** (I1) — shell-dependent timing. The structural claim (`Drop`
   unreachable on every path) is verified from code; the visible symptom is not.
 - **Usage-window appearance above 100% scaling** (I2) — the missing DPI scaling is verified by code;

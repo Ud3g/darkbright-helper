@@ -386,7 +386,8 @@ exclusion, and the stub excluded by ignorance — so it was checked by injection
 
 **Still unverified:** the release-build behaviour on a genuinely unwritable `%APPDATA%`. The
 warning-line and badge logic are pure functions and tested; the `main.rs` wiring that feeds them is
-three lines in the binary and is covered only by the manual step added to architecture.md §14.
+three lines in the binary and is covered only by the manual step added to architecture.md under
+"Integration Testing (Manual)".
 
 **I5. A dead field carries a comment instructing future maintainers to maintain an invariant that
 does not exist.**
