@@ -307,8 +307,9 @@ are simply left to die with the process. A thread blocked in `GetMessageW` would
 a deadlock, and one hotkey spawn is already abandoned on purpose when it fails to report in
 time — see `start_hotkey_thread` in `main.rs` for that case. That abandoned spawn is a live
 writer, not a dead one: the hotkey thread id and command queue are shared cells (the id is
-0 until a thread signals ready and reset to 0 when it exits, so a rebind against a missing
-thread ordinarily fails cleanly), and a spawn that finishes registering after its deadline
+0 until a thread signals ready and reset to 0 by a scope guard when it exits — on a panic
+unwinding out of the loop too — so a rebind against a missing thread ordinarily fails
+cleanly), and a spawn that finishes registering after its deadline
 still publishes into those same cells. The clean-failure property is therefore a strong
 default, not an absolute guarantee. A thread that genuinely needs joining needs a design
 discussion first.

@@ -764,9 +764,11 @@ impl std::fmt::Display for ParsedHotkey {
 /// ready signal: `RegisterHotKey`/`WM_HOTKEY` delivery is tied to the
 /// registering thread, so [`HotkeyPortImpl`] needs this thread's id to
 /// address it, and must never see a non-zero id before this thread is
-/// actually ready to receive `WM_APP_HOTKEY_WAKE`. It is reset to 0 when the
-/// loop exits, so a post to a dead thread fails cleanly instead of silently
-/// vanishing.
+/// actually ready to receive `WM_APP_HOTKEY_WAKE`. A scope guard resets it
+/// to 0 when the loop exits — on a normal return and on a panic unwinding
+/// out of it alike — so a post to a dead thread fails cleanly instead of
+/// silently vanishing, or worse, reaching whatever thread the OS has since
+/// handed that id to.
 ///
 /// A registration failure here is fatal — reported once through `ready_tx`,
 /// exactly like every other constructor/registration failure — and the
@@ -822,12 +824,24 @@ pub fn run_hotkey_thread(
 
     // SAFETY: no preconditions; this reads the calling thread's own id.
     thread_id.store(unsafe { GetCurrentThreadId() }, Ordering::SeqCst);
+    let _published_id = ClearOnExit(&thread_id);
 
     let _ = ready_tx.send(Ok(()));
 
     manager.run_message_loop(&queue);
+}
 
-    thread_id.store(0, Ordering::SeqCst);
+/// Stores 0 into the wrapped cell when dropped. Holding one across the
+/// message loop turns "the loop exited" into "the published thread id is
+/// gone" on every exit path, including a panic unwinding through the loop —
+/// a plain store after the call would be skipped by the unwind, and
+/// `HotkeyPortImpl::post` would keep addressing a dead thread's id.
+struct ClearOnExit<'a>(&'a AtomicU32);
+
+impl Drop for ClearOnExit<'_> {
+    fn drop(&mut self) {
+        self.0.store(0, Ordering::SeqCst);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -891,9 +905,16 @@ impl HotkeyPortImpl {
 
         let wake = unsafe { PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)) };
         if let Err(e) = wake {
-            // The main thread is the only producer, so the tail is exactly
-            // the entry just pushed above; if something already drained the
-            // queue in between, this is a harmless no-op.
+            // The main thread is the only producer, so the tail is the
+            // entry pushed above — unless the hotkey thread drained the
+            // queue in between, which needs an earlier wake still being
+            // processed at this very moment. Then the pop is a no-op on an
+            // empty queue, but the command *was* consumed: the thread applies
+            // it while the caller reverts on this `Err`, and the live
+            // bindings diverge from the config. Accepted for now — closing
+            // it means tagging commands with a sequence number the thread
+            // can check against a rolled-back one; the window is a wake in
+            // flight coinciding with the thread dying.
             self.queue
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1321,6 +1342,31 @@ mod tests {
     // that needs a live message loop (apply_bindings, suspend/resume against
     // a real HotkeyManager) is exercised manually — see the task report.
     // ─────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn clear_on_exit_resets_the_thread_id_on_a_normal_return() {
+        let cell = AtomicU32::new(4242);
+        {
+            let _guard = ClearOnExit(&cell);
+            assert_eq!(cell.load(Ordering::SeqCst), 4242, "untouched while held");
+        }
+        assert_eq!(cell.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn clear_on_exit_resets_the_thread_id_when_a_panic_unwinds_past_it() {
+        let cell = AtomicU32::new(4242);
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = ClearOnExit(&cell);
+            panic!("message loop blew up");
+        }));
+        assert!(unwound.is_err());
+        assert_eq!(
+            cell.load(Ordering::SeqCst),
+            0,
+            "a dead thread must not stay addressable through its old id"
+        );
+    }
 
     #[test]
     fn wake_message_id_does_not_collide_with_wm_hotkey() {
