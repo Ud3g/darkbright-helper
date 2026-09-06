@@ -88,6 +88,7 @@ src/
 │   ├── brightness.rs     # Brightness calculations, value mapping
 │   ├── config.rs         # Configuration types and loading
 │   ├── controller.rs     # Controller<Osd,Ovl,Ddc,Loc,Set,Hk,Store>: message-driven orchestration behind the seams below, unit-tested with fakes; binary injects Windows impls + explicit now: Instant
+│   ├── controller/tests.rs # the controller's test module (fakes for all seven seams + scenarios), split out for size
 │   ├── edid.rs           # EDID → MonitorId parsing
 │   ├── logfile.rs        # Size-capped rolling file log sink
 │   ├── panic_hook.rs     # Logs panic payload/location/thread, flushes sinks before exit
