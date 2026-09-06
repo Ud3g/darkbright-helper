@@ -315,6 +315,19 @@ still publishes into those same cells. The clean-failure property is therefore a
 default, not an absolute guarantee. A thread that genuinely needs joining needs a design
 discussion first.
 
+**A hotkey command whose wake failed is rolled back only if it is still queued.** Each
+entry in the command queue carries the sequence number its post assigned. When the
+`PostThreadMessageW` wake fails, the port checks under the queue lock whether the tail still
+carries its own number: if so the entry is removed and the post reports `Err`, and the
+controller reverts. If an earlier wake still in flight had already drained the entry, the
+hotkey thread owns it — it is applying the command or died trying — and the post reports
+`Ok`, so the outcome is settled by the thread's ack or by `REBIND_TIMEOUT` exactly as for a
+wake that succeeded. Popping blind, the earlier design, reverted the config in that drained
+case while the thread applied the command: the silent config/bindings divergence the
+rollback exists to prevent. The thread cannot discard a "rolled-back" command on its side
+instead, because it applies commands outside the lock — only the producer can tell, under
+the lock, which of the two cases it is in.
+
 **`WM_APP` messages are allocated per receiving window class, and the one
 thread-addressed message is the exception that needs a guard.** Three modules define custom
 messages, and the values live in three files today:
