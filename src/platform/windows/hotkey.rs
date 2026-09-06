@@ -99,12 +99,28 @@ pub enum HotkeyThreadCommand {
     Resume,
 }
 
-/// Queue of pending [`HotkeyThreadCommand`]s, shared between [`HotkeyPortImpl`]
+/// One queue entry: a command tagged with the sequence number
+/// [`HotkeyPortImpl::post`] assigned it. The number is what lets a post
+/// whose wake failed tell, under the queue lock, whether its own entry is
+/// still queued (roll it back) or was already drained by a wake in flight
+/// (the thread owns it now — see [`reconcile_failed_wake`]).
+///
+/// `pub` for the same reason as [`HotkeyThreadCommand`]: it appears inside
+/// [`HotkeyCommandQueue`], which the binary names.
+#[derive(Debug, Clone)]
+pub struct QueuedCommand {
+    /// Monotonic per-port sequence number, unique across every post.
+    pub seq: u64,
+    /// The operation itself.
+    pub command: HotkeyThreadCommand,
+}
+
+/// Queue of pending [`QueuedCommand`]s, shared between [`HotkeyPortImpl`]
 /// (producer, on the main thread) and the hotkey thread's message loop
 /// (consumer). Commands are drained out of the lock before being acted on,
 /// since applying one can call into Win32 (`RegisterHotKey`,
 /// `SetWindowsHookExW`) and must never do so while holding the mutex.
-pub type HotkeyCommandQueue = Arc<Mutex<VecDeque<HotkeyThreadCommand>>>;
+pub type HotkeyCommandQueue = Arc<Mutex<VecDeque<QueuedCommand>>>;
 
 /// Drains every command currently queued, releasing the lock before the
 /// caller acts on any of them.
@@ -112,7 +128,42 @@ fn drain_commands(queue: &HotkeyCommandQueue) -> Vec<HotkeyThreadCommand> {
     let mut guard = queue
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    guard.drain(..).collect()
+    guard.drain(..).map(|entry| entry.command).collect()
+}
+
+/// What [`reconcile_failed_wake`] found when a post's wake failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FailedWake {
+    /// The command was still queued and has been removed: nothing will ever
+    /// apply it, so the caller may treat the operation as never sent.
+    RolledBack,
+    /// The command was no longer queued: a wake already in flight drained it
+    /// and the hotkey thread is applying it (or died trying). Either way an
+    /// ack — or the controller's ack deadline — settles the outcome, so the
+    /// caller must *not* revert on its own.
+    AlreadyDrained,
+}
+
+/// Settles a post whose `PostThreadMessageW` wake failed. The command with
+/// sequence number `seq` is removed if it is still the queue's tail entry;
+/// the main thread is the only producer, so a tail carrying a different
+/// number (or an empty queue) means an in-flight wake drained it first.
+///
+/// Popping blind here was the earlier design, and it was wrong in exactly
+/// that drained case: the thread would apply the command while the caller
+/// reverted its config on the `Err`, silently diverging the live bindings
+/// from the config. Checking the sequence number under the lock is what
+/// makes the two outcomes distinguishable.
+fn reconcile_failed_wake(queue: &HotkeyCommandQueue, seq: u64) -> FailedWake {
+    let mut guard = queue
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if guard.back().is_some_and(|tail| tail.seq == seq) {
+        guard.pop_back();
+        FailedWake::RolledBack
+    } else {
+        FailedWake::AlreadyDrained
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -861,6 +912,8 @@ pub struct HotkeyPortImpl {
     /// Shared with the hotkey thread's message loop, which is the only
     /// consumer (drains it after waking on `WM_APP_HOTKEY_WAKE`).
     queue: HotkeyCommandQueue,
+    /// Sequence number the next post will carry; see [`QueuedCommand`].
+    next_seq: u64,
 }
 
 impl HotkeyPortImpl {
@@ -873,56 +926,66 @@ impl HotkeyPortImpl {
     /// still finish registering later and publish into these same cells.
     #[must_use]
     pub const fn new(thread_id: Arc<AtomicU32>, queue: HotkeyCommandQueue) -> Self {
-        Self { thread_id, queue }
+        Self {
+            thread_id,
+            queue,
+            next_seq: 0,
+        }
     }
 
-    /// Queues `command` and wakes the hotkey thread.
+    /// Queues `command` under a fresh sequence number and wakes the hotkey
+    /// thread.
     ///
-    /// If the wake itself fails, `command` is removed from the queue again
-    /// before returning: nobody is going to drain it now, and leaving it
-    /// behind would let a later, unrelated wake (or a supervised respawn
+    /// If the wake itself fails, the command is removed from the queue again
+    /// *if it is still there*: nobody is going to drain it now, and leaving
+    /// it behind would let a later, unrelated wake (or a supervised respawn
     /// sharing this same queue) apply a command the caller has already
     /// treated as failed — diverging silently from the config the caller
-    /// reverted to.
+    /// reverted to. If an earlier wake still in flight drained it first, the
+    /// hotkey thread already owns the command and this returns `Ok`: the
+    /// ack it sends, or the controller's ack deadline if the thread dies
+    /// mid-apply, settles the outcome exactly as for a wake that succeeded.
+    /// Reverting here instead would race the thread's apply — the
+    /// divergence [`reconcile_failed_wake`] exists to rule out.
     ///
     /// # Errors
     ///
     /// Returns `BrightnessError::ChannelSend` if no thread is currently
     /// ready (id is 0), and `BrightnessError::WindowsApi` if
     /// `PostThreadMessageW` itself fails (e.g. the thread died between the id
-    /// check and the post). A poisoned queue lock is recovered rather than
-    /// reported: the queue is plain data a panicking thread cannot leave torn.
+    /// check and the post) while the command was still queued. A poisoned
+    /// queue lock is recovered rather than reported: the queue is plain data
+    /// a panicking thread cannot leave torn.
     fn post(&mut self, command: HotkeyThreadCommand) -> Result<()> {
         let tid = self.thread_id.load(Ordering::SeqCst);
         if tid == 0 {
             return Err(BrightnessError::ChannelSend);
         }
 
+        let seq = self.next_seq;
+        self.next_seq += 1;
         self.queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(command);
+            .push_back(QueuedCommand { seq, command });
 
         let wake = unsafe { PostThreadMessageW(tid, WM_APP_HOTKEY_WAKE, WPARAM(0), LPARAM(0)) };
         if let Err(e) = wake {
-            // The main thread is the only producer, so the tail is the
-            // entry pushed above — unless the hotkey thread drained the
-            // queue in between, which needs an earlier wake still being
-            // processed at this very moment. Then the pop is a no-op on an
-            // empty queue, but the command *was* consumed: the thread applies
-            // it while the caller reverts on this `Err`, and the live
-            // bindings diverge from the config. Accepted for now — closing
-            // it means tagging commands with a sequence number the thread
-            // can check against a rolled-back one; the window is a wake in
-            // flight coinciding with the thread dying.
-            self.queue
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .pop_back();
-            return Err(BrightnessError::windows_api(
-                "PostThreadMessageW",
-                e.code().0.cast_unsigned(),
-            ));
+            match reconcile_failed_wake(&self.queue, seq) {
+                FailedWake::RolledBack => {
+                    return Err(BrightnessError::windows_api(
+                        "PostThreadMessageW",
+                        e.code().0.cast_unsigned(),
+                    ));
+                }
+                FailedWake::AlreadyDrained => {
+                    log::warn!(
+                        seq,
+                        error:% = e;
+                        "Hotkey wake failed after an in-flight wake drained the command; awaiting its ack"
+                    );
+                }
+            }
         }
         Ok(())
     }
@@ -1373,22 +1436,27 @@ mod tests {
         assert_ne!(WM_APP_HOTKEY_WAKE, WM_HOTKEY);
     }
 
+    fn enqueue(queue: &HotkeyCommandQueue, seq: u64, command: HotkeyThreadCommand) {
+        queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push_back(QueuedCommand { seq, command });
+    }
+
     #[test]
     fn drain_commands_removes_everything_in_fifo_order() {
         let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
-        queue
-            .lock()
-            .unwrap()
-            .push_back(HotkeyThreadCommand::Suspend);
-        queue
-            .lock()
-            .unwrap()
-            .push_back(HotkeyThreadCommand::Rebind {
+        enqueue(&queue, 0, HotkeyThreadCommand::Suspend);
+        enqueue(
+            &queue,
+            1,
+            HotkeyThreadCommand::Rebind {
                 up: "Ctrl+Up".to_string(),
                 down: "Ctrl+Down".to_string(),
                 intercept: true,
-            });
-        queue.lock().unwrap().push_back(HotkeyThreadCommand::Resume);
+            },
+        );
+        enqueue(&queue, 2, HotkeyThreadCommand::Resume);
 
         let drained = drain_commands(&queue);
 
@@ -1476,13 +1544,83 @@ mod tests {
     #[test]
     fn drain_commands_on_a_poisoned_queue_still_drains() {
         let queue = poisoned_queue();
-        queue
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push_back(HotkeyThreadCommand::Resume);
+        enqueue(&queue, 0, HotkeyThreadCommand::Resume);
 
         let drained = drain_commands(&queue);
 
         assert_eq!(drained.len(), 1, "a poisoned queue must still drain");
+    }
+
+    #[test]
+    fn failed_wake_rolls_back_a_command_that_is_still_queued() {
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        enqueue(&queue, 7, HotkeyThreadCommand::Resume);
+
+        assert_eq!(reconcile_failed_wake(&queue, 7), FailedWake::RolledBack);
+        assert!(
+            queue.lock().unwrap().is_empty(),
+            "a rolled-back command must not stay behind for a later wake"
+        );
+    }
+
+    #[test]
+    fn failed_wake_leaves_earlier_commands_queued_when_rolling_back() {
+        // Only the entry belonging to the failed post is removed; an older
+        // command still waiting on its own wake is not the caller's to undo.
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        enqueue(&queue, 3, HotkeyThreadCommand::Suspend);
+        enqueue(&queue, 4, HotkeyThreadCommand::Resume);
+
+        assert_eq!(reconcile_failed_wake(&queue, 4), FailedWake::RolledBack);
+
+        let remaining: Vec<u64> = queue.lock().unwrap().iter().map(|e| e.seq).collect();
+        assert_eq!(remaining, vec![3]);
+    }
+
+    #[test]
+    fn failed_wake_reports_a_command_the_thread_already_drained() {
+        // The thread's drain (an earlier wake still in flight) raced the
+        // failed post: the command is gone, so nothing may be popped and the
+        // caller must not revert — the thread is applying it.
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        enqueue(&queue, 5, HotkeyThreadCommand::Resume);
+        let drained = drain_commands(&queue);
+        assert_eq!(drained.len(), 1);
+
+        assert_eq!(reconcile_failed_wake(&queue, 5), FailedWake::AlreadyDrained);
+    }
+
+    #[test]
+    fn failed_wake_does_not_pop_a_newer_command_in_place_of_a_drained_one() {
+        // Sequence numbers, not "the tail is mine", make the rollback safe
+        // should a second producer ever share the queue: a tail with a
+        // different number belongs to someone else and stays.
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        enqueue(&queue, 8, HotkeyThreadCommand::Resume);
+        let _ = drain_commands(&queue);
+        enqueue(&queue, 9, HotkeyThreadCommand::Suspend);
+
+        assert_eq!(reconcile_failed_wake(&queue, 8), FailedWake::AlreadyDrained);
+        assert_eq!(
+            queue.lock().unwrap().len(),
+            1,
+            "the newer entry must survive"
+        );
+    }
+
+    #[test]
+    fn post_assigns_increasing_sequence_numbers() {
+        // Two posts against a bogus thread id: each is rolled back, and the
+        // rollback only works because each entry is tagged with the number
+        // its own post assigned. Observe the numbering through a queue that
+        // is never drained by making both wakes fail.
+        let thread_id = Arc::new(AtomicU32::new(u32::MAX));
+        let queue: HotkeyCommandQueue = Arc::new(Mutex::new(VecDeque::new()));
+        let mut port = HotkeyPortImpl::new(thread_id, Arc::clone(&queue));
+
+        assert!(port.suspend().is_err());
+        assert!(port.resume().is_err());
+        assert_eq!(port.next_seq, 2, "every post consumes one sequence number");
+        assert!(queue.lock().unwrap().is_empty());
     }
 }
