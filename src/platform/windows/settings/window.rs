@@ -42,7 +42,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
-use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
+use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot, SettingsWindowId};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
@@ -551,6 +551,9 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// [`with_window_state`] for the invariant that keeps this sound.
 pub(super) struct WindowState {
     pub(super) hwnd: HWND,
+    /// This window's identity as [`SettingsSinkImpl::open`] reported it to
+    /// the controller; sent back in `SettingsClosed` from `WM_DESTROY`.
+    window_id: SettingsWindowId,
     sender: Sender<BrightnessMessage>,
     /// The slot [`SettingsSinkImpl`] posts through, shared with the
     /// controller's thread. Held here so `WM_DESTROY` can clear it back to
@@ -1634,7 +1637,9 @@ fn handle_destroy() {
                 state
                     .hwnd_slot
                     .compare_exchange(my_value, 0, Ordering::SeqCst, Ordering::SeqCst);
-            if let Err(e) = state.sender.send(BrightnessMessage::SettingsClosed) {
+            if let Err(e) = state.sender.send(BrightnessMessage::SettingsClosed {
+                window: state.window_id,
+            }) {
                 log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
             }
             // SAFETY: the window owns both fonts and frees each exactly once.
@@ -1777,6 +1782,7 @@ unsafe extern "system" fn settings_wnd_proc(
 fn create_settings_window(
     tx: &Sender<BrightnessMessage>,
     hwnd_slot: &Arc<AtomicIsize>,
+    window_id: SettingsWindowId,
     snapshot: &SettingsSnapshot,
 ) -> Result<HWND> {
     let class_name = ensure_settings_class_registered()?;
@@ -1817,6 +1823,7 @@ fn create_settings_window(
 
     let state = WindowState {
         hwnd,
+        window_id,
         sender: tx.clone(),
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular: Cell::new(font_regular),
@@ -1915,20 +1922,24 @@ fn drain_pending_payload_messages(hwnd: HWND) {
 fn run_settings_window(
     tx: &Sender<BrightnessMessage>,
     hwnd_slot: &Arc<AtomicIsize>,
+    window_id: SettingsWindowId,
     snapshot: &SettingsSnapshot,
 ) {
-    let hwnd = match create_settings_window(tx, hwnd_slot, snapshot) {
+    let hwnd = match create_settings_window(tx, hwnd_slot, window_id, snapshot) {
         Ok(hwnd) => hwnd,
         Err(e) => {
             log::error!(error:% = e; "Failed to create settings window");
             // Release the "opening" claim so a later activation can retry
-            // instead of finding the slot permanently stuck.
+            // instead of finding the slot permanently stuck. A new window
+            // may claim the slot before the close below is handled; the
+            // window id keeps the controller from taking that close for
+            // the new window's.
             hwnd_slot.store(0, Ordering::SeqCst);
             // Creation never reached handle_destroy, which is the usual
             // sender of this message, so send it here — otherwise the
-            // controller's settings_open latches true for the rest of the
+            // controller keeps the window as open for the rest of the
             // process's life.
-            if let Err(e) = tx.send(BrightnessMessage::SettingsClosed) {
+            if let Err(e) = tx.send(BrightnessMessage::SettingsClosed { window: window_id }) {
                 log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
             }
             return;
@@ -1987,6 +1998,11 @@ const OPENING: isize = -1;
 pub struct SettingsSinkImpl {
     tx: Sender<BrightnessMessage>,
     hwnd: Arc<AtomicIsize>,
+    /// Id of the window created most recently — what `open` reports when
+    /// it only focuses the existing window.
+    current_id: SettingsWindowId,
+    /// Id the next created window gets.
+    next_id: SettingsWindowId,
 }
 
 impl SettingsSinkImpl {
@@ -1996,6 +2012,8 @@ impl SettingsSinkImpl {
         Self {
             tx,
             hwnd: Arc::new(AtomicIsize::new(0)),
+            current_id: SettingsWindowId::FIRST,
+            next_id: SettingsWindowId::FIRST,
         }
     }
 
@@ -2061,18 +2079,21 @@ impl SettingsSinkImpl {
 }
 
 impl SettingsSink for SettingsSinkImpl {
-    fn open(&mut self, snapshot: &SettingsSnapshot) {
+    fn open(&mut self, snapshot: &SettingsSnapshot) -> SettingsWindowId {
         match self
             .hwnd
             .compare_exchange(0, OPENING, Ordering::SeqCst, Ordering::SeqCst)
         {
             Ok(_) => {
+                let window_id = self.next_id;
+                self.next_id = window_id.next();
+                self.current_id = window_id;
                 let tx = self.tx.clone();
                 let hwnd_slot = Arc::clone(&self.hwnd);
                 let snapshot = snapshot.clone();
                 let spawned = std::thread::Builder::new()
                     .name("settings".to_string())
-                    .spawn(move || run_settings_window(&tx, &hwnd_slot, &snapshot));
+                    .spawn(move || run_settings_window(&tx, &hwnd_slot, window_id, &snapshot));
                 if let Err(e) = spawned {
                     // The slot is still OPENING, which every later activation
                     // reads as "a window is on its way". Release it, or Settings
@@ -2080,17 +2101,24 @@ impl SettingsSink for SettingsSinkImpl {
                     self.hwnd.store(0, Ordering::SeqCst);
                     log::error!(error:% = e; "Failed to spawn settings window thread");
                     // No thread means no window and so no handle_destroy, the
-                    // usual sender of this message; without it the controller's
-                    // settings_open latches true for the rest of the process.
-                    if let Err(e) = self.tx.send(BrightnessMessage::SettingsClosed) {
+                    // usual sender of this message; without it the controller
+                    // keeps this id as the open window for the rest of the
+                    // process. The id on the message is what lets a later
+                    // activation's window survive this close arriving after it.
+                    if let Err(e) = self
+                        .tx
+                        .send(BrightnessMessage::SettingsClosed { window: window_id })
+                    {
                         log::warn!(error:% = e; "Failed to send SettingsClosed (controller channel closed?)");
                     }
                 }
+                window_id
             }
             Err(OPENING) => {
                 log::debug!(
                     "Settings window is already being created; ignoring a duplicate activation"
                 );
+                self.current_id
             }
             Err(raw) => {
                 let hwnd = hwnd_from_isize(raw);
@@ -2101,6 +2129,7 @@ impl SettingsSink for SettingsSinkImpl {
                         log::debug!(error:% = e; "Focus post failed (settings window gone?)");
                     }
                 }
+                self.current_id
             }
         }
     }

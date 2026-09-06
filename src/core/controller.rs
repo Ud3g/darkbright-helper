@@ -17,7 +17,7 @@ use crate::core::reconcile::{
 };
 use crate::core::state::{
     BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, HotkeyOp, MonitorId, MonitorState,
-    SetOutcome, SettingChange, SettingsSnapshot, TrayMenuData, TrayMonitorInfo,
+    SetOutcome, SettingChange, SettingsSnapshot, SettingsWindowId, TrayMenuData, TrayMonitorInfo,
     UNREAD_BRIGHTNESS_SEED, generate_display_names,
 };
 use crate::error::{BrightnessError, Result};
@@ -126,7 +126,13 @@ pub trait MonitorLocator {
 /// Seam for the settings dialog window.
 pub trait SettingsSink {
     /// Opens (or focuses) the settings window with current values.
-    fn open(&mut self, snapshot: &SettingsSnapshot);
+    ///
+    /// Returns the identity of the window now showing: a fresh id if this
+    /// call created it, the existing window's id if it only focused it. The
+    /// window sends that id back in `SettingsClosed`, which is how the
+    /// controller tells a late close of an earlier window from the current
+    /// one closing.
+    fn open(&mut self, snapshot: &SettingsSnapshot) -> SettingsWindowId;
 
     /// Re-displays all values (restore defaults, rebind revert).
     fn refresh(&mut self, snapshot: &SettingsSnapshot);
@@ -252,8 +258,9 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     hotkey_port: Hk,
     /// Config persistence.
     store: Store,
-    /// Whether the settings window is currently open.
-    settings_open: bool,
+    /// The settings window currently open, if any — the id `open` returned
+    /// last. Cleared only by a `SettingsClosed` carrying this same id.
+    settings_window: Option<SettingsWindowId>,
     /// Whether the hotkey capture field is currently capturing. While `true`,
     /// hotkey interception is suspended so the combination being captured
     /// (which may match a currently registered brightness hotkey) reaches
@@ -321,7 +328,7 @@ where
             settings,
             hotkey_port,
             store,
-            settings_open: false,
+            settings_window: None,
             capture_active: false,
             dirty: SettingsDirty::default(),
             pending_save_since: None,
@@ -1079,7 +1086,7 @@ where
     /// updated.
     fn overlay_update(&mut self, id: &MonitorId, handle: MonitorHandle, opacity: u8) -> Result<()> {
         self.overlay.update(id, handle, opacity)?;
-        if self.settings_open {
+        if self.settings_window.is_some() {
             self.settings.assert_topmost();
         }
         Ok(())
@@ -1461,16 +1468,22 @@ where
                 );
             }
             BrightnessMessage::TrayOpenSettings => {
-                self.settings_open = true;
                 let snapshot = self.settings_snapshot();
-                self.settings.open(&snapshot);
+                self.settings_window = Some(self.settings.open(&snapshot));
             }
             // ── Settings Dialog Messages ─────────────────────────────────
             BrightnessMessage::SettingChanged(change) => {
                 self.handle_setting_changed(change, now);
             }
-            BrightnessMessage::SettingsClosed => {
-                self.settings_open = false;
+            BrightnessMessage::SettingsClosed { window } => {
+                // Only the open-window bookkeeping is identity-gated. The
+                // flush and the capture end below stay unconditional: both
+                // are idempotent, and a close for a window that is not the
+                // current one can only ever arrive from a window that
+                // already went away.
+                if self.settings_window == Some(window) {
+                    self.settings_window = None;
+                }
                 if self.capture_active {
                     self.capture_active = false;
                     self.post_hotkey_resume(now);

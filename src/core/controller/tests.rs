@@ -132,9 +132,22 @@ struct FakeSettings {
     topmost_asserts: u32,
 }
 
+impl FakeSettings {
+    /// The id `open` handed out for its n-th call (1-based) — every call
+    /// models a freshly created window, so ids are just sequential.
+    fn window(n: u64) -> SettingsWindowId {
+        let mut id = SettingsWindowId::FIRST;
+        for _ in 1..n {
+            id = id.next();
+        }
+        id
+    }
+}
+
 impl SettingsSink for FakeSettings {
-    fn open(&mut self, snapshot: &SettingsSnapshot) {
+    fn open(&mut self, snapshot: &SettingsSnapshot) -> SettingsWindowId {
         self.opened.push(snapshot.clone());
+        Self::window(u64::try_from(self.opened.len()).unwrap())
     }
     fn refresh(&mut self, snapshot: &SettingsSnapshot) {
         self.refreshed.push(snapshot.clone());
@@ -2273,7 +2286,7 @@ fn tray_open_settings_opens_the_dialog_with_current_values() {
     c.handle_message(BrightnessMessage::TrayOpenSettings, base)
         .unwrap();
 
-    assert!(c.settings_open);
+    assert!(c.settings_window.is_some());
     assert_eq!(c.settings.opened.len(), 1);
     assert_eq!(c.settings.opened[0].step_percent, 12);
 }
@@ -2289,15 +2302,61 @@ fn settings_closed_clears_the_open_flag_after_an_open() {
 
     c.handle_message(BrightnessMessage::TrayOpenSettings, base)
         .unwrap();
-    assert!(c.settings_open);
+    assert!(c.settings_window.is_some());
 
-    c.handle_message(BrightnessMessage::SettingsClosed, base)
-        .unwrap();
+    c.handle_message(
+        BrightnessMessage::SettingsClosed {
+            window: SettingsWindowId::FIRST,
+        },
+        base,
+    )
+    .unwrap();
 
     assert!(
-        !c.settings_open,
+        c.settings_window.is_none(),
         "a window that never appeared must not leave the flag latched"
     );
+}
+
+#[test]
+fn a_late_close_of_an_earlier_window_does_not_forget_the_current_one() {
+    // The platform sink releases its slot before its `SettingsClosed` is
+    // handled, so a second activation can create window 2 while window 1's
+    // close is still in the channel. That close must not clear the flag
+    // for window 2, or `assert_topmost` stops for a window that is open.
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    seed(&mut c, test_id(), 0);
+
+    c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+        .unwrap();
+    c.handle_message(BrightnessMessage::TrayOpenSettings, base)
+        .unwrap();
+    assert_eq!(c.settings_window, Some(FakeSettings::window(2)));
+
+    c.handle_message(
+        BrightnessMessage::SettingsClosed {
+            window: FakeSettings::window(1),
+        },
+        base,
+    )
+    .unwrap();
+    assert_eq!(
+        c.settings_window,
+        Some(FakeSettings::window(2)),
+        "window 1's close must not be taken for window 2's"
+    );
+    c.handle_adjust(None, -10, base).unwrap();
+    assert!(c.settings.topmost_asserts >= 1, "window 2 is still open");
+
+    c.handle_message(
+        BrightnessMessage::SettingsClosed {
+            window: FakeSettings::window(2),
+        },
+        base,
+    )
+    .unwrap();
+    assert!(c.settings_window.is_none());
 }
 
 #[test]
@@ -2311,12 +2370,14 @@ fn settings_closed_forces_a_save_when_dirty() {
     )
     .unwrap();
     c.handle_message(
-        BrightnessMessage::SettingsClosed,
+        BrightnessMessage::SettingsClosed {
+            window: SettingsWindowId::FIRST,
+        },
         base + Duration::from_millis(50),
     )
     .unwrap();
 
-    assert!(!c.settings_open);
+    assert!(c.settings_window.is_none());
     assert_eq!(
         c.store.saves.len(),
         1,
@@ -2334,8 +2395,13 @@ fn settings_closed_without_changes_saves_nothing() {
 
     c.handle_message(BrightnessMessage::TrayOpenSettings, base)
         .unwrap();
-    c.handle_message(BrightnessMessage::SettingsClosed, base)
-        .unwrap();
+    c.handle_message(
+        BrightnessMessage::SettingsClosed {
+            window: SettingsWindowId::FIRST,
+        },
+        base,
+    )
+    .unwrap();
 
     assert!(
         c.store.saves.is_empty(),
@@ -2763,12 +2829,17 @@ fn settings_closed_while_capturing_ends_capture_and_resumes() {
         .unwrap();
 
     let t2 = base + Duration::from_millis(300);
-    c.handle_message(BrightnessMessage::SettingsClosed, t2)
-        .unwrap();
+    c.handle_message(
+        BrightnessMessage::SettingsClosed {
+            window: SettingsWindowId::FIRST,
+        },
+        t2,
+    )
+    .unwrap();
 
     assert!(!c.capture_active);
     assert_eq!(c.hotkey_port.resumes, 1);
-    assert!(!c.settings_open);
+    assert!(c.settings_window.is_none());
 }
 
 #[test]

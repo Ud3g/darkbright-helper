@@ -409,6 +409,26 @@ pub enum SettingChange {
     RestoreDefaults,
 }
 
+/// Identity of one settings window, issued by `SettingsSink::open` when it
+/// creates a window and echoed back in `BrightnessMessage::SettingsClosed`.
+///
+/// Sequential per process; the sink hands out the next id each time it
+/// actually spawns a window (a call that only focuses the existing one
+/// returns that window's id again).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SettingsWindowId(u64);
+
+impl SettingsWindowId {
+    /// The id of the first window a sink creates.
+    pub const FIRST: Self = Self(1);
+
+    /// The id the sink issues to the window after this one.
+    #[must_use]
+    pub const fn next(self) -> Self {
+        Self(self.0 + 1)
+    }
+}
+
 /// Which in-place hotkey-thread operation an ack refers to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HotkeyOp {
@@ -797,7 +817,14 @@ pub enum BrightnessMessage {
         error: Option<String>,
     },
     /// The settings window was destroyed (flush pending save; end capture).
-    SettingsClosed,
+    /// `window` names which window: the controller only forgets its open
+    /// window when the ids match, so a close that arrives late — after the
+    /// slot was released and a newer window already claimed it — cannot be
+    /// mistaken for the newer window closing.
+    SettingsClosed {
+        /// The window that closed, as `SettingsSink::open` reported it.
+        window: SettingsWindowId,
+    },
     /// The capture field took focus for capturing (suspend interception).
     HotkeyCaptureStarted,
     /// Capture ended WITHOUT a new binding (Esc/kill-focus/close).

@@ -281,8 +281,8 @@ power threads log and carry on without that subsystem; the hotkey thread reports
 worker reports a refused respawn as `RespawnOutcome::BackoffExceeded`, the same degraded
 state a worker that died repeatedly produces, and only its *initial* spawn is fatal. Two
 subsystems have extra cleanup: the settings thread must release its `OPENING` slot **and**
-send `SettingsClosed`, or the window stays unopenable and the controller's `settings_open`
-latches true for the rest of the run.
+send `SettingsClosed`, or the window stays unopenable and the controller keeps that window
+as open for the rest of the run.
 
 **A failed `send` is logged at the level its message deserves.** `error!` when the message
 carries user intent or state the receiver must reconcile — a brightness adjustment, a DDC
@@ -372,7 +372,7 @@ enum BrightnessMessage {
     // Settings window
     SettingChanged(SettingChange),                             // Settings thread → main
     HotkeyRebindResult { op, success, fallback_active, error }, // Hotkey thread → main (ack)
-    SettingsClosed,                                            // Flush pending save, end capture
+    SettingsClosed { window },                                 // Flush pending save, end capture; window: the id open() reported
     HotkeyCaptureStarted,                                      // Suspend interception while capturing
     HotkeyCaptureEnded,                                        // Capture ended with no new binding
     OpenConfigFile,                                            // Shell side effect, like TrayOpenLogFolder
@@ -1468,6 +1468,16 @@ converted to the config's `0.1–1.0` float in core). The window posts
 `SettingsClosed` on destruction so the controller can flush a pending save,
 and `OpenConfigFile` for its "Open config file" footer link (handled like
 `TrayOpenLogFolder`, a shell side effect outside the controller).
+
+`SettingsClosed` carries the window's identity (`SettingsWindowId`), the id
+`SettingsSink::open` returned when it created that window. The window thread
+releases the `OPENING`/`HWND` slot *before* its close message is handled, so a
+second activation can already have created a newer window by the time the
+close arrives at the controller. The controller therefore forgets its open
+window only when the ids match; without that, a late close would clear the
+flag for the newer window and `assert_topmost` would stop for a window that is
+still showing. The flush and capture-end side effects of the message stay
+unconditional — both are idempotent.
 
 **Instant apply, debounced saves.** Every change applies immediately —
 including hotkey rebinds, live on the hotkey thread — except the logging
