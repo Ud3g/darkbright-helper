@@ -5,10 +5,13 @@ when 0 % is still too bright, keeps dimming with a black overlay. Multi-monitor 
 hotkey hits the monitor your mouse is on. One executable, no network access, written in
 Rust.
 
-![Filmed off-screen: the monitor's backlight dims to 0 %, then the overlay keeps dimming past it](docs/media/demo.gif)
-
-*Filmed off-screen with the camera's exposure locked — a screen recording cannot show the
-first half, because DDC/CI dims the monitor's backlight rather than the image.*
+<p align="center">
+  <img src="docs/media/demo.gif"
+       alt="Filmed off-screen: the monitor's backlight dims to 0 %, then the overlay keeps dimming past it">
+  <br>
+  <em>Filmed off-screen with the camera's exposure locked — a screen recording cannot show
+  the first half, because DDC/CI dims the monitor's backlight rather than the image.</em>
+</p>
 
 ## What it does
 
@@ -28,6 +31,10 @@ first half, because DDC/CI dims the monitor's backlight rather than the image.*
   dark-mode-aware window covering every option — hotkey rebinding included — with changes
   applying instantly. An optional "Start with Windows" toggle lives there too. The config
   file stays a fully supported escape hatch, one click away from the window's footer.
+
+![The tray context menu: live per-monitor status, the current hotkeys, and Settings, Open Log Folder and Quit](docs/media/tray-menu.png)
+
+![The settings window: hotkey rebinding, brightness step, OSD timing, refresh intervals, logging and Start with Windows](docs/media/settings-window.png)
 
 ## Download
 
@@ -89,57 +96,25 @@ permits it, and I would rather you have the tool you want than wait on me.
 
 ## Configuration
 
-Everything below is editable live from the tray's Settings window (right-click the tray
-icon → Settings) — this section documents the file it writes to, which stays a supported way
-to edit the same values directly.
+Every option is editable from the tray's Settings window (right-click the tray icon →
+Settings) — the screenshot above shows the full set, and changes apply instantly. The file
+it writes to stays a fully supported way to edit the same values by hand:
 
-The configuration file is automatically created at:
 `%APPDATA%\BrightnessControl\config.json`
 
-### Default Configuration
-```json
-{
-  "version": 1,
-  "hotkeys": {
-    "brightness_up": "Ctrl+Shift+Up",
-    "brightness_down": "Ctrl+Shift+Down",
-    "intercept_brightness_keys": false
-  },
-  "osd": {
-    "timeout_ms": 1000,
-    "opacity": 1.0
-  },
-  "brightness": {
-    "step_percent": 5
-  },
-  "monitors": {},
-  "refresh": {
-    "periodic_seconds": 60,
-    "inactivity_seconds": 30
-  },
-  "logging": {
-    "file_enabled": false,
-    "file_level": "info"
-  }
-}
-```
+It is created on first run with every field at its default, so the quickest reference for
+the file's shape is the file itself.
 
-### Options
-- **hotkeys.brightness_up/down**: Combination strings (e.g., "Alt+F1", "Ctrl+Shift+Plus").
-- **hotkeys.intercept_brightness_keys**: Enable low-level keyboard hook to capture dedicated brightness keys (default: false). See [Brightness Key Limitations](#brightness-key-limitations) for compatibility information.
-- **osd.timeout_ms**: How long the OSD remains visible (100-10000 ms).
-- **osd.opacity**: OSD window transparency (0.1-1.0).
-- **brightness.step_percent**: Amount to change per keypress (1-50%).
-- **refresh.periodic_seconds**: Background refresh interval to resync with external changes (0-3600, 0 = disabled).
-- **refresh.inactivity_seconds**: Refresh before adjustment if inactive for this duration (0-600, 0 = disabled).
-- **logging.file_enabled**: Opt-in rolling file log for release diagnostics (default: false). See [Logging](#logging).
-- **logging.file_level**: Level filter for the file log — `error`/`warn`/`info`/`debug`/`trace` (default: info).
+Two things the settings window cannot show you:
 
-The `monitors` field is reserved for future per-monitor settings and currently ignored.
+- `monitors` is reserved for future per-monitor settings and is currently ignored.
+- **Start with Windows** is not a field in this file. The toggle writes directly to the
+  `HKCU\Run` registry key, because the app ships as a portable zip that can move between
+  locations.
 
-**Start with Windows** is a separate toggle in the settings window, not a field in this file
-— it writes directly to the `HKCU\Run` registry key, since the app ships as a portable zip
-that can move between locations.
+Valid ranges and defaults for every field are tabulated in
+[`docs/architecture.md`](docs/architecture.md) §4. An out-of-range value is logged as an
+error and replaced with the default — a bad config never stops the app from starting.
 
 ## Logging
 
@@ -169,86 +144,39 @@ worth a glance before you attach the file to a bug report (see [Logging](#loggin
 
 ## Brightness Key Limitations
 
-The `intercept_brightness_keys` option attempts to capture dedicated brightness keys (`VK_BRIGHTNESS_UP`/`VK_BRIGHTNESS_DOWN`) using a low-level keyboard hook.
+`intercept_brightness_keys` installs a low-level keyboard hook to catch the dedicated
+brightness keys (`VK_BRIGHTNESS_UP`/`VK_BRIGHTNESS_DOWN`). It can only work on keyboards
+that route those keys through the standard Windows input path. Most laptop built-in
+keyboards do not: the firmware or ACPI handles them before Windows sees them, so there is
+nothing left to intercept. External USB keyboards frequently work, and gaming keyboards
+with media keys vary by manufacturer.
 
-**This feature only works on keyboards that send brightness keys through the standard Windows keyboard input path.**
-
-| Keyboard Type | Works? | Reason |
-|---------------|--------|--------|
-| Most laptop built-in keyboards | ❌ No | Keys handled by firmware/ACPI before reaching Windows |
-| Some external USB keyboards | ✅ Yes | Keys sent as standard HID key codes |
-| Gaming keyboards with media keys | ⚠️ Maybe | Depends on manufacturer implementation |
-
-**If your brightness keys don't work with this option:**
-- Your keyboard's brightness keys are intercepted by firmware or a dedicated driver before Windows sees them
-- The native Windows brightness OSD will still appear regardless of this setting
-- Use the primary hotkeys (`Ctrl+Shift+Up/Down`) instead
-
-**Notes:**
-- Some antivirus software may flag low-level keyboard hooks as suspicious behavior
-- Disabled by default to avoid false positives for users who don't need the feature
+If yours does not work, use the primary hotkeys (`Ctrl+Shift+Up/Down`) instead. The option
+is off by default because some antivirus software treats low-level keyboard hooks as
+suspicious behaviour.
 
 ## Running an unsigned binary
 
-The release binaries are **not code-signed**. Your browser warns on download (Edge:
-**Keep → Show more → Keep anyway**), and Windows then shows **"Windows protected your PC"**
-the first time you run each new version — proceed with **More info → Run anyway**.
-"Unrecognized" is not "malicious".
+The release binaries are **not code-signed**. Your browser warns on download, and Windows
+then shows **"Windows protected your PC"** the first time you run each new version —
+proceed with **More info → Run anyway**. "Unrecognized" is not "malicious". The prompt
+returns with every release because SmartScreen reputation attaches to the individual file
+rather than to the project, and an unsigned file starts from zero each time.
 
-You can also skip the prompt entirely by clearing the download mark on the `.zip` *before*
-extracting it: right-click it → **Properties** → tick **Unblock** → OK (or `Unblock-File`
-in PowerShell) — files extracted afterwards carry no mark. On managed corporate machines an
-administrator may have removed the "Run anyway" option altogether; there, building from
-source is the way out, since locally built binaries carry no download mark and SmartScreen
-does not apply to them.
-
-**Why it keeps coming back.** SmartScreen reputation attaches to the specific file, and an
-unsigned binary starts from zero with every release. Microsoft's own wording: "Unsigned
-files must build reputation anew with every update", reputation accrues only through
-download volume ("several weeks and hundreds of clean installs"), and there is "no need (or
-mechanism) to manually submit a file for SmartScreen reputation review". For a project this
-size, the prompt is effectively permanent.
-
-Signing *would* help — not by removing the first-run prompt, but by letting reputation
-carry across releases and by showing a verified publisher name instead of "Unknown
-publisher". An **EV** certificate specifically would not help: since August 2024 Microsoft
-removed all EV Code Signing OIDs from its Trusted Root Program and treats all code-signing
-certificates equally. Signing is something I may set up later — SignPath Foundation offers
-it free to qualifying open-source projects — but it is not in place today.
-
-**Antivirus false positives.** Unsigned, low-download-count native executables are a known
-source of machine-learning false positives in Microsoft Defender — typically
-`Trojan:*/Wacatac.*!ml`, where the `!ml` suffix marks a heuristic guess rather than a
-signature match. Rust-built CLI tools get caught by this regularly (see e.g.
-[tauri-apps/tauri#2486](https://github.com/tauri-apps/tauri/issues/2486)); it is not
-specific to Rust, and it is not fixed. The optional `intercept_brightness_keys` low-level
-keyboard hook makes a flag more likely, which is one reason it is off by default. If you
-hit one, please open an issue and I will submit it to Microsoft as a developer report — or
-submit it yourself at Microsoft's
-[file submission portal](https://www.microsoft.com/en-us/wdsi/filesubmission) as a **Home
-customer** (a Microsoft account is required).
-
-**Smart App Control (Windows 11).** SAC blocks unsigned code that has no established
-reputation, and unlike SmartScreen it offers no per-app override. Note that **building from
-source does not help here**: SAC checks signatures on all executable code the loader
-touches, not just downloaded files, so a locally compiled unsigned binary is blocked just
-the same. Most people are unaffected — SAC only engages after an evaluation period on a
-clean install, and Windows turns it off automatically on machines that look like developer
-workstations. If you do have it on, the options are to turn it off (**Settings → Windows
-Security → App & Browser Control → Smart App Control**) or to wait for a signed release;
-since March 2026 it can be toggled without a clean install.
-
-**What you can verify.** Every release is built by the
-[release workflow](.github/workflows/release.yml) from a tagged commit in this repository.
-The release notes carry the zip's SHA-256 (compare with `Get-FileHash`), and both the zip
-and the exe inside it have a signed build-provenance attestation:
+Since you are being asked to click past a security warning, verify the download instead of
+trusting it. The release notes carry the zip's SHA-256 (compare with `Get-FileHash`), and
+both the zip and the exe inside it carry a signed build-provenance attestation:
 
 ```powershell
 gh attestation verify .\darkbright-helper-<version>-windows-x64.zip --repo Ud3g/darkbright-helper
 ```
 
-proves the artifact was built by this repository's workflow from a specific commit. Since
-you are being asked to click past a security warning, these checks are the meaningful step.
+That proves the artifact was built by this repository's
+[release workflow](.github/workflows/release.yml) from a specific tagged commit.
+
+Defender false positives, Smart App Control — which blocks locally compiled unsigned
+binaries too, so building from source is not a way around it — and where code signing
+stands: [docs/unsigned-binary.md](docs/unsigned-binary.md).
 
 ## Build from source
 

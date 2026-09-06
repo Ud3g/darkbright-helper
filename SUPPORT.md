@@ -17,7 +17,7 @@ not the issue tracker.
 2. Skim the README, especially
    [Brightness Key Limitations](README.md#brightness-key-limitations) (dedicated
    brightness keys not working is usually your keyboard's firmware, not a bug) and
-   [Running an unsigned binary](README.md#running-an-unsigned-binary) (SmartScreen and
+   [Running an unsigned binary](docs/unsigned-binary.md) (SmartScreen and
    Defender warnings are expected and documented).
 3. Search existing issues, including closed ones.
 
