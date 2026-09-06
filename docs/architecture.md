@@ -1763,16 +1763,17 @@ Revisit when a Windows release changes the ordinals or when a documented API
 for menu theming appears. There is no interval to check on — a removed export
 now announces itself in the log, and a wrong theme is visible on sight.
 
-### Hand-rolled handle wrappers predating `Owned<T>`
+### `Owned<T>` for handles the `windows` crate knows how to free
 
-`SafeHKey` and `SafeDevInfo` (`src/platform/windows/ddc.rs`) hand-roll their cleanup
-(`RegCloseKey`, `SetupDiDestroyDeviceInfoList`). Both predate the move to `windows` 0.62,
-whose `windows::core::Owned<T>` now covers exactly that pattern through its `Free` impls.
+A handle whose type has a `windows::core::Free` impl is held as `windows::core::Owned<T>`
+rather than in a hand-rolled `Drop` wrapper: the single-instance mutex (`HANDLE`) and the
+`SetupAPI` device list and registry key in `src/platform/windows/ddc.rs` (`HDEVINFO`,
+`HKEY`) all do. The ownership claim then lives at the one `unsafe { Owned::new(..) }` call,
+which carries the `// SAFETY:` comment a wrapper's `Drop` would otherwise carry.
 
-They are functionally identical to an `Owned<T>` today, so this is not a defect and carries
-no deadline — fold the migration in opportunistically, the next time `ddc.rs` is touched for
-another reason. `SafeHwnd` is explicitly **not** a candidate: `DestroyWindow` does not fit
-the `Free` pattern. See `docs/code-conventions.md` § 3 for the rule this illustrates.
+`SafeHwnd` stays hand-rolled on purpose: `DestroyWindow` is not the `Free` pattern (it is
+thread-affine and has a validity check first). See `docs/code-conventions.md` § 3 for the
+rule this illustrates.
 
 ### Tracking tooltips via `tooltips_class32` do not work
 

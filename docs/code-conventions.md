@@ -231,6 +231,12 @@ impl Drop for SafeHwnd {
 
 The rule is about *ownership*, not about every handle-typed value:
 
+- Where the handle's type has a `windows::core::Free` impl — `HANDLE`, `HKEY`, `HDEVINFO`
+  and most kernel and registry handles — hold it as `windows::core::Owned<T>` instead of
+  writing the wrapper, as `single_instance.rs` and `ddc.rs` do. The `// SAFETY:` comment
+  that would sit on the wrapper's `Drop` sits on the `unsafe { Owned::new(..) }` call
+  instead; it states the same thing, that this handle is ours and released exactly once.
+  `SafeHwnd` cannot use it: `DestroyWindow` is not a `Free`.
 - A GDI object created and freed inside one painting block (the brushes and pens throughout
   `settings/dark.rs`) does not need a wrapper, and wrapping it would obscure the paint code.
   What the rule is really guarding against is an early `return` between the create and the

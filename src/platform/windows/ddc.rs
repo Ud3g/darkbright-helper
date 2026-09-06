@@ -5,8 +5,8 @@
 
 use windows::Win32::Devices::DeviceAndDriverInstallation::{
     DICS_FLAG_GLOBAL, DIGCF_PRESENT, DIGCF_PROFILE, DIREG_DEV, GUID_DEVCLASS_MONITOR, HDEVINFO,
-    SP_DEVINFO_DATA, SPDRP_DRIVER, SetupDiDestroyDeviceInfoList, SetupDiEnumDeviceInfo,
-    SetupDiGetClassDevsW, SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey,
+    SP_DEVINFO_DATA, SPDRP_DRIVER, SetupDiEnumDeviceInfo, SetupDiGetClassDevsW,
+    SetupDiGetDeviceRegistryPropertyW, SetupDiOpenDevRegKey,
 };
 use windows::Win32::Devices::Display::{
     DestroyPhysicalMonitors, GetNumberOfPhysicalMonitorsFromHMONITOR,
@@ -18,10 +18,9 @@ use windows::Win32::Graphics::Gdi::{
     DISPLAY_DEVICEW, EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR,
     MONITORINFOEXW,
 };
-use windows::Win32::System::Registry::{
-    HKEY, KEY_READ, REG_VALUE_TYPE, RegCloseKey, RegQueryValueExW,
-};
+use windows::Win32::System::Registry::{KEY_READ, REG_VALUE_TYPE, RegQueryValueExW};
 use windows::core::BOOL;
+use windows::core::Owned;
 use windows::core::PCWSTR;
 
 use std::thread;
@@ -433,19 +432,6 @@ fn get_edid_from_hmonitor(hmonitor: HMONITOR) -> Result<Vec<u8>> {
     find_edid_by_driver_key(&target_driver_key)
 }
 
-/// RAII for `HDEVINFO`
-struct SafeDevInfo(HDEVINFO);
-impl Drop for SafeDevInfo {
-    fn drop(&mut self) {
-        // SAFETY: the wrapper owns the `HDEVINFO` returned by
-        // `SetupDiGetClassDevsW` and nothing else destroys it; the list is
-        // still live here because every borrow of it ends before this drop.
-        unsafe {
-            let _ = SetupDiDestroyDeviceInfoList(self.0);
-        }
-    }
-}
-
 /// Searches for a monitor with the matching Driver Key in the `SetupAPI` device list
 /// and reads its EDID from the registry.
 ///
@@ -464,8 +450,10 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
     .map_err(|e| {
         BrightnessError::windows_api("SetupDiGetClassDevsW", e.code().0.cast_unsigned())
     })?;
-
-    let _safe_devinfo = SafeDevInfo(hdevinfo);
+    // SAFETY: the list was just created for this function and nothing else
+    // destroys it; `Owned` calls `SetupDiDestroyDeviceInfoList` on drop,
+    // after every borrow below has ended.
+    let hdevinfo = unsafe { Owned::new(hdevinfo) };
 
     let mut index = 0;
     let mut devinfo_data = SP_DEVINFO_DATA {
@@ -474,7 +462,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
     };
 
     // SetupDiEnumDeviceInfo returns Result<()>; Err(…) doubles as the end-of-list signal.
-    while unsafe { SetupDiEnumDeviceInfo(hdevinfo, index, &raw mut devinfo_data).is_ok() } {
+    while unsafe { SetupDiEnumDeviceInfo(*hdevinfo, index, &raw mut devinfo_data).is_ok() } {
         index += 1;
 
         // Use a u16 buffer for WCHAR alignment
@@ -495,7 +483,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
             );
 
             SetupDiGetDeviceRegistryPropertyW(
-                hdevinfo,
+                *hdevinfo,
                 &raw const devinfo_data,
                 SPDRP_DRIVER,
                 Some(&raw mut property_type),
@@ -518,7 +506,7 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
                 log::trace!(driver_key:% = driver_key; "Checking device driver key");
 
                 if driver_key.eq_ignore_ascii_case(target_driver_key) {
-                    return read_edid_from_registry(hdevinfo, &devinfo_data);
+                    return read_edid_from_registry(*hdevinfo, &devinfo_data);
                 }
             }
         }
@@ -528,19 +516,6 @@ fn find_edid_by_driver_key(target_driver_key: &str) -> Result<Vec<u8>> {
         "Unknown",
         "Monitor EDID not found in registry",
     ))
-}
-
-/// RAII for `HKEY`
-struct SafeHKey(HKEY);
-impl Drop for SafeHKey {
-    fn drop(&mut self) {
-        // SAFETY: the wrapper owns the `HKEY` opened by
-        // `SetupDiOpenDevRegKey` — it is never duplicated or closed
-        // elsewhere, so this closes it exactly once.
-        unsafe {
-            let _ = RegCloseKey(self.0);
-        }
-    }
 }
 
 /// Reads the "EDID" value from the device's registry key.
@@ -562,8 +537,10 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
     .map_err(|e| {
         BrightnessError::windows_api("SetupDiOpenDevRegKey", e.code().0.cast_unsigned())
     })?;
-
-    let _safe_hkey = SafeHKey(hkey);
+    // SAFETY: the key was just opened for this function and is never
+    // duplicated or closed elsewhere; `Owned` calls `RegCloseKey` on drop,
+    // so it is closed exactly once.
+    let hkey = unsafe { Owned::new(hkey) };
 
     let value_name = windows::core::w!("EDID");
     let mut data_type = REG_VALUE_TYPE::default();
@@ -576,7 +553,7 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
     unsafe {
         // First call to get size
         let _ = RegQueryValueExW(
-            hkey,
+            *hkey,
             value_name,
             None,
             Some(&raw mut data_type),
@@ -596,7 +573,7 @@ fn read_edid_from_registry(hdevinfo: HDEVINFO, devinfo_data: &SP_DEVINFO_DATA) -
         })?;
         let mut buffer = vec![0u8; capacity];
         let result = RegQueryValueExW(
-            hkey,
+            *hkey,
             value_name,
             None,
             Some(&raw mut data_type),
