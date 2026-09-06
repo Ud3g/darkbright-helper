@@ -1,5 +1,5 @@
 # Rust Code Conventions
-## Brightness Control Tool
+## darkbright-helper
 
 This document contains **project-specific** conventions only. Standard Rust conventions (naming, formatting, error handling) are assumed known and enforced by tooling.
 

@@ -360,7 +360,7 @@ fn init_logging() -> &'static TeeLogger {
         log::set_max_level(max);
     }
 
-    log::info!(version = version_string(); "Brightness Control Tool Starting");
+    log::info!(version = version_string(); "darkbright-helper starting");
     tee
 }
 
@@ -560,10 +560,7 @@ fn main() {
             Ok(InstanceLock::Acquired(guard)) => (Some(guard), None),
             Ok(InstanceLock::AlreadyRunning) => {
                 log::info!("Another instance is already running; exiting");
-                show_info_message_box(
-                    "Brightness Control",
-                    "Brightness Control is already running.",
-                );
+                show_info_message_box("darkbright-helper", "darkbright-helper is already running.");
                 return;
             }
             Err(e) => (None, Some(e)),
@@ -610,9 +607,9 @@ fn main() {
         Err(e) => {
             log::error!(error:% = e; "Fatal error starting the DDC worker");
             show_error_message_box(
-                "Brightness Control - Startup Error",
+                "darkbright-helper - Startup Error",
                 &format!(
-                    "Brightness Control could not start:
+                    "darkbright-helper could not start:
 
                      {e}
 
@@ -697,9 +694,9 @@ fn main() {
             // below applies to it, and the title would misattribute the cause.
             let (title, message) = if matches!(e, BrightnessError::ThreadSpawn { .. }) {
                 (
-                    "Brightness Control - Startup Error",
+                    "darkbright-helper - Startup Error",
                     format!(
-                        "Brightness Control could not start:\n\n\
+                        "darkbright-helper could not start:\n\n\
                      {e}\n\n\
                      The system would not start a thread, which usually means it \
                      is out of resources. Close some applications, or restart the \
@@ -712,7 +709,7 @@ fn main() {
                     |p| p.to_string_lossy().to_string(),
                 );
                 (
-                    "Brightness Control - Hotkey Error",
+                    "darkbright-helper - Hotkey Error",
                     format!(
                         "Failed to register hotkeys:\n\n\
                          {e}\n\n\
@@ -852,5 +849,5 @@ fn main() {
     // Explicitly drop controller to ensure windows are destroyed before exit.
     drop(controller);
 
-    log::info!("Brightness Control Tool Stopped");
+    log::info!("darkbright-helper stopped");
 }

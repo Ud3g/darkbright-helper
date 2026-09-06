@@ -1283,9 +1283,9 @@ The application runs as a background process with a system tray icon for user in
 │─────────────────────────────────────────────────│
 │ Settings                                        │  → Opens the settings window (§14)
 │ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
-│ Quit Brightness Control                         │  → Graceful shutdown
+│ Quit darkbright-helper                          │  → Graceful shutdown
 │─────────────────────────────────────────────────│
-│ Brightness Control v0.9.0+55.gc4687e5 (dev)     │  ← Version (disabled/info only)
+│ darkbright-helper v0.9.0+55.gc4687e5 (dev)      │  ← Version (disabled/info only)
 └─────────────────────────────────────────────────┘
 ```
 
@@ -1295,7 +1295,7 @@ The row names the build, not just the release. `core::version` combines the
 package version with `git describe` output that `build.rs` passes in at
 compile time, and appends a `+<metadata> (dev)` suffix **only** when the build
 is not a clean checkout of the tag matching the package version — so a
-released binary shows a bare `Brightness Control v0.9.0` and anything built
+released binary shows a bare `darkbright-helper v0.9.0` and anything built
 further along the cycle identifies its commit. A build with no git available
 at all (an unpacked source archive) also shows the bare version, which is the
 right answer for it. The same string opens the log and appears in the settings
@@ -1398,7 +1398,7 @@ Three conditions are visible in the tray: the two supervision give-up states
   via `NIM_MODIFY`: while degraded the icon carries an amber corner badge
   (generated at startup by drawing the base icon into a DIB and painting the
   badge — no second icon asset), and the tooltip appends the active warnings
-  (e.g. "Brightness Control – DDC unavailable"). The `HealthWarnings` snapshot
+  (e.g. "darkbright-helper – DDC unavailable"). The `HealthWarnings` snapshot
   crosses to the tray thread packed into the message's `wparam`, so the cause
   has to survive that hop — a round-trip test pins the encoding. The badge
   itself is raised only by the two supervision states: it means the app cannot
@@ -1939,14 +1939,14 @@ release history, not in a table here.
 6. Set `logging.file_level` to `"verbose"` (invalid) and restart
 7. **Expected**: An error line reports the invalid value; the file logs at the default `info` level
 8. With `file_enabled` still `true`, make the sink unbuildable — e.g. deny your user write access to `%APPDATA%\BrightnessControl`, or hold `darkbright.log` open exclusively from another process — and start a **release** build (no console)
-9. **Expected**: The app runs normally and the tray menu opens with a grayed "⚠ File logging failed to start — check the log folder is writable" line; the tray icon stays unbadged (this condition does not mean brightness control is broken); the tooltip reads "Brightness Control – file logging off"
+9. **Expected**: The app runs normally and the tray menu opens with a grayed "⚠ File logging failed to start — check the log folder is writable" line; the tray icon stays unbadged (this condition does not mean brightness control is broken); the tooltip reads "darkbright-helper – file logging off"
 
 #### Degraded-State Tray Indicator Test
 1. Start the application with `RUST_LOG=debug`
 2. Force a degraded DDC state (e.g. temporarily lower `HUNG_TIMEOUT_LIMIT`/`SET_TIMEOUT` in a test build and use a monitor/cable that drops DDC, or unplug all DDC-capable monitors and adjust repeatedly until "disabling DDC" is logged)
 3. **Expected**: The tray icon gains an amber corner badge; the menu's bottom line shows the running version. The wording depends on which state was reached — check the log line to know which one you provoked:
-   - respawn backoff exhausted (`respawn backoff exceeded`): tooltip "Brightness Control – DDC unavailable", menu line "⚠ DDC unavailable — press a brightness hotkey to retry"
-   - unresponsive worker (`DDC worker unresponsive`): tooltip "Brightness Control – monitor not responding", menu line "⚠ Monitor not responding — restart the app if this persists"
+   - respawn backoff exhausted (`respawn backoff exceeded`): tooltip "darkbright-helper – DDC unavailable", menu line "⚠ DDC unavailable — press a brightness hotkey to retry"
+   - unresponsive worker (`DDC worker unresponsive`): tooltip "darkbright-helper – monitor not responding", menu line "⚠ Monitor not responding — restart the app if this persists"
 4. Press a brightness hotkey
 5. **Expected**: after the *backoff* state, the log shows "Recovering from degraded DDC state" and the icon, tooltip and menu revert. After the *unresponsive* state, the warning deliberately stays — a keypress cannot unstick a blocked call. It clears on its own once the worker answers again ("DDC worker answered again"), on system resume, or if the stuck thread exits ("Unresponsive DDC worker has exited")
 

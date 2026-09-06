@@ -1217,7 +1217,7 @@ fn handle_autostart_click(hwnd: HWND) {
         set_checked(hwnd, ID_AUTOSTART, autostart::is_enabled());
         show_owned_error_message_box(
             hwnd,
-            "Brightness Control - Autostart",
+            "darkbright-helper - Autostart",
             &format!("Couldn't update the Windows startup entry:\n{e}"),
         );
     }
@@ -1247,7 +1247,7 @@ fn handle_restore_click(hwnd: HWND) {
 /// `restore_focus` call catches it immediately.
 fn confirm_restore_defaults(hwnd: HWND) -> bool {
     let message = wide("Reset all settings to their defaults? Hotkeys are applied immediately.");
-    let title = wide("Brightness Control - Restore Defaults");
+    let title = wide("darkbright-helper - Restore Defaults");
     let result = unsafe {
         MessageBoxW(
             Some(hwnd),
