@@ -8,10 +8,9 @@
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_GRAYTEXT, COLOR_WINDOWTEXT, CreateSolidBrush, DT_END_ELLIPSIS, DT_LEFT,
-    DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawFocusRect, DrawTextW, EndPaint,
-    FillRect, GetSysColor, HDC, InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    BeginPaint, COLOR_GRAYTEXT, COLOR_WINDOWTEXT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
+    DT_SINGLELINE, DT_VCENTER, DrawFocusRect, DrawTextW, EndPaint, GetSysColor, HDC,
+    InvalidateRect, PAINTSTRUCT, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetFocus, GetKeyState, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, SetFocus,
@@ -612,13 +611,7 @@ fn handle_capture_erasebkgnd(hwnd: HWND, wparam: WPARAM) -> bool {
     let mut rect = RECT::default();
     if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_ok() {
         let hdc = HDC(std::ptr::with_exposed_provenance_mut(wparam.0));
-        let brush = unsafe { CreateSolidBrush(COLORREF(dark::DARK_CONTROL_BG)) };
-        if !brush.is_invalid() {
-            unsafe {
-                FillRect(hdc, &raw const rect, brush);
-                let _ = DeleteObject(brush.into());
-            }
-        }
+        dark::fill_control_bg(hdc, &rect);
     }
     true
 }

@@ -26,10 +26,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DLGC_HASSETSEL, DLGC_WANTCHARS,
-    DLGC_WANTMESSAGE, DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    EN_KILLFOCUS, GetDlgItem, GetMessageW, GetNextDlgTabItem, GetWindowTextLengthW, GetWindowTextW,
-    HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR,
+    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DLGC_WANTCHARS, DLGC_WANTMESSAGE,
+    DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS,
+    GetDlgItem, GetMessageW, GetNextDlgTabItem, GetWindowTextLengthW, GetWindowTextW, HMENU,
+    HWND_TOPMOST, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR,
     MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
     SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
@@ -1511,7 +1511,10 @@ unsafe extern "system" fn footer_link_subclass_proc(
             // navigation, moving focus to the next/previous real control.
             WM_GETDLGCODE => {
                 let vk = get_dlg_code_query_vkey(lparam);
-                let mut code = DLGC_HASSETSEL;
+                // No base flag: a SysLink has no text selection to claim
+                // (DLGC_HASSETSEL is an edit-control flag) and is not a
+                // button; it only asks for the keys handled below.
+                let mut code = 0;
                 if vk == usize::from(VK_RETURN.0) {
                     code |= DLGC_WANTMESSAGE;
                 } else if vk == usize::from(VK_TAB.0) {

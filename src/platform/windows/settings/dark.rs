@@ -839,18 +839,16 @@ unsafe extern "system" fn combo_subclass_proc(
 ) -> LRESULT {
     // SAFETY: called by the common-controls subclass dispatcher, which upholds
     // a window procedure's contract: `hwnd` is the live combo this subclass is
-    // installed on, and `wparam`/`lparam` mean what `msg` documents. The
-    // `WM_ERASEBKGND` arm rests on that directly — it reads `wparam` back as
-    // the `HDC` the sender owns for the duration of the message, which holds
-    // only because the match has pinned the message first.
+    // installed on, and `wparam`/`lparam` mean what `msg` documents.
     unsafe {
         match msg {
             WM_ERASEBKGND => {
                 let mut dark = false;
                 with_window_state(|state| dark = state.dark.get());
                 if dark {
-                    let hdc = HDC(std::ptr::with_exposed_provenance_mut(wparam.0));
-                    fill_dark_control_bg(hdc, hwnd);
+                    // `paint_combo` fills the whole client area on every
+                    // WM_PAINT, so erasing here would only flash; just claim
+                    // it handled — the same pattern as the updown below.
                     return LRESULT(1);
                 }
                 DefSubclassProc(hwnd, msg, wparam, lparam)
@@ -873,19 +871,23 @@ unsafe extern "system" fn combo_subclass_proc(
     }
 }
 
-/// Fills `hwnd`'s whole client area with the dark control background —
-/// shared by the combo and updown subclasses' `WM_ERASEBKGND`/`WM_PAINT`
-/// handling.
-fn fill_dark_control_bg(hdc: HDC, hwnd: HWND) {
-    let mut rect = RECT::default();
-    if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_err() {
-        return;
-    }
-    let brush = unsafe { CreateSolidBrush(COLORREF(DARK_CONTROL_BG)) };
+/// The palette's control-background brush, or an invalid handle when the
+/// window state is gone (a paint racing `WM_DESTROY`) — callers treat that
+/// like a failed `CreateSolidBrush` and skip the fill.
+fn control_bg_brush() -> HBRUSH {
+    let mut brush = HBRUSH::default();
+    with_window_state(|state| brush = state.palette.control_bg);
+    brush
+}
+
+/// Fills `rect` on `hdc` with the dark control background, using the
+/// palette's brush rather than creating one per paint — shared by every
+/// hand-painted control in this window (combo, updown, hotkey capture).
+pub(super) fn fill_control_bg(hdc: HDC, rect: &RECT) {
+    let brush = control_bg_brush();
     if !brush.is_invalid() {
         unsafe {
-            FillRect(hdc, &raw const rect, brush);
-            let _ = DeleteObject(brush.into());
+            FillRect(hdc, rect, brush);
         }
     }
 }
@@ -907,13 +909,7 @@ fn paint_combo(hwnd: HWND) {
 
     let mut rect = RECT::default();
     if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_ok() {
-        let brush = unsafe { CreateSolidBrush(COLORREF(DARK_CONTROL_BG)) };
-        if !brush.is_invalid() {
-            unsafe {
-                FillRect(hdc, &raw const rect, brush);
-                let _ = DeleteObject(brush.into());
-            }
-        }
+        fill_control_bg(hdc, &rect);
 
         // The numeric edits get this same 1px frame from their own
         // WM_NCPAINT subclass (see `paint_edit_border`); the combo has no
@@ -1227,13 +1223,7 @@ fn paint_updown(hwnd: HWND) {
 
     let mut rect = RECT::default();
     if unsafe { GetClientRect(hwnd, &raw mut rect) }.is_ok() {
-        let brush = unsafe { CreateSolidBrush(COLORREF(DARK_CONTROL_BG)) };
-        if !brush.is_invalid() {
-            unsafe {
-                FillRect(hdc, &raw const rect, brush);
-                let _ = DeleteObject(brush.into());
-            }
-        }
+        fill_control_bg(hdc, &rect);
 
         let mid = i32::midpoint(rect.top, rect.bottom);
         let up_rect = RECT {
@@ -1261,7 +1251,7 @@ fn paint_updown(hwnd: HWND) {
 /// [`DARK_BORDER`], then a filled triangle glyph pointing up or down.
 fn draw_spin_button(hdc: HDC, rect: RECT, points_up: bool) {
     let pen = unsafe { CreatePen(PS_SOLID, 1, COLORREF(DARK_BORDER)) };
-    let face_brush = unsafe { CreateSolidBrush(COLORREF(DARK_CONTROL_BG)) };
+    let face_brush = control_bg_brush();
     if !pen.is_invalid() && !face_brush.is_invalid() {
         unsafe {
             let old_pen = SelectObject(hdc, pen.into());
@@ -1271,12 +1261,9 @@ fn draw_spin_button(hdc: HDC, rect: RECT, points_up: bool) {
             SelectObject(hdc, old_brush);
         }
     }
-    unsafe {
-        if !pen.is_invalid() {
+    if !pen.is_invalid() {
+        unsafe {
             let _ = DeleteObject(pen.into());
-        }
-        if !face_brush.is_invalid() {
-            let _ = DeleteObject(face_brush.into());
         }
     }
 
