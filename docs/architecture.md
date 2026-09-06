@@ -1622,7 +1622,11 @@ subclass, unrelated to theming: past the first embedded link, the control's
 native `NM_RETURN` delivery on Enter proved unreliable (mouse clicks on
 either link were never affected), so the subclass tracks link focus itself
 and dispatches Enter directly instead of waiting on a notification that
-might never arrive.
+might never arrive. The same subclass re-asserts `WS_TABSTOP` on
+`WM_KILLFOCUS`: comctl32 clears that style itself when focus leaves the
+control forward from its last link, which would otherwise drop the links
+out of the Shift+Tab order until something tabs into them from the front
+again.
 
 **DPI.** The window is created at the DPI of the monitor under the cursor
 (`MonitorFromPoint` + `GetDpiForMonitor`, computed before `CreateWindowExW`),

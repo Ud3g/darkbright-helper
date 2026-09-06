@@ -28,15 +28,16 @@ use windows::Win32::UI::WindowsAndMessaging::{
     BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
     CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DLGC_WANTCHARS, DLGC_WANTMESSAGE,
     DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS,
-    GetDlgItem, GetMessageW, GetNextDlgTabItem, GetWindowTextLengthW, GetWindowTextW, HMENU,
-    HWND_TOPMOST, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR,
-    MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW,
-    PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow,
-    TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE,
-    WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY,
-    WM_DPICHANGED, WM_GETDLGCODE, WM_KEYDOWN, WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
-    WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_VISIBLE,
+    GWL_STYLE, GetDlgItem, GetMessageW, GetNextDlgTabItem, GetWindowLongPtrW, GetWindowTextLengthW,
+    GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW,
+    MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT, WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION,
+    WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -1473,6 +1474,22 @@ unsafe extern "system" fn footer_link_subclass_proc(
                 let result = DefSubclassProc(hwnd, msg, wparam, lparam);
                 FOOTER_LINK_FOCUS.with(|f| f.set(0));
                 set_footer_link_focus(hwnd, 0);
+                result
+            }
+            // comctl32 clears the control's own WS_TABSTOP as focus leaves
+            // it forward from the last link (the style drops from
+            // 0x50030000 to 0x50020000, restored only by tabbing in again
+            // from the front), so the next Shift+Tab from "Restore
+            // defaults" would skip the links entirely. Re-asserting the
+            // style after the native handler keeps the control in the tab
+            // order in both directions.
+            WM_KILLFOCUS => {
+                let result = DefSubclassProc(hwnd, msg, wparam, lparam);
+                let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+                let tabstop = isize::try_from(WS_TABSTOP.0).unwrap_or(0);
+                if style & tabstop == 0 {
+                    SetWindowLongPtrW(hwnd, GWL_STYLE, style | tabstop);
+                }
                 result
             }
             WM_KEYDOWN if wparam.0 == usize::from(VK_TAB.0) => {
