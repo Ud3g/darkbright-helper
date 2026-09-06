@@ -1,4 +1,4 @@
-//! Brightness Control Tool library.
+//! darkbright-helper library.
 //!
 //! A hotkey-driven brightness adjustment tool for Windows that provides:
 //!

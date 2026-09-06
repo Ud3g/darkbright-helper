@@ -5,6 +5,15 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- The tray menu, its tooltip and the app's message boxes now call the program
+  `darkbright-helper`, the name it is downloaded and installed under. They were
+  the last places still showing "Brightness Control"; the settings window,
+  the autostart entry and the single-instance guard already used the real name.
+  The configuration directory `%APPDATA%\BrightnessControl` is deliberately
+  unchanged, since renaming it would orphan every existing config file.
+
 ## [0.10.0] — 2026-09-05
 
 ### Added

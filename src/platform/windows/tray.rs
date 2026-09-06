@@ -86,14 +86,14 @@ const MENU_ID_WARNING_BASE: u32 = 3000;
 const MENU_ID_USAGE_BASE: u32 = 4000;
 
 /// Tooltip text shown when hovering over the tray icon.
-const TRAY_TOOLTIP: &str = "Brightness Control";
+const TRAY_TOOLTIP: &str = "darkbright-helper";
 
 /// Resource ID for the embedded application icon.
 /// Must match the ID defined in build.rs when embedding resources.
 const IDI_APP_ICON: u16 = 1;
 
 /// Application name displayed in the tray menu.
-const APP_NAME: &str = "Brightness Control";
+const APP_NAME: &str = "darkbright-helper";
 
 /// Timeout for waiting for menu data from the main thread.
 const MENU_DATA_TIMEOUT: Duration = Duration::from_millis(500);
@@ -1326,7 +1326,7 @@ mod tests {
     fn tooltip_plain_when_healthy() {
         assert_eq!(
             compose_tooltip(HealthWarnings::default()),
-            "Brightness Control"
+            "darkbright-helper"
         );
     }
 
@@ -1342,17 +1342,14 @@ mod tests {
     fn tooltip_lists_active_warnings() {
         assert_eq!(
             compose_tooltip(ddc_only(DdcHealth::WorkerDead)),
-            "Brightness Control – DDC unavailable"
+            "darkbright-helper – DDC unavailable"
         );
 
         let keys = HealthWarnings {
             hotkeys_lost: true,
             ..HealthWarnings::default()
         };
-        assert_eq!(
-            compose_tooltip(keys),
-            "Brightness Control – hotkeys stopped"
-        );
+        assert_eq!(compose_tooltip(keys), "darkbright-helper – hotkeys stopped");
 
         let both = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
@@ -1362,7 +1359,7 @@ mod tests {
         };
         assert_eq!(
             compose_tooltip(both),
-            "Brightness Control – DDC unavailable, hotkeys stopped"
+            "darkbright-helper – DDC unavailable, hotkeys stopped"
         );
     }
 
@@ -1374,7 +1371,7 @@ mod tests {
         };
         assert_eq!(
             compose_tooltip(degraded),
-            "Brightness Control – hotkey change failed"
+            "darkbright-helper – hotkey change failed"
         );
     }
 
@@ -1382,7 +1379,7 @@ mod tests {
     fn tooltip_says_not_responding_for_a_hung_worker() {
         assert_eq!(
             compose_tooltip(ddc_only(DdcHealth::WorkerHung)),
-            "Brightness Control – monitor not responding"
+            "darkbright-helper – monitor not responding"
         );
     }
 
@@ -1394,7 +1391,7 @@ mod tests {
         };
         assert_eq!(
             compose_tooltip(logging),
-            "Brightness Control – file logging off"
+            "darkbright-helper – file logging off"
         );
     }
 
