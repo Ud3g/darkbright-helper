@@ -39,7 +39,7 @@ use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, S
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, COLOR_BTNFACE, COLOR_GRAYTEXT, CreatePen, CreateSolidBrush, DT_LEFT, DT_NOPREFIX,
     DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, EndPaint, FillRect, FrameRect,
-    GetStockObject, GetSysColor, GetSysColorBrush, GetWindowDC, HBRUSH, HDC, HFONT, NULL_PEN,
+    GetStockObject, GetSysColor, GetSysColorBrush, GetWindowDC, HBRUSH, HDC, HFONT, HPEN, NULL_PEN,
     PAINTSTRUCT, PS_SOLID, Polygon, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE,
     RDW_UPDATENOW, RedrawWindow, ReleaseDC, RoundRect, SelectObject, SetBkColor, SetBkMode,
     SetTextColor, TRANSPARENT,
@@ -103,48 +103,66 @@ const LIGHT_ERROR_TEXT: u32 = 0x0000_00C8;
 /// have. BGR: 90, 90, 90.
 const DARK_BORDER: u32 = 0x005A_5A5A;
 
-/// The two background brushes every `WM_CTLCOLOR*` handler below can return
-/// while dark mode is active, plus the hand-painted subclasses' own fills.
-/// Created once at window creation and freed on `WM_DESTROY` — text colours
-/// need no such handle, since `SetTextColor` takes a plain `COLORREF`.
+/// The GDI objects the dark-mode paint paths share: the two background
+/// brushes every `WM_CTLCOLOR*` handler below can return while dark mode is
+/// active (also the hand-painted subclasses' own fills), plus the
+/// [`DARK_BORDER`] frame as a brush (for `FrameRect`) and as a pen (for the
+/// updown's `RoundRect` outline). Created once at window creation and freed
+/// on `WM_DESTROY` — text colours need no such handle, since `SetTextColor`
+/// takes a plain `COLORREF`.
 pub(super) struct Palette {
     pub(super) window_bg: HBRUSH,
     pub(super) control_bg: HBRUSH,
+    pub(super) border: HBRUSH,
+    pub(super) border_pen: HPEN,
 }
 
 impl Palette {
-    /// Creates both brushes. Best-effort, matching the rest of this crate's
-    /// GDI resource creation: a failed `CreateSolidBrush` yields an invalid
-    /// (null) handle, logged and otherwise left alone. The child control
-    /// receives that handle straight back as the `WM_CTLCOLOR*` return
-    /// value, and a null brush there means the control simply skips filling
-    /// its background — not a crash, and not a fallback to
-    /// `DefWindowProcW`'s painting (nothing calls that for this case).
+    /// Creates all four objects. Best-effort, matching the rest of this
+    /// crate's GDI resource creation: a failed `CreateSolidBrush`/`CreatePen`
+    /// yields an invalid (null) handle, logged and otherwise left alone. The
+    /// child control receives a background brush straight back as the
+    /// `WM_CTLCOLOR*` return value, and a null brush there means the control
+    /// simply skips filling its background — not a crash, and not a fallback
+    /// to `DefWindowProcW`'s painting (nothing calls that for this case). The
+    /// hand-painted paths check for an invalid handle and skip that stroke.
     pub(super) fn new() -> Self {
         let window_bg = unsafe { CreateSolidBrush(COLORREF(DARK_WINDOW_BG)) };
         let control_bg = unsafe { CreateSolidBrush(COLORREF(DARK_CONTROL_BG)) };
-        if window_bg.is_invalid() || control_bg.is_invalid() {
-            log::warn!("Failed to create one or more dark-mode background brushes");
+        let border = unsafe { CreateSolidBrush(COLORREF(DARK_BORDER)) };
+        let border_pen = unsafe { CreatePen(PS_SOLID, 1, COLORREF(DARK_BORDER)) };
+        if window_bg.is_invalid()
+            || control_bg.is_invalid()
+            || border.is_invalid()
+            || border_pen.is_invalid()
+        {
+            log::warn!("Failed to create one or more dark-mode palette objects");
         }
         Self {
             window_bg,
             control_bg,
+            border,
+            border_pen,
         }
     }
 
-    /// Frees both brushes. Must be called exactly once, from
+    /// Frees all four objects. Must be called exactly once, from
     /// `handle_destroy` — the same single-owner convention as the window's
     /// two fonts.
     pub(super) fn destroy(&self) {
-        // SAFETY: the palette owns both brushes it created in `new` and this
+        // SAFETY: the palette owns the objects it created in `new` and this
         // is the only place they are deleted, so each is freed exactly once.
         // The caller owes an ordering guarantee the doc comment above does not
-        // state: nothing may still reference either brush, in particular the
+        // state: nothing may still reference any of them, in particular the
         // class background slot — which is why `handle_destroy` re-points it
-        // via [`set_class_background`] before calling this.
+        // via [`set_class_background`] before calling this. The border brush
+        // and pen are only used within a single paint call (the pen is
+        // deselected before that call returns), so no DC holds them here.
         unsafe {
             let _ = DeleteObject(self.window_bg.into());
             let _ = DeleteObject(self.control_bg.into());
+            let _ = DeleteObject(self.border.into());
+            let _ = DeleteObject(self.border_pen.into());
         }
     }
 }
@@ -788,13 +806,7 @@ pub(super) fn paint_edit_border(hwnd: HWND) {
     if hdc.is_invalid() {
         return;
     }
-    let brush = unsafe { CreateSolidBrush(COLORREF(DARK_BORDER)) };
-    if !brush.is_invalid() {
-        unsafe {
-            let _ = FrameRect(hdc, &raw const frame, brush);
-            let _ = DeleteObject(brush.into());
-        }
-    }
+    frame_border(hdc, &frame);
     unsafe {
         ReleaseDC(Some(hwnd), hdc);
     }
@@ -880,6 +892,20 @@ fn control_bg_brush() -> HBRUSH {
     brush
 }
 
+/// Strokes a 1px [`DARK_BORDER`] frame around `rect` on `hdc` with the
+/// palette's border brush — shared by the numeric edits' non-client frame
+/// and the combo's closed face. Skipped, like the fills, when the window
+/// state is gone.
+fn frame_border(hdc: HDC, rect: &RECT) {
+    let mut brush = HBRUSH::default();
+    with_window_state(|state| brush = state.palette.border);
+    if !brush.is_invalid() {
+        unsafe {
+            let _ = FrameRect(hdc, rect, brush);
+        }
+    }
+}
+
 /// Fills `rect` on `hdc` with the dark control background, using the
 /// palette's brush rather than creating one per paint — shared by every
 /// hand-painted control in this window (combo, updown, hotkey capture).
@@ -916,13 +942,7 @@ fn paint_combo(hwnd: HWND) {
         // border of its own to paint over in dark mode, so it needs one
         // drawn explicitly here — after the fill, before the arrow/text
         // below, so neither is affected by adding it.
-        let border = unsafe { CreateSolidBrush(COLORREF(DARK_BORDER)) };
-        if !border.is_invalid() {
-            unsafe {
-                let _ = FrameRect(hdc, &raw const rect, border);
-                let _ = DeleteObject(border.into());
-            }
-        }
+        frame_border(hdc, &rect);
 
         // EnableWindow only gates input, never painting, but a disabled
         // combo still has to read as disabled: grayed text and arrow, not
@@ -1250,8 +1270,12 @@ fn paint_updown(hwnd: HWND) {
 /// Paints one half of the updown control: a rounded-rect face outlined in
 /// [`DARK_BORDER`], then a filled triangle glyph pointing up or down.
 fn draw_spin_button(hdc: HDC, rect: RECT, points_up: bool) {
-    let pen = unsafe { CreatePen(PS_SOLID, 1, COLORREF(DARK_BORDER)) };
-    let face_brush = control_bg_brush();
+    let mut pen = HPEN::default();
+    let mut face_brush = HBRUSH::default();
+    with_window_state(|state| {
+        pen = state.palette.border_pen;
+        face_brush = state.palette.control_bg;
+    });
     if !pen.is_invalid() && !face_brush.is_invalid() {
         unsafe {
             let old_pen = SelectObject(hdc, pen.into());
@@ -1259,11 +1283,6 @@ fn draw_spin_button(hdc: HDC, rect: RECT, points_up: bool) {
             let _ = RoundRect(hdc, rect.left, rect.top, rect.right, rect.bottom, 3, 3);
             SelectObject(hdc, old_pen);
             SelectObject(hdc, old_brush);
-        }
-    }
-    if !pen.is_invalid() {
-        unsafe {
-            let _ = DeleteObject(pen.into());
         }
     }
 
