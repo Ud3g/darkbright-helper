@@ -23,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::BOOL;
 
-use darkbright_helper::core::config::{Config, ConfigLoadOutcome};
+use darkbright_helper::core::config::{Config, ConfigLoad, ConfigLoadOutcome, ConfigNotice};
 use darkbright_helper::core::controller::Controller;
 use darkbright_helper::core::logfile::{LOG_FILE_NAME, LOG_MAX_BYTES, RotatingFileWriter};
 use darkbright_helper::core::panic_hook;
@@ -189,69 +189,117 @@ fn pump_windows_messages() {
     }
 }
 
+/// Where the startup config came from. Decided in [`load_config`], logged by
+/// [`report_config_load`] once the file log sink exists — the file sink's own
+/// settings come out of this very load, so nothing logged during it could
+/// reach the file.
+enum ConfigSource {
+    /// `config.json` existed; how it was read is in the outcome.
+    File(ConfigLoadOutcome),
+    /// No file yet; defaults were written out as one.
+    CreatedDefault,
+    /// No file yet, and writing the defaults out failed.
+    CreateDefaultFailed(BrightnessError),
+    /// `APPDATA` is unset, so there is no config directory at all.
+    NoConfigDir,
+}
+
+/// The startup config together with everything worth logging about how it
+/// was obtained, held as data until the log sinks are ready.
+struct StartupConfig {
+    config: Config,
+    source: ConfigSource,
+    notices: Vec<ConfigNotice>,
+}
+
 /// Loads the application configuration.
 ///
 /// Attempts to load from the default path. If the file doesn't exist,
 /// creates a default config file. If parsing fails, uses defaults.
-/// Invalid hotkey strings are repaired to defaults, never fatal.
-fn load_config() -> Config {
+/// Invalid hotkey strings are repaired to defaults, never fatal. Logs only
+/// debug-level path lines itself; everything a user should see is returned
+/// for [`report_config_load`].
+fn load_config() -> StartupConfig {
     let config_path = Config::default_path();
-    let mut config = match &config_path {
+    let (mut config, source, mut notices) = match &config_path {
         Some(path) if path.exists() => {
             // Absolute config paths contain the user name; log them at debug only.
             log::debug!(path:% = path.display(); "Loading configuration");
-            let (cfg, outcome) = Config::load_or_recover(path);
-            match outcome {
-                ConfigLoadOutcome::Loaded => {
-                    log::info!("Configuration loaded from file");
-                }
-                ConfigLoadOutcome::RecoveredFromBackup { primary_error } => {
-                    log::warn!(
-                        error:% = primary_error;
-                        "Config file corrupt; settings recovered from backup — fix or delete config.json to stop this warning"
-                    );
-                }
-                ConfigLoadOutcome::DefaultsSubstituted {
-                    primary_error,
-                    backup_error,
-                } => {
-                    log::error!(
-                        error:% = primary_error,
-                        backup_error:? = backup_error.map(|e| e.to_string());
-                        "Failed to parse config and no usable backup, using defaults"
-                    );
-                }
-            }
-            cfg
+            let ConfigLoad {
+                config,
+                outcome,
+                notices,
+            } = Config::load_or_recover(path);
+            (config, ConfigSource::File(outcome), notices)
         }
         Some(path) => {
             log::debug!(path:% = path.display(); "Config file not found, creating default");
             let config = Config::default();
-            if let Err(e) = config.save_to(path) {
-                log::warn!(error:% = e; "Failed to save default config file");
-            } else {
-                log::info!("Default config file created");
-            }
-            config
+            let source = match config.save_to(path) {
+                Ok(()) => ConfigSource::CreatedDefault,
+                Err(e) => ConfigSource::CreateDefaultFailed(e),
+            };
+            (config, source, Vec::new())
         }
-        None => {
-            log::warn!("Could not determine config directory, using defaults");
-            Config::default()
-        }
+        None => (Config::default(), ConfigSource::NoConfigDir, Vec::new()),
     };
     // Hotkey validity needs the platform parser, so the repair runs here
     // rather than inside core's validate_and_fix.
-    config.repair_hotkeys(|s| parse_hotkey(s).is_ok());
-    config
+    notices.extend(config.repair_hotkeys(|s| parse_hotkey(s).is_ok()));
+    StartupConfig {
+        config,
+        source,
+        notices,
+    }
+}
+
+/// Logs how the startup config was obtained and every repair it needed.
+/// Runs after the file log sink is attached, so a user-submitted
+/// `darkbright.log` shows a broken config rather than starting after it.
+fn report_config_load(source: &ConfigSource, notices: &[ConfigNotice]) {
+    match source {
+        ConfigSource::File(ConfigLoadOutcome::Loaded) => {
+            log::info!("Configuration loaded from file");
+        }
+        ConfigSource::File(ConfigLoadOutcome::RecoveredFromBackup { primary_error }) => {
+            log::warn!(
+                error:% = primary_error;
+                "Config file corrupt; settings recovered from backup — fix or delete config.json to stop this warning"
+            );
+        }
+        ConfigSource::File(ConfigLoadOutcome::DefaultsSubstituted {
+            primary_error,
+            backup_error,
+        }) => {
+            log::error!(
+                error:% = primary_error,
+                backup_error:? = backup_error.as_ref().map(ToString::to_string);
+                "Failed to parse config and no usable backup, using defaults"
+            );
+        }
+        ConfigSource::CreatedDefault => {
+            log::info!("Default config file created");
+        }
+        ConfigSource::CreateDefaultFailed(e) => {
+            log::warn!(error:% = e; "Failed to save default config file");
+        }
+        ConfigSource::NoConfigDir => {
+            log::warn!("Could not determine config directory, using defaults");
+        }
+    }
+    for notice in notices {
+        notice.log();
+    }
 }
 
 /// Console logger plus an optionally attached rolling-file logger.
 ///
 /// The file half cannot exist at logger-installation time: whether it is
-/// wanted, and at which level, comes from the config file — whose loading
-/// itself produces log lines. The tee is therefore installed console-only and
-/// the file sink attached right after config load; only the config-loading
-/// lines themselves are console-only.
+/// wanted, and at which level, comes from the config file. The tee is
+/// therefore installed console-only and the file sink attached right after
+/// config load. The loader returns what it found as data
+/// ([`StartupConfig`]) and `main` logs it after the attach, so the file
+/// misses only the startup banner and the debug-level path lines.
 struct TeeLogger {
     console: env_logger::Logger,
     file: OnceLock<env_logger::Logger>,
@@ -504,25 +552,28 @@ fn main() {
     // Enforce a single instance per logon session before spawning any worker,
     // window, or hotkey. A second launch informs the user and exits, so it
     // leaves no duplicate tray icon, overlay, or failed hotkey registration.
-    let _instance_guard: Option<SingleInstance> = match single_instance::acquire() {
-        Ok(InstanceLock::Acquired(guard)) => Some(guard),
-        Ok(InstanceLock::AlreadyRunning) => {
-            log::info!("Another instance is already running; exiting");
-            show_info_message_box(
-                "Brightness Control",
-                "Brightness Control is already running.",
-            );
-            return;
-        }
-        Err(e) => {
-            // Fail open: an unexpected guard failure must not block the user's
-            // only instance.
-            log::error!(error:% = e; "Single-instance check failed; continuing without guard");
-            None
-        }
-    };
+    // A guard failure is fail-open (an unexpected failure must not block the
+    // user's only instance) and is held back from the log until the file
+    // sink below is attached, so the file records it too.
+    let (_instance_guard, guard_failure): (Option<SingleInstance>, Option<BrightnessError>) =
+        match single_instance::acquire() {
+            Ok(InstanceLock::Acquired(guard)) => (Some(guard), None),
+            Ok(InstanceLock::AlreadyRunning) => {
+                log::info!("Another instance is already running; exiting");
+                show_info_message_box(
+                    "Brightness Control",
+                    "Brightness Control is already running.",
+                );
+                return;
+            }
+            Err(e) => (None, Some(e)),
+        };
 
-    let config = load_config();
+    let StartupConfig {
+        config,
+        source,
+        notices,
+    } = load_config();
 
     // Attach the opt-in rolling file log now that the config is known. The
     // outcome outlives this block: a failure can only be reported once the
@@ -540,6 +591,13 @@ fn main() {
                 true
             }
         };
+
+    // Everything startup learned before the file sink existed, now that it
+    // does (see the "Startup ordering" note in docs/architecture.md §8).
+    if let Some(e) = &guard_failure {
+        log::error!(error:% = e; "Single-instance check failed; continuing without guard");
+    }
+    report_config_load(&source, &notices);
 
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();

@@ -626,7 +626,9 @@ dialog that state is expressed by clearing the field's checkbox rather than by t
 into it — so the spinner never has to produce a value whose meaning is not a duration. Every
 other range appears identically in all three places.
 
-Example log output for an invalid value, as the structured `key=value` sink renders it:
+Example log output for an invalid value, as the structured `key=value` sink renders it
+(emitted after the file sink attaches, so it reaches `darkbright.log` too — see §8, "Startup
+ordering"):
 ```
 [ERROR] Invalid config value, using default field=brightness.step_percent value=999 min=1 max=50 default=5
 [ERROR] Invalid config value exceeds maximum, using default field=refresh.periodic_seconds value=99999 max=3600 default=60
@@ -882,9 +884,17 @@ retrievable artifact for field reports. Mechanics:
   PII rule) — acceptable for a deliberately created diagnostic artifact.
 - **Startup ordering:** the logger is installed console-only, and the file
   sink attaches immediately after the config is loaded (the setting lives in
-  the config). The config-loading log lines themselves therefore reach only
-  the console; the file starts with a version-stamped "File logging enabled"
-  line.
+  the config). So that the load itself is not invisible to the file, the
+  loader does not log what it finds: `Config::load_or_recover` returns the
+  recovery outcome and a list of `ConfigNotice`s (unknown keys, repaired
+  values, version mismatch, a failed backup refresh) as data, and `main`
+  logs them — together with a fail-open single-instance guard failure —
+  right after the attach. The file therefore starts with a version-stamped
+  "File logging enabled" line followed by the config outcome and any
+  repairs; only the startup banner and the debug-level path lines are
+  console-only. This is the same "log at the point of handling" rule the
+  rest of the code follows, applied to a case where the handling point is
+  after the sink exists.
 - **Access:** the tray menu's "Open Log Folder" entry opens the directory in
   Explorer.
 - **Attach failure:** if the sink cannot be built (no `APPDATA`, an unwritable
@@ -1906,7 +1916,7 @@ release history, not in a table here.
 #### File Logging Test
 1. Set `logging.file_enabled` to `true` in config
 2. Start the application (release build — no console needed)
-3. **Expected**: `%APPDATA%\BrightnessControl\darkbright.log` starts with a version-stamped "File logging enabled" line; adjustments append info-level lines including `key=value` fields; `RUST_LOG` has no effect on the file
+3. **Expected**: `%APPDATA%\BrightnessControl\darkbright.log` starts with a version-stamped "File logging enabled" line, followed by the config-load outcome ("Configuration loaded from file") and, with a deliberately out-of-range value such as `"step_percent": 999` in `config.json`, the corresponding "Invalid config value, using default" line; adjustments append info-level lines including `key=value` fields; `RUST_LOG` has no effect on the file
 4. Tray → "Open Log Folder"
 5. **Expected**: Explorer opens the folder containing `config.json` and `darkbright.log`
 6. Set `logging.file_level` to `"verbose"` (invalid) and restart

@@ -328,6 +328,181 @@ fn log_safe_file_name(path: &std::path::Path) -> String {
     )
 }
 
+/// One thing the loader had to say about the file: a repaired value, a
+/// version mismatch, an ignored key.
+///
+/// Returned as data instead of logged where it is found. Whether the file
+/// log is wanted, and at which level, is itself a config setting, so that
+/// sink can only attach *after* loading finishes — anything logged during
+/// the load would reach the console alone, which release builds hide. The
+/// binary logs these through [`ConfigNotice::log`] once its sinks are up,
+/// so a user-submitted log shows the repairs that shaped the run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigNotice {
+    /// A key the schema does not know; serde dropped it silently.
+    UnknownKey {
+        /// Dotted path of the key, e.g. `hotkeys.brightnes_up`.
+        key: String,
+    },
+    /// `version` differed from the current schema; no migration exists, so
+    /// the fields were interpreted as the current schema.
+    VersionMismatch {
+        /// The version the file declared.
+        found: u32,
+    },
+    /// The reserved `monitors` map is non-empty but nothing reads it yet.
+    MonitorsIgnored {
+        /// Number of entries the file carries.
+        entries: usize,
+    },
+    /// A value outside its `min..=max` range, replaced by its default.
+    OutOfRange {
+        /// Dotted field path.
+        field: &'static str,
+        /// The rejected value, rendered.
+        value: String,
+        /// Lower bound, rendered.
+        min: String,
+        /// Upper bound, rendered.
+        max: String,
+        /// The default that replaced it, rendered.
+        default: String,
+    },
+    /// A value above its maximum (zero is legal and means "off"), replaced
+    /// by its default.
+    AboveMaximum {
+        /// Dotted field path.
+        field: &'static str,
+        /// The rejected value, rendered.
+        value: String,
+        /// Upper bound, rendered.
+        max: String,
+        /// The default that replaced it, rendered.
+        default: String,
+    },
+    /// A value that does not parse as what the field expects, replaced by
+    /// its default.
+    Unparseable {
+        /// Dotted field path.
+        field: &'static str,
+        /// The rejected value.
+        value: String,
+        /// The default that replaced it.
+        default: String,
+    },
+    /// A hotkey string the platform parser rejects, replaced by its default.
+    InvalidHotkey {
+        /// Dotted field path.
+        field: &'static str,
+        /// The rejected value.
+        value: String,
+        /// The default that replaced it.
+        default: &'static str,
+    },
+    /// The `.bak` mirror could not be refreshed after a successful parse.
+    BackupRefreshFailed {
+        /// The I/O error, rendered.
+        error: String,
+    },
+}
+
+impl ConfigNotice {
+    /// Logs this notice: `error` for a value the app refused and replaced,
+    /// `warn` for everything else. The lines are the ones the loader used to
+    /// emit at the point of occurrence, so log readers and the examples in
+    /// `docs/architecture.md` still match.
+    pub fn log(&self) {
+        match self {
+            Self::UnknownKey { key } => {
+                log::warn!(key:% = key; "Unknown config key ignored — check for typos");
+            }
+            Self::VersionMismatch { found } => {
+                log::warn!(
+                    found = *found,
+                    expected = CONFIG_VERSION;
+                    "Config version mismatch; no migration performed, fields interpreted as current schema"
+                );
+            }
+            Self::MonitorsIgnored { entries } => {
+                log::warn!(
+                    entries = *entries;
+                    "Per-monitor settings ('monitors') are not yet implemented and have no effect"
+                );
+            }
+            Self::OutOfRange {
+                field,
+                value,
+                min,
+                max,
+                default,
+            } => {
+                log::error!(
+                    field = *field,
+                    value:% = value,
+                    min:% = min,
+                    max:% = max,
+                    default:% = default;
+                    "Invalid config value, using default"
+                );
+            }
+            Self::AboveMaximum {
+                field,
+                value,
+                max,
+                default,
+            } => {
+                log::error!(
+                    field = *field,
+                    value:% = value,
+                    max:% = max,
+                    default:% = default;
+                    "Invalid config value exceeds maximum, using default"
+                );
+            }
+            Self::Unparseable {
+                field,
+                value,
+                default,
+            } => {
+                log::error!(
+                    field = *field,
+                    value:% = value,
+                    default:% = default;
+                    "Invalid config value, using default"
+                );
+            }
+            Self::InvalidHotkey {
+                field,
+                value,
+                default,
+            } => {
+                log::error!(
+                    field = *field,
+                    value:% = value,
+                    default = *default;
+                    "Invalid hotkey string, using default"
+                );
+            }
+            Self::BackupRefreshFailed { error } => {
+                log::warn!(error:% = error; "Failed to refresh config backup");
+            }
+        }
+    }
+}
+
+/// What [`Config::load_or_recover`] produced: the config to run with, how it
+/// was obtained, and every notice the load raised — kept apart so the caller
+/// can log the latter two once its log sinks are attached.
+#[derive(Debug)]
+pub struct ConfigLoad {
+    /// The config to run with.
+    pub config: Config,
+    /// Which file (or defaults) it came from.
+    pub outcome: ConfigLoadOutcome,
+    /// Repairs and warnings raised while loading it, in the order found.
+    pub notices: Vec<ConfigNotice>,
+}
+
 /// How [`Config::load_or_recover`] obtained its result.
 ///
 /// Returned alongside the config so the caller can log or surface the
@@ -418,13 +593,14 @@ impl Config {
         }
     }
 
-    /// Loads configuration from a specific path.
+    /// Loads configuration from a specific path, returning it together with
+    /// the notices the load raised (unknown keys, repaired values).
     ///
     /// # Errors
     ///
     /// Returns `ConfigRead` if the file cannot be read, or `ConfigParse` if
     /// the JSON is invalid.
-    pub(crate) fn load_from(path: &std::path::Path) -> Result<Self> {
+    pub(crate) fn load_from(path: &std::path::Path) -> Result<(Self, Vec<ConfigNotice>)> {
         let path_str = log_safe_file_name(path);
 
         let contents = std::fs::read_to_string(path)
@@ -436,18 +612,21 @@ impl Config {
         // Serde drops unrecognized keys silently while every field has a
         // default, so a typo becomes a setting that silently does nothing.
         // Diff the raw file against the parsed config's serialization and
-        // warn — never fatal.
+        // report each — never fatal.
+        let mut notices = Vec::new();
         if let (Ok(raw), Ok(schema)) = (
             serde_json::from_str::<serde_json::Value>(&contents),
             serde_json::to_value(&config),
         ) {
-            for key in Self::unknown_keys(&raw, &schema) {
-                log::warn!(key:% = key; "Unknown config key ignored — check for typos");
-            }
+            notices.extend(
+                Self::unknown_keys(&raw, &schema)
+                    .into_iter()
+                    .map(|key| ConfigNotice::UnknownKey { key }),
+            );
         }
 
-        config.validate_and_fix();
-        Ok(config)
+        notices.extend(config.validate_and_fix());
+        Ok((config, notices))
     }
 
     /// Loads configuration from `path`, recovering from the `.bak` sibling
@@ -464,36 +643,43 @@ impl Config {
     ///
     /// Panics if JSON serialization fails while refreshing the backup.
     #[must_use]
-    pub fn load_or_recover(path: &std::path::Path) -> (Self, ConfigLoadOutcome) {
+    pub fn load_or_recover(path: &std::path::Path) -> ConfigLoad {
         match Self::load_from(path) {
-            Ok(config) => {
-                config.refresh_backup(path);
-                (config, ConfigLoadOutcome::Loaded)
+            Ok((config, mut notices)) => {
+                notices.extend(config.refresh_backup(path));
+                ConfigLoad {
+                    config,
+                    outcome: ConfigLoadOutcome::Loaded,
+                    notices,
+                }
             }
             Err(primary_error) => {
                 let backup = Self::backup_path(path);
                 if backup.exists() {
                     match Self::load_from(&backup) {
-                        Ok(config) => (
+                        Ok((config, notices)) => ConfigLoad {
                             config,
-                            ConfigLoadOutcome::RecoveredFromBackup { primary_error },
-                        ),
-                        Err(backup_error) => (
-                            Self::default(),
-                            ConfigLoadOutcome::DefaultsSubstituted {
+                            outcome: ConfigLoadOutcome::RecoveredFromBackup { primary_error },
+                            notices,
+                        },
+                        Err(backup_error) => ConfigLoad {
+                            config: Self::default(),
+                            outcome: ConfigLoadOutcome::DefaultsSubstituted {
                                 primary_error,
                                 backup_error: Some(backup_error),
                             },
-                        ),
+                            notices: Vec::new(),
+                        },
                     }
                 } else {
-                    (
-                        Self::default(),
-                        ConfigLoadOutcome::DefaultsSubstituted {
+                    ConfigLoad {
+                        config: Self::default(),
+                        outcome: ConfigLoadOutcome::DefaultsSubstituted {
                             primary_error,
                             backup_error: None,
                         },
-                    )
+                        notices: Vec::new(),
+                    }
                 }
             }
         }
@@ -529,15 +715,17 @@ impl Config {
     }
 
     /// Best-effort refresh of the backup file with this config's contents.
-    /// A failure is logged and swallowed — backup maintenance must never
-    /// break startup.
-    fn refresh_backup(&self, path: &std::path::Path) {
+    /// A failure is reported as a notice and otherwise swallowed — backup
+    /// maintenance must never break startup.
+    fn refresh_backup(&self, path: &std::path::Path) -> Option<ConfigNotice> {
         let backup = Self::backup_path(path);
         let contents =
             serde_json::to_string_pretty(self).expect("Config serialization should never fail");
-        if let Err(e) = Self::write_atomically(&backup, &contents) {
-            log::warn!(error:% = e; "Failed to refresh config backup");
-        }
+        Self::write_atomically(&backup, &contents).err().map(|e| {
+            ConfigNotice::BackupRefreshFailed {
+                error: e.to_string(),
+            }
+        })
     }
 
     /// Saves configuration to a specific path.
@@ -567,21 +755,20 @@ impl Config {
             .map_err(|e| BrightnessError::config_write(&path_str, e))
     }
 
-    /// Validates configuration values and replaces invalid ones with defaults.
-    ///
-    /// Logs errors for each invalid value found.
-    fn validate_and_fix(&mut self) {
+    /// Validates configuration values and replaces invalid ones with
+    /// defaults, returning one notice per repair or warning.
+    fn validate_and_fix(&mut self) -> Vec<ConfigNotice> {
+        let mut notices = Vec::new();
+
         // Version check: no migration logic exists, so all that can be done
         // honestly is warn and interpret the fields as the current schema
         // (unknown fields were already dropped by serde). Resetting the value
         // keeps later writes (backup mirror, save) truthful about what the
         // in-memory config actually is after repair.
         if self.version != CONFIG_VERSION {
-            log::warn!(
-                found = self.version,
-                expected = CONFIG_VERSION;
-                "Config version mismatch; no migration performed, fields interpreted as current schema"
-            );
+            notices.push(ConfigNotice::VersionMismatch {
+                found: self.version,
+            });
             self.version = CONFIG_VERSION;
         }
 
@@ -589,114 +776,113 @@ impl Config {
         // warn so a user who sets them learns why nothing changes. The
         // entries are preserved (they round-trip through saves).
         if !self.monitors.is_empty() {
-            log::warn!(
-                entries = self.monitors.len();
-                "Per-monitor settings ('monitors') are not yet implemented and have no effect"
-            );
+            notices.push(ConfigNotice::MonitorsIgnored {
+                entries: self.monitors.len(),
+            });
         }
 
         if self.osd.timeout_ms < OSD_TIMEOUT_MIN || self.osd.timeout_ms > OSD_TIMEOUT_MAX {
-            log::error!(
-                field = "osd.timeout_ms",
-                value = self.osd.timeout_ms,
-                min = OSD_TIMEOUT_MIN,
-                max = OSD_TIMEOUT_MAX,
-                default = DEFAULT_OSD_TIMEOUT_MS;
-                "Invalid config value, using default"
-            );
+            notices.push(ConfigNotice::OutOfRange {
+                field: "osd.timeout_ms",
+                value: self.osd.timeout_ms.to_string(),
+                min: OSD_TIMEOUT_MIN.to_string(),
+                max: OSD_TIMEOUT_MAX.to_string(),
+                default: DEFAULT_OSD_TIMEOUT_MS.to_string(),
+            });
             self.osd.timeout_ms = DEFAULT_OSD_TIMEOUT_MS;
         }
 
         if self.osd.opacity < OSD_OPACITY_MIN || self.osd.opacity > OSD_OPACITY_MAX {
-            log::error!(
-                field = "osd.opacity",
-                value = self.osd.opacity,
-                min = OSD_OPACITY_MIN,
-                max = OSD_OPACITY_MAX,
-                default = DEFAULT_OSD_OPACITY;
-                "Invalid config value, using default"
-            );
+            notices.push(ConfigNotice::OutOfRange {
+                field: "osd.opacity",
+                value: self.osd.opacity.to_string(),
+                min: OSD_OPACITY_MIN.to_string(),
+                max: OSD_OPACITY_MAX.to_string(),
+                default: DEFAULT_OSD_OPACITY.to_string(),
+            });
             self.osd.opacity = DEFAULT_OSD_OPACITY;
         }
 
         if self.brightness.step_percent < STEP_PERCENT_MIN
             || self.brightness.step_percent > STEP_PERCENT_MAX
         {
-            log::error!(
-                field = "brightness.step_percent",
-                value = self.brightness.step_percent,
-                min = STEP_PERCENT_MIN,
-                max = STEP_PERCENT_MAX,
-                default = DEFAULT_STEP_PERCENT;
-                "Invalid config value, using default"
-            );
+            notices.push(ConfigNotice::OutOfRange {
+                field: "brightness.step_percent",
+                value: self.brightness.step_percent.to_string(),
+                min: STEP_PERCENT_MIN.to_string(),
+                max: STEP_PERCENT_MAX.to_string(),
+                default: DEFAULT_STEP_PERCENT.to_string(),
+            });
             self.brightness.step_percent = DEFAULT_STEP_PERCENT;
         }
 
         // 0 is a legal value meaning "off", so only the upper bound is checked.
         if self.refresh.periodic_seconds > REFRESH_PERIODIC_MAX {
-            log::error!(
-                field = "refresh.periodic_seconds",
-                value = self.refresh.periodic_seconds,
-                max = REFRESH_PERIODIC_MAX,
-                default = DEFAULT_REFRESH_PERIODIC_SECONDS;
-                "Invalid config value exceeds maximum, using default"
-            );
+            notices.push(ConfigNotice::AboveMaximum {
+                field: "refresh.periodic_seconds",
+                value: self.refresh.periodic_seconds.to_string(),
+                max: REFRESH_PERIODIC_MAX.to_string(),
+                default: DEFAULT_REFRESH_PERIODIC_SECONDS.to_string(),
+            });
             self.refresh.periodic_seconds = DEFAULT_REFRESH_PERIODIC_SECONDS;
         }
 
         // 0 is a legal value meaning "off", so only the upper bound is checked.
         if self.refresh.inactivity_seconds > REFRESH_INACTIVITY_MAX {
-            log::error!(
-                field = "refresh.inactivity_seconds",
-                value = self.refresh.inactivity_seconds,
-                max = REFRESH_INACTIVITY_MAX,
-                default = DEFAULT_REFRESH_INACTIVITY_SECONDS;
-                "Invalid config value exceeds maximum, using default"
-            );
+            notices.push(ConfigNotice::AboveMaximum {
+                field: "refresh.inactivity_seconds",
+                value: self.refresh.inactivity_seconds.to_string(),
+                max: REFRESH_INACTIVITY_MAX.to_string(),
+                default: DEFAULT_REFRESH_INACTIVITY_SECONDS.to_string(),
+            });
             self.refresh.inactivity_seconds = DEFAULT_REFRESH_INACTIVITY_SECONDS;
         }
 
         // Any casing is accepted: the `LevelFilter` parser is case-insensitive.
         if self.logging.file_level.parse::<log::LevelFilter>().is_err() {
-            log::error!(
-                field = "logging.file_level",
-                value:% = self.logging.file_level,
-                default = DEFAULT_FILE_LOG_LEVEL;
-                "Invalid config value, using default"
-            );
+            notices.push(ConfigNotice::Unparseable {
+                field: "logging.file_level",
+                value: self.logging.file_level.clone(),
+                default: DEFAULT_FILE_LOG_LEVEL.to_string(),
+            });
             self.logging.file_level = DEFAULT_FILE_LOG_LEVEL.to_string();
         }
+
+        notices
     }
 
     /// Replaces hotkey strings that `is_valid` rejects with the defaults,
-    /// logging an error for each — the "invalid config is never fatal"
+    /// returning a notice for each — the "invalid config is never fatal"
     /// contract applies to hotkey strings just like to numeric fields.
     ///
     /// Hotkey validity is platform knowledge (the parser and its key-name
     /// table live in the platform layer), so it is injected as a predicate
     /// instead of being implemented here. Callers pass e.g.
     /// `|s| parse_hotkey(s).is_ok()`.
-    pub fn repair_hotkeys(&mut self, is_valid: impl Fn(&str) -> bool) {
+    pub fn repair_hotkeys(&mut self, is_valid: impl Fn(&str) -> bool) -> Vec<ConfigNotice> {
+        let mut notices = Vec::new();
         if !is_valid(&self.hotkeys.brightness_up) {
-            log::error!(
-                field = "hotkeys.brightness_up",
-                value:% = self.hotkeys.brightness_up,
-                default = DEFAULT_HOTKEY_UP;
-                "Invalid hotkey string, using default"
-            );
-            self.hotkeys.brightness_up = DEFAULT_HOTKEY_UP.to_string();
+            notices.push(ConfigNotice::InvalidHotkey {
+                field: "hotkeys.brightness_up",
+                value: std::mem::replace(
+                    &mut self.hotkeys.brightness_up,
+                    DEFAULT_HOTKEY_UP.to_string(),
+                ),
+                default: DEFAULT_HOTKEY_UP,
+            });
         }
 
         if !is_valid(&self.hotkeys.brightness_down) {
-            log::error!(
-                field = "hotkeys.brightness_down",
-                value:% = self.hotkeys.brightness_down,
-                default = DEFAULT_HOTKEY_DOWN;
-                "Invalid hotkey string, using default"
-            );
-            self.hotkeys.brightness_down = DEFAULT_HOTKEY_DOWN.to_string();
+            notices.push(ConfigNotice::InvalidHotkey {
+                field: "hotkeys.brightness_down",
+                value: std::mem::replace(
+                    &mut self.hotkeys.brightness_down,
+                    DEFAULT_HOTKEY_DOWN.to_string(),
+                ),
+                default: DEFAULT_HOTKEY_DOWN,
+            });
         }
+        notices
     }
 
     /// Resets the ten user-facing settings to their defaults, field by field.
@@ -795,10 +981,54 @@ mod tests {
     fn test_invalid_file_level_repaired_to_default() {
         let json = r#"{ "logging": { "file_enabled": true, "file_level": "verbose" } }"#;
         let mut config: Config = serde_json::from_str(json).unwrap();
-        config.validate_and_fix();
+        let notices = config.validate_and_fix();
 
         assert_eq!(config.logging.file_level, DEFAULT_FILE_LOG_LEVEL);
         assert!(config.logging.file_enabled, "the enable flag is untouched");
+        assert_eq!(
+            notices,
+            vec![ConfigNotice::Unparseable {
+                field: "logging.file_level",
+                value: "verbose".to_string(),
+                default: DEFAULT_FILE_LOG_LEVEL.to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn out_of_range_and_above_maximum_repairs_are_reported_as_notices() {
+        // 99 rather than 999: step_percent is a u8, and a value that does
+        // not fit the type fails in serde before validation ever runs.
+        let json = r#"{ "brightness": { "step_percent": 99 },
+                        "refresh": { "periodic_seconds": 99999 } }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        let notices = config.validate_and_fix();
+
+        assert_eq!(
+            notices,
+            vec![
+                ConfigNotice::OutOfRange {
+                    field: "brightness.step_percent",
+                    value: "99".to_string(),
+                    min: STEP_PERCENT_MIN.to_string(),
+                    max: STEP_PERCENT_MAX.to_string(),
+                    default: DEFAULT_STEP_PERCENT.to_string(),
+                },
+                ConfigNotice::AboveMaximum {
+                    field: "refresh.periodic_seconds",
+                    value: "99999".to_string(),
+                    max: REFRESH_PERIODIC_MAX.to_string(),
+                    default: DEFAULT_REFRESH_PERIODIC_SECONDS.to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_valid_config_raises_no_notices() {
+        let mut config = Config::default();
+        assert!(config.validate_and_fix().is_empty());
+        assert!(config.repair_hotkeys(|_| true).is_empty());
     }
 
     #[test]
@@ -815,9 +1045,10 @@ mod tests {
     fn test_version_mismatch_repaired_to_current() {
         let json = r#"{ "version": 999 }"#;
         let mut config: Config = serde_json::from_str(json).unwrap();
-        config.validate_and_fix();
+        let notices = config.validate_and_fix();
 
         assert_eq!(config.version, CONFIG_VERSION);
+        assert_eq!(notices, vec![ConfigNotice::VersionMismatch { found: 999 }]);
     }
 
     #[test]
@@ -836,10 +1067,11 @@ mod tests {
         let json = r#"{ "monitors": { "DELL U2722D": { "min_brightness": 10,
             "max_brightness": null, "ddc_disabled": null } } }"#;
         let mut config: Config = serde_json::from_str(json).unwrap();
-        config.validate_and_fix();
+        let notices = config.validate_and_fix();
 
         assert_eq!(config.monitors.len(), 1);
         assert_eq!(config.monitors["DELL U2722D"].min_brightness, Some(10));
+        assert_eq!(notices, vec![ConfigNotice::MonitorsIgnored { entries: 1 }]);
     }
 
     // ── Unknown-key detection ────────────────────────────────────────────
@@ -1008,7 +1240,7 @@ mod tests {
         assert!(file_path.exists());
 
         // Test loading
-        let loaded_config = Config::load_from(&file_path).expect("Failed to load config");
+        let (loaded_config, _) = Config::load_from(&file_path).expect("Failed to load config");
 
         assert!((loaded_config.osd.opacity - 0.5).abs() < f32::EPSILON);
         assert_eq!(loaded_config.hotkeys.brightness_up, "Alt+Up");
@@ -1030,7 +1262,7 @@ mod tests {
         config.brightness.step_percent = 13;
         config.save_to(&config_path).expect("second save");
 
-        let loaded = Config::load_from(&config_path).expect("load after overwrite");
+        let (loaded, _) = Config::load_from(&config_path).expect("load after overwrite");
         assert_eq!(loaded.brightness.step_percent, 13);
         assert!(
             !test_dir.join("config.json.tmp").exists(),
@@ -1067,10 +1299,18 @@ mod tests {
         config.hotkeys.brightness_down = "Alt+Down".to_string();
 
         // Stand-in for the platform parser: rejects the unknown key name.
-        config.repair_hotkeys(|s| !s.contains("Banana"));
+        let notices = config.repair_hotkeys(|s| !s.contains("Banana"));
 
         assert_eq!(config.hotkeys.brightness_up, DEFAULT_HOTKEY_UP);
         assert_eq!(config.hotkeys.brightness_down, "Alt+Down");
+        assert_eq!(
+            notices,
+            vec![ConfigNotice::InvalidHotkey {
+                field: "hotkeys.brightness_up",
+                value: "Ctrl+Shift+Banana".to_string(),
+                default: DEFAULT_HOTKEY_UP,
+            }]
+        );
     }
 
     #[test]
@@ -1124,7 +1364,11 @@ mod tests {
         .expect("write backup");
         fs::write(&config_path, "{ this is not json").expect("write corrupt primary");
 
-        let (loaded, outcome) = Config::load_or_recover(&config_path);
+        let ConfigLoad {
+            config: loaded,
+            outcome,
+            ..
+        } = Config::load_or_recover(&config_path);
 
         assert_eq!(loaded.brightness.step_percent, 17);
         assert!(matches!(
@@ -1144,7 +1388,11 @@ mod tests {
 
         fs::write(&config_path, "{ this is not json").expect("write corrupt primary");
 
-        let (loaded, outcome) = Config::load_or_recover(&config_path);
+        let ConfigLoad {
+            config: loaded,
+            outcome,
+            ..
+        } = Config::load_or_recover(&config_path);
 
         assert_eq!(
             loaded.brightness.step_percent,
@@ -1171,7 +1419,11 @@ mod tests {
         fs::write(&config_path, "{ this is not json").expect("write corrupt primary");
         fs::write(test_dir.join("config.json.bak"), "also garbage").expect("write corrupt backup");
 
-        let (loaded, outcome) = Config::load_or_recover(&config_path);
+        let ConfigLoad {
+            config: loaded,
+            outcome,
+            ..
+        } = Config::load_or_recover(&config_path);
 
         assert_eq!(
             loaded.brightness.step_percent,
@@ -1203,14 +1455,22 @@ mod tests {
         )
         .expect("write primary");
 
-        let (loaded, outcome) = Config::load_or_recover(&config_path);
+        let ConfigLoad {
+            config: loaded,
+            outcome,
+            notices,
+        } = Config::load_or_recover(&config_path);
 
         assert_eq!(loaded.brightness.step_percent, 9);
         assert!(matches!(outcome, ConfigLoadOutcome::Loaded));
+        assert!(
+            notices.is_empty(),
+            "a clean file and a writable backup raise nothing"
+        );
 
         // The backup must now hold the successfully parsed settings, so a
         // later corruption of the primary file can be recovered from it.
-        let backup = Config::load_from(&test_dir.join("config.json.bak"))
+        let (backup, _) = Config::load_from(&test_dir.join("config.json.bak"))
             .expect("backup should exist and parse after a successful load");
         assert_eq!(backup.brightness.step_percent, 9);
 
