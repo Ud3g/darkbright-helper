@@ -43,6 +43,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
+use crate::core::i18n::{Lang, TextKey, strings};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
@@ -264,7 +265,14 @@ pub(super) fn wide(s: &str) -> Vec<u16> {
 /// `CreateWindowExW` is logged and skipped rather than aborting the whole
 /// window, matching how the rest of this crate degrades a UI by one element
 /// rather than failing outright.
-fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_bold: HFONT) {
+fn create_controls(
+    hwnd: HWND,
+    hinstance: HINSTANCE,
+    font_regular: HFONT,
+    font_bold: HFONT,
+    lang: Lang,
+) {
+    let s = strings(lang);
     for spec in CONTROLS {
         let class = match spec.class {
             "STATIC" => WC_STATIC,
@@ -291,7 +299,10 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
         let text = if spec.id == ID_VERSION {
             wide(&format!("v{}", version_string()))
         } else {
-            wide(spec.text)
+            let label = spec
+                .text
+                .map_or(String::new(), |key| s.get(key).to_string());
+            wide(&label)
         };
         let id = HMENU(std::ptr::without_provenance_mut(usize::from(spec.id)));
         let style = WINDOW_STYLE(spec.style) | WS_CHILD | WS_VISIBLE;
@@ -552,6 +563,9 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// [`with_window_state`] for the invariant that keeps this sound.
 pub(super) struct WindowState {
     pub(super) hwnd: HWND,
+    /// The language every control label was resolved in at creation time.
+    /// Only English exists today, so this never changes after construction.
+    pub(super) lang: Lang,
     sender: Sender<BrightnessMessage>,
     /// The slot [`SettingsSinkImpl`] posts through, shared with the
     /// controller's thread. Held here so `WM_DESTROY` can clear it back to
@@ -1806,11 +1820,13 @@ fn create_settings_window(
     // No WS_VISIBLE here: control creation, layout and snapshot population
     // all happen before the window is ever shown, so the open does not
     // visibly assemble itself on screen.
+    let lang = Lang::default();
+    let title = wide(strings(lang).get(TextKey::WindowTitle));
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_TOPMOST,
             class_name,
-            w!("darkbright-helper Settings"),
+            PCWSTR(title.as_ptr()),
             WS_CAPTION | WS_SYSMENU,
             placement.x,
             placement.y,
@@ -1827,13 +1843,9 @@ fn create_settings_window(
     let font_regular = build_font(placement.dpi, FW_NORMAL);
     let font_bold = build_font(placement.dpi, FW_BOLD);
 
-    create_controls(hwnd, hinstance.into(), font_regular, font_bold);
-    layout(hwnd, placement.dpi);
-    configure_updowns(hwnd);
-    configure_combo_height(hwnd);
-
     let state = WindowState {
         hwnd,
+        lang,
         sender: tx.clone(),
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular: Cell::new(font_regular),
@@ -1855,6 +1867,11 @@ fn create_settings_window(
         last_posted_periodic: Cell::new(None),
         last_posted_inactivity: Cell::new(None),
     };
+
+    create_controls(hwnd, hinstance.into(), font_regular, font_bold, state.lang);
+    layout(hwnd, placement.dpi);
+    configure_updowns(hwnd);
+    configure_combo_height(hwnd);
     apply_snapshot(&state, snapshot);
     // Store state before applying the theme, not after: apply_theme's
     // RedrawWindow call synchronously re-enters every child's paint path,

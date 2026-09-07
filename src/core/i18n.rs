@@ -102,6 +102,160 @@ pub struct Strings {
     pub key_mod_win: &'static str,
     /// Separator placed between modifiers and the key name.
     pub key_separator: &'static str,
+
+    // --- Settings window ---
+    /// Section header above the general settings.
+    pub header_general: &'static str,
+    /// Checkbox enabling the Windows startup entry.
+    pub autostart: &'static str,
+    /// Label for the per-keypress brightness step.
+    pub label_step: &'static str,
+    /// Percent unit after the brightness step field.
+    pub unit_percent_step: &'static str,
+    /// Section header above the hotkey settings.
+    pub header_hotkeys: &'static str,
+    /// Label for the brightness-up hotkey field.
+    pub label_hotkey_up: &'static str,
+    /// Label for the brightness-down hotkey field.
+    pub label_hotkey_down: &'static str,
+    /// Checkbox enabling the low-level keyboard hook.
+    pub intercept: &'static str,
+    /// Hint below the interception checkbox.
+    pub hint_intercept: &'static str,
+    /// Section header above the on-screen display settings.
+    pub header_osd: &'static str,
+    /// Label for the OSD display duration.
+    pub label_timeout: &'static str,
+    /// Millisecond unit after the duration field.
+    pub unit_milliseconds: &'static str,
+    /// Label for the OSD opacity.
+    pub label_opacity: &'static str,
+    /// Percent unit after the opacity field.
+    pub unit_percent_opacity: &'static str,
+    /// Section header above the advanced settings.
+    pub header_advanced: &'static str,
+    /// Checkbox enabling the periodic brightness resync.
+    pub resync_check: &'static str,
+    /// Second unit after the resync interval field.
+    pub unit_seconds_resync: &'static str,
+    /// Checkbox enabling the resync after inactivity.
+    pub inactivity_check: &'static str,
+    /// Second unit after the inactivity field.
+    pub unit_seconds_inactivity: &'static str,
+    /// Checkbox enabling the log file.
+    pub log_check: &'static str,
+    /// Label before the log level picker.
+    pub label_log_level: &'static str,
+    /// Hint below the logging settings.
+    pub hint_logging: &'static str,
+    /// The footer link row, containing two `<a>` link spans.
+    pub footer_links: &'static str,
+    /// Button restoring the default settings.
+    pub button_restore_defaults: &'static str,
+    /// Button closing the settings window.
+    pub button_close: &'static str,
+    /// The settings window's title bar text.
+    pub window_title: &'static str,
+}
+
+/// A label in the settings window's control table.
+///
+/// The table is a `const`, so it cannot hold a string that depends on the
+/// current language. It holds one of these instead, resolved when a control is
+/// created or re-labelled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextKey {
+    /// Section header above the general settings.
+    HeaderGeneral,
+    /// Checkbox enabling the Windows startup entry.
+    Autostart,
+    /// Label for the per-keypress brightness step.
+    LabelStep,
+    /// Percent unit after the brightness step field.
+    UnitPercentStep,
+    /// Section header above the hotkey settings.
+    HeaderHotkeys,
+    /// Label for the brightness-up hotkey field.
+    LabelHotkeyUp,
+    /// Label for the brightness-down hotkey field.
+    LabelHotkeyDown,
+    /// Checkbox enabling the low-level keyboard hook.
+    Intercept,
+    /// Hint below the interception checkbox.
+    HintIntercept,
+    /// Section header above the on-screen display settings.
+    HeaderOsd,
+    /// Label for the OSD display duration.
+    LabelTimeout,
+    /// Millisecond unit after the duration field.
+    UnitMilliseconds,
+    /// Label for the OSD opacity.
+    LabelOpacity,
+    /// Percent unit after the opacity field.
+    UnitPercentOpacity,
+    /// Section header above the advanced settings.
+    HeaderAdvanced,
+    /// Checkbox enabling the periodic brightness resync.
+    ResyncCheck,
+    /// Second unit after the resync interval field.
+    UnitSecondsResync,
+    /// Checkbox enabling the resync after inactivity.
+    InactivityCheck,
+    /// Second unit after the inactivity field.
+    UnitSecondsInactivity,
+    /// Checkbox enabling the log file.
+    LogCheck,
+    /// Label before the log level picker.
+    LabelLogLevel,
+    /// Hint below the logging settings.
+    HintLogging,
+    /// The footer link row, containing two `<a>` link spans.
+    FooterLinks,
+    /// Button restoring the default settings.
+    ButtonRestoreDefaults,
+    /// Button closing the settings window.
+    ButtonClose,
+    /// The settings window's title bar text.
+    WindowTitle,
+}
+
+impl Strings {
+    /// The text for `key`.
+    ///
+    /// Exhaustive by construction: a new [`TextKey`] variant fails to compile
+    /// here until it is given a field, and a new field fails to compile in
+    /// every language table until it is translated.
+    #[must_use]
+    pub fn get(&self, key: TextKey) -> &'static str {
+        match key {
+            TextKey::HeaderGeneral => self.header_general,
+            TextKey::Autostart => self.autostart,
+            TextKey::LabelStep => self.label_step,
+            TextKey::UnitPercentStep => self.unit_percent_step,
+            TextKey::HeaderHotkeys => self.header_hotkeys,
+            TextKey::LabelHotkeyUp => self.label_hotkey_up,
+            TextKey::LabelHotkeyDown => self.label_hotkey_down,
+            TextKey::Intercept => self.intercept,
+            TextKey::HintIntercept => self.hint_intercept,
+            TextKey::HeaderOsd => self.header_osd,
+            TextKey::LabelTimeout => self.label_timeout,
+            TextKey::UnitMilliseconds => self.unit_milliseconds,
+            TextKey::LabelOpacity => self.label_opacity,
+            TextKey::UnitPercentOpacity => self.unit_percent_opacity,
+            TextKey::HeaderAdvanced => self.header_advanced,
+            TextKey::ResyncCheck => self.resync_check,
+            TextKey::UnitSecondsResync => self.unit_seconds_resync,
+            TextKey::InactivityCheck => self.inactivity_check,
+            TextKey::UnitSecondsInactivity => self.unit_seconds_inactivity,
+            TextKey::LogCheck => self.log_check,
+            TextKey::LabelLogLevel => self.label_log_level,
+            TextKey::HintLogging => self.hint_logging,
+            TextKey::FooterLinks => self.footer_links,
+            TextKey::ButtonRestoreDefaults => self.button_restore_defaults,
+            TextKey::ButtonClose => self.button_close,
+            TextKey::WindowTitle => self.window_title,
+        }
+    }
 }
 
 /// The English strings. Every other language is a translation of this table.
@@ -132,6 +286,33 @@ pub const ENGLISH: Strings = Strings {
     key_mod_shift: "Shift",
     key_mod_win: "Win",
     key_separator: "+",
+
+    header_general: "General",
+    autostart: "Start with Windows",
+    label_step: "Brightness step per keypress",
+    unit_percent_step: "%",
+    header_hotkeys: "Hotkeys",
+    label_hotkey_up: "Brightness up",
+    label_hotkey_down: "Brightness down",
+    intercept: "Try to intercept dedicated brightness keys",
+    hint_intercept: "(may not work with all keyboards; some antivirus software flags low-level hooks)",
+    header_osd: "On-screen display",
+    label_timeout: "Display duration",
+    unit_milliseconds: "ms",
+    label_opacity: "Opacity",
+    unit_percent_opacity: "%",
+    header_advanced: "Advanced",
+    resync_check: "Resync brightness every",
+    unit_seconds_resync: "s",
+    inactivity_check: "Resync after inactivity of",
+    unit_seconds_inactivity: "s",
+    log_check: "Write log file",
+    label_log_level: "Level:",
+    hint_logging: "(logging changes take effect after restart; debug and below log monitor serials and paths)",
+    footer_links: "<a>Open config file</a> \u{b7} <a>Open log folder</a>",
+    button_restore_defaults: "Restore defaults",
+    button_close: "Close",
+    window_title: "darkbright-helper Settings",
 };
 
 /// The string table for `lang`.
@@ -144,7 +325,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
 
 #[cfg(test)]
 mod tests {
-    use super::{ENGLISH, Lang, strings};
+    use super::{ENGLISH, Lang, TextKey, strings};
 
     #[test]
     fn every_language_tag_is_unique_and_lowercase() {
@@ -265,6 +446,57 @@ mod tests {
                 strings(lang).tray_menu_quit_fmt.contains("{name}"),
                 "{lang:?} dropped the {{name}} placeholder from the quit command"
             );
+        }
+    }
+
+    #[test]
+    fn every_key_resolves_to_a_non_empty_string_in_every_language() {
+        const KEYS: &[TextKey] = &[
+            TextKey::HeaderGeneral,
+            TextKey::Autostart,
+            TextKey::LabelStep,
+            TextKey::UnitPercentStep,
+            TextKey::HeaderHotkeys,
+            TextKey::LabelHotkeyUp,
+            TextKey::LabelHotkeyDown,
+            TextKey::Intercept,
+            TextKey::HintIntercept,
+            TextKey::HeaderOsd,
+            TextKey::LabelTimeout,
+            TextKey::UnitMilliseconds,
+            TextKey::LabelOpacity,
+            TextKey::UnitPercentOpacity,
+            TextKey::HeaderAdvanced,
+            TextKey::ResyncCheck,
+            TextKey::UnitSecondsResync,
+            TextKey::InactivityCheck,
+            TextKey::UnitSecondsInactivity,
+            TextKey::LogCheck,
+            TextKey::LabelLogLevel,
+            TextKey::HintLogging,
+            TextKey::FooterLinks,
+            TextKey::ButtonRestoreDefaults,
+            TextKey::ButtonClose,
+            TextKey::WindowTitle,
+        ];
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for &key in KEYS {
+                assert!(!s.get(key).is_empty(), "{lang:?} has no text for {key:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_footer_link_row_keeps_both_link_spans() {
+        for &lang in Lang::ALL {
+            let text = strings(lang).get(TextKey::FooterLinks);
+            assert_eq!(
+                text.matches("<a>").count(),
+                2,
+                "{lang:?} footer must keep exactly two <a> spans, or SysLink indices shift"
+            );
+            assert_eq!(text.matches("</a>").count(), 2);
         }
     }
 }
