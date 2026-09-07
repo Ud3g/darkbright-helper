@@ -37,7 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::core::controller::HotkeyPort;
-use crate::core::i18n::Strings;
+use crate::core::i18n::{Lang, Strings, strings};
 use crate::core::state::{BrightnessMessage, HotkeyOp};
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -643,10 +643,16 @@ impl HotkeyManager {
                             self.send_ack(HotkeyOp::Rebind, true, fallback_active, None);
                         }
                         Err(e) => {
+                            // This reaches the settings window's status
+                            // line, so its wording comes from the string
+                            // table; the two error details it joins are
+                            // `BrightnessError` `Display` output and stay
+                            // English.
                             let message = match self.restore_previous_bindings() {
-                                Some(restore_err) => {
-                                    format!("{e}; restore also failed: {restore_err}")
-                                }
+                                Some(restore_err) => strings(Lang::English)
+                                    .hotkey_status_restore_also_failed_fmt
+                                    .replace("{error}", &e.to_string())
+                                    .replace("{restore_error}", &restore_err),
                                 None => e.to_string(),
                             };
                             self.send_ack(HotkeyOp::Rebind, false, false, Some(message));

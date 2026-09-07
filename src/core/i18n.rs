@@ -198,6 +198,10 @@ pub struct Strings {
     pub hotkey_status_no_response: &'static str,
     /// Status: the hotkey thread reported a failure with no detail.
     pub hotkey_status_unknown_error: &'static str,
+    /// Status: a rebind failed and putting the previous bindings back failed
+    /// too. Takes both error details, so the translation must contain
+    /// `{error}` and `{restore_error}`.
+    pub hotkey_status_restore_also_failed_fmt: &'static str,
     /// Status: the low-level keyboard hook could not be installed, so plain
     /// registration is in use. A notice, not an error — the binding works.
     pub hotkey_notice_interception_unavailable: &'static str,
@@ -408,6 +412,7 @@ pub const ENGLISH: Strings = Strings {
     hotkey_status_unreachable: "Could not reach the hotkey thread",
     hotkey_status_no_response: "Hotkey thread did not respond",
     hotkey_status_unknown_error: "unknown error",
+    hotkey_status_restore_also_failed_fmt: "{error}; restore also failed: {restore_error}",
     hotkey_notice_interception_unavailable: "Brightness-key interception unavailable; using plain key registration",
 
     msgbox_already_running: "darkbright-helper is already running.",
@@ -521,6 +526,7 @@ mod tests {
             hotkey_status_unreachable,
             hotkey_status_no_response,
             hotkey_status_unknown_error,
+            hotkey_status_restore_also_failed_fmt,
             hotkey_notice_interception_unavailable,
             msgbox_already_running,
             msgbox_title_startup_error,
@@ -621,6 +627,15 @@ mod tests {
                 s.msgbox_autostart_failed_fmt.contains("{error}"),
                 "{lang:?}"
             );
+        }
+    }
+
+    #[test]
+    fn the_rebind_restore_failure_keeps_both_error_placeholders() {
+        for &lang in Lang::ALL {
+            let text = strings(lang).hotkey_status_restore_also_failed_fmt;
+            assert!(text.contains("{error}"), "{lang:?}");
+            assert!(text.contains("{restore_error}"), "{lang:?}");
         }
     }
 }

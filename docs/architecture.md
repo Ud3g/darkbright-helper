@@ -1760,7 +1760,10 @@ ways, so a new variant and a new field each fail to compile until they are paire
 no other purpose — everything outside that `const` reads the field directly.
 
 **What deliberately stays untranslated.** Log messages, so a pasted log is readable by whoever is
-diagnosing it, and `Display` on `BrightnessError`, which is the logging representation. The
+diagnosing it, and `Display` on `BrightnessError`, which is the logging representation. Text that
+*embeds* such a detail is still the table's job: the rebind failure that reports a registration
+error and a failed restore together takes its connective wording from
+`hotkey_status_restore_also_failed_fmt`, and only the two embedded details stay English. The
 canonical hotkey format (§3) and the log-level tokens (§8), because both round-trip through
 `config.json` — the picker's entries and `ParsedHotkey::display_text` are display-only, and the
 stored value is resolved from the combo's selected index, never from its text. Config field names,
@@ -1777,9 +1780,10 @@ needs a parse the tray does not do today.
 **Choosing the language.** There is no language setting yet, and three places hardcode English:
 `TRAY_LANG` in `platform/windows/tray.rs`, `capture_strings()` in `settings/capture.rs`, and the
 `let s = strings(...)` binding in `main.rs` — which is bound before `load_config()` runs, so
-making the language config-driven has to move it as well as change it. The controller resolves
-`Lang::English` inline at the sites where it composes hotkey status text, deliberately rather
-than carrying a language field, for the same reason. All of these change together.
+making the language config-driven has to move it as well as change it. The controller
+(`core/controller.rs`) and the hotkey thread (`platform/windows/hotkey.rs`) resolve
+`Lang::English` inline where they compose hotkey status text, deliberately rather than carrying a
+language of their own, for the same reason. All of these change together.
 
 ---
 
