@@ -36,6 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use super::{SafeHwnd, hmonitor_from_isize, last_error_as_brightness_error, osd_render};
+use crate::core::i18n::Lang;
 use crate::core::state::MonitorState;
 use crate::error::{BrightnessError, Result};
 
@@ -161,6 +162,8 @@ pub(super) struct OsdRenderState {
     pub(super) overlay_opacity: u8,
     /// Whether an error occurred.
     pub(super) is_error: bool,
+    /// Language the error row (and any future OSD text) is rendered in.
+    pub(super) lang: Lang,
 }
 
 /// Ensures the window class is registered exactly once.
