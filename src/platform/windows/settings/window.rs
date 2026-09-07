@@ -43,7 +43,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
-use crate::core::i18n::{Lang, TextKey, strings};
+use crate::core::i18n::{Lang, Strings, TextKey, strings};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
@@ -250,8 +250,22 @@ fn build_font(dpi: u32, weight: FONT_WEIGHT) -> HFONT {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Log level dropdown entries, in the order `CB_ADDSTRING` inserts them —
-/// index into this array is the combo selection index.
+/// index into this array is the combo selection index. The stored config
+/// values: never translated, since `log::LevelFilter` parses these and a
+/// user editing `config.json` by hand needs to see them.
 const LOG_LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+
+/// What the log level picker shows for the entry at `index`, falling back to
+/// the first level for an index outside `LOG_LEVELS`.
+fn log_level_display(s: &Strings, index: usize) -> &'static str {
+    match index {
+        1 => s.log_level_warn,
+        2 => s.log_level_info,
+        3 => s.log_level_debug,
+        4 => s.log_level_trace,
+        _ => s.log_level_error,
+    }
+}
 
 /// UTF-16, NUL-terminated encoding of `s` for a `PCWSTR` argument that only
 /// needs to live for the duration of one FFI call.
@@ -344,8 +358,8 @@ fn create_controls(
         }
 
         if spec.id == ID_LOG_LEVEL {
-            for level in LOG_LEVELS {
-                let level_wide = wide(level);
+            for index in 0..LOG_LEVELS.len() {
+                let level_wide = wide(log_level_display(s, index));
                 // SAFETY: `CB_ADDSTRING` copies the NUL-terminated string
                 // `lparam` points at into the combo's own storage. The message
                 // is sent, not posted, so `level_wide` still owns that buffer
@@ -2169,6 +2183,29 @@ mod tests {
         assert_eq!(log_level_index("debug"), Some(3));
         assert_eq!(log_level_index("trace"), Some(4));
         assert_eq!(log_level_index("bogus"), None);
+    }
+
+    #[test]
+    fn the_stored_log_level_values_are_never_taken_from_the_display_text() {
+        use crate::core::i18n::ENGLISH;
+
+        // config.json holds these exact tokens; log::LevelFilter parses them.
+        assert_eq!(LOG_LEVELS, ["error", "warn", "info", "debug", "trace"]);
+
+        for (index, stored) in LOG_LEVELS.iter().enumerate() {
+            let shown = log_level_display(&ENGLISH, index);
+            assert!(
+                shown.starts_with(stored),
+                "the display text must lead with the stored token so a hand-edited \
+                 config stays readable; got {shown} for {stored}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_index_falls_back_to_the_first_level() {
+        use crate::core::i18n::ENGLISH;
+        assert_eq!(log_level_display(&ENGLISH, 99), ENGLISH.log_level_error);
     }
 
     #[test]

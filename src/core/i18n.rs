@@ -146,6 +146,22 @@ pub struct Strings {
     pub log_check: &'static str,
     /// Label before the log level picker.
     pub label_log_level: &'static str,
+    // --- Log level picker ---
+    //
+    // Display only. The value written to config.json is always the English
+    // token, resolved from the combo's selected index — never from this text.
+    // A translation appends its own wording, as in "warn (Warnung)", so the
+    // stored value stays visible to anyone editing the file by hand.
+    /// Log level picker entry for `error`.
+    pub log_level_error: &'static str,
+    /// Log level picker entry for `warn`.
+    pub log_level_warn: &'static str,
+    /// Log level picker entry for `info`.
+    pub log_level_info: &'static str,
+    /// Log level picker entry for `debug`.
+    pub log_level_debug: &'static str,
+    /// Log level picker entry for `trace`.
+    pub log_level_trace: &'static str,
     /// Hint below the logging settings.
     pub hint_logging: &'static str,
     /// The footer link row, containing two `<a>` link spans.
@@ -308,6 +324,11 @@ pub const ENGLISH: Strings = Strings {
     unit_seconds_inactivity: "s",
     log_check: "Write log file",
     label_log_level: "Level:",
+    log_level_error: "error",
+    log_level_warn: "warn",
+    log_level_info: "info",
+    log_level_debug: "debug",
+    log_level_trace: "trace",
     hint_logging: "(logging changes take effect after restart; debug and below log monitor serials and paths)",
     footer_links: "<a>Open config file</a> \u{b7} <a>Open log folder</a>",
     button_restore_defaults: "Restore defaults",
