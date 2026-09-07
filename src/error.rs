@@ -210,7 +210,23 @@ mod tests {
             source: std::io::Error::other("no resources"),
         };
         let msg = e.user_message(&ENGLISH);
+        // No manual pass can trigger this dialog, so the whole shape of the
+        // message is asserted here: lead line, the Display detail that says
+        // which thread failed, the advice, and the blank lines between them.
+        assert!(
+            msg.starts_with(ENGLISH.msgbox_startup_failed_lead),
+            "the lead line must come first, got {msg:?}"
+        );
+        assert!(
+            msg.contains("Failed to spawn the ddc thread"),
+            "the error detail must be embedded, got {msg:?}"
+        );
         assert!(msg.contains(ENGLISH.msgbox_thread_spawn_advice));
+        assert_eq!(
+            msg.matches("\n\n").count(),
+            2,
+            "the three parts stay separated by blank lines, got {msg:?}"
+        );
     }
 
     #[test]

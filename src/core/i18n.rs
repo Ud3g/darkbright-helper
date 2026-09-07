@@ -173,11 +173,44 @@ pub struct Strings {
     /// The settings window's title bar text.
     pub window_title: &'static str,
 
+    // --- Hotkey capture field ---
+    //
+    // The prompt and the three rejections a capture control shows in place of
+    // a binding. The binding it produces is always the canonical English wire
+    // format, so none of this reaches `config.json`.
+    /// Placeholder shown while a capture field waits for the first key.
+    pub capture_prompt: &'static str,
+    /// Rejection: the combination has no Ctrl, Alt or Win modifier.
+    pub capture_reject_no_modifier: &'static str,
+    /// Rejection: the pressed key has no name the config format can store.
+    pub capture_reject_unnameable_key: &'static str,
+    /// Rejection: the combination is already bound to the other hotkey.
+    pub capture_reject_duplicate: &'static str,
+
+    // --- Hotkey status line ---
+    //
+    // Shown in the settings window's inline status line. Composed in the
+    // controller, which is platform-agnostic and resolves the table inline
+    // rather than holding a language of its own.
+    /// Status: the hotkey thread could not be reached at all.
+    pub hotkey_status_unreachable: &'static str,
+    /// Status: the hotkey thread was reached but never acknowledged.
+    pub hotkey_status_no_response: &'static str,
+    /// Status: the hotkey thread reported a failure with no detail.
+    pub hotkey_status_unknown_error: &'static str,
+    /// Status: the low-level keyboard hook could not be installed, so plain
+    /// registration is in use. A notice, not an error — the binding works.
+    pub hotkey_notice_interception_unavailable: &'static str,
+
     // --- Message boxes ---
     //
     // Titles carry the product name, which is not translated; the translation
-    // supplies only the part after the dash. `Display` on `BrightnessError`
-    // stays English for logs — see `BrightnessError::user_message`.
+    // supplies only the part after the dash. The bodies are not all name-free:
+    // `msgbox_already_running` and `msgbox_startup_failed_lead` spell the
+    // product name out inside the sentence, and a translation must keep it
+    // rather than replacing it with a translated noun. `Display` on
+    // `BrightnessError` stays English for logs — see
+    // `BrightnessError::user_message`.
     /// Message box body shown when a second instance is started.
     pub msgbox_already_running: &'static str,
     /// Title suffix for a fatal startup failure.
@@ -367,6 +400,16 @@ pub const ENGLISH: Strings = Strings {
     button_close: "Close",
     window_title: "darkbright-helper Settings",
 
+    capture_prompt: "Press a key combination… (Esc to cancel)",
+    capture_reject_no_modifier: "Add Ctrl, Alt, or Win (Shift alone isn't enough)",
+    capture_reject_unnameable_key: "That key can't be used as a hotkey",
+    capture_reject_duplicate: "Already assigned to the other brightness hotkey",
+
+    hotkey_status_unreachable: "Could not reach the hotkey thread",
+    hotkey_status_no_response: "Hotkey thread did not respond",
+    hotkey_status_unknown_error: "unknown error",
+    hotkey_notice_interception_unavailable: "Brightness-key interception unavailable; using plain key registration",
+
     msgbox_already_running: "darkbright-helper is already running.",
     msgbox_title_startup_error: "Startup Error",
     msgbox_title_hotkey_error: "Hotkey Error",
@@ -391,7 +434,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
 
 #[cfg(test)]
 mod tests {
-    use super::{ENGLISH, Lang, TextKey, strings};
+    use super::{ENGLISH, Lang, Strings, TextKey, strings};
 
     #[test]
     fn every_language_tag_is_unique_and_lowercase() {
@@ -405,98 +448,101 @@ mod tests {
         }
     }
 
+    /// Pairs each named field of `s` with its value.
+    macro_rules! fields {
+        ($s:expr, $($f:ident),+ $(,)?) => {
+            [$((stringify!($f), $s.$f)),+]
+        };
+    }
+
+    /// Every field of the table, in declaration order. Written out by hand so
+    /// that a field added without an entry here is visible in review rather
+    /// than silently untested.
+    fn every_field(s: &Strings) -> impl IntoIterator<Item = (&'static str, &'static str)> {
+        fields![
+            s,
+            osd_ddc_error,
+            tray_tip_ddc_unavailable,
+            tray_tip_monitor_unresponsive,
+            tray_tip_hotkeys_stopped,
+            tray_tip_hotkey_change_failed,
+            tray_tip_file_logging_off,
+            tray_warn_ddc_unavailable,
+            tray_warn_monitor_unresponsive,
+            tray_warn_hotkeys_stopped,
+            tray_warn_hotkey_change_failed,
+            tray_warn_file_logging_failed,
+            tray_usage_heading,
+            tray_usage_brighter,
+            tray_usage_dimmer,
+            tray_menu_settings,
+            tray_menu_open_log_folder,
+            tray_menu_quit_fmt,
+            key_mod_ctrl,
+            key_mod_alt,
+            key_mod_shift,
+            key_mod_win,
+            key_separator,
+            header_general,
+            autostart,
+            label_step,
+            unit_percent_step,
+            header_hotkeys,
+            label_hotkey_up,
+            label_hotkey_down,
+            intercept,
+            hint_intercept,
+            header_osd,
+            label_timeout,
+            unit_milliseconds,
+            label_opacity,
+            unit_percent_opacity,
+            header_advanced,
+            resync_check,
+            unit_seconds_resync,
+            inactivity_check,
+            unit_seconds_inactivity,
+            log_check,
+            label_log_level,
+            log_level_error,
+            log_level_warn,
+            log_level_info,
+            log_level_debug,
+            log_level_trace,
+            hint_logging,
+            footer_links,
+            button_restore_defaults,
+            button_close,
+            window_title,
+            capture_prompt,
+            capture_reject_no_modifier,
+            capture_reject_unnameable_key,
+            capture_reject_duplicate,
+            hotkey_status_unreachable,
+            hotkey_status_no_response,
+            hotkey_status_unknown_error,
+            hotkey_notice_interception_unavailable,
+            msgbox_already_running,
+            msgbox_title_startup_error,
+            msgbox_title_hotkey_error,
+            msgbox_title_autostart,
+            msgbox_title_restore_defaults,
+            msgbox_startup_failed_lead,
+            msgbox_thread_spawn_advice,
+            msgbox_hotkey_failed_lead,
+            msgbox_hotkey_advice_fmt,
+            msgbox_autostart_failed_fmt,
+            msgbox_restore_defaults_question,
+            msgbox_config_file_fallback,
+        ]
+    }
+
     #[test]
-    fn every_language_resolves_to_a_table_with_no_empty_fields() {
+    fn no_field_in_any_language_is_empty() {
         for &lang in Lang::ALL {
-            let s = strings(lang);
-            assert!(
-                !s.osd_ddc_error.is_empty(),
-                "{lang:?} has an empty osd_ddc_error"
-            );
-            assert!(
-                !s.tray_tip_ddc_unavailable.is_empty(),
-                "{lang:?} has an empty tray_tip_ddc_unavailable"
-            );
-            assert!(
-                !s.tray_tip_monitor_unresponsive.is_empty(),
-                "{lang:?} has an empty tray_tip_monitor_unresponsive"
-            );
-            assert!(
-                !s.tray_tip_hotkeys_stopped.is_empty(),
-                "{lang:?} has an empty tray_tip_hotkeys_stopped"
-            );
-            assert!(
-                !s.tray_tip_hotkey_change_failed.is_empty(),
-                "{lang:?} has an empty tray_tip_hotkey_change_failed"
-            );
-            assert!(
-                !s.tray_tip_file_logging_off.is_empty(),
-                "{lang:?} has an empty tray_tip_file_logging_off"
-            );
-            assert!(
-                !s.tray_warn_ddc_unavailable.is_empty(),
-                "{lang:?} has an empty tray_warn_ddc_unavailable"
-            );
-            assert!(
-                !s.tray_warn_monitor_unresponsive.is_empty(),
-                "{lang:?} has an empty tray_warn_monitor_unresponsive"
-            );
-            assert!(
-                !s.tray_warn_hotkeys_stopped.is_empty(),
-                "{lang:?} has an empty tray_warn_hotkeys_stopped"
-            );
-            assert!(
-                !s.tray_warn_hotkey_change_failed.is_empty(),
-                "{lang:?} has an empty tray_warn_hotkey_change_failed"
-            );
-            assert!(
-                !s.tray_warn_file_logging_failed.is_empty(),
-                "{lang:?} has an empty tray_warn_file_logging_failed"
-            );
-            assert!(
-                !s.tray_usage_heading.is_empty(),
-                "{lang:?} has an empty tray_usage_heading"
-            );
-            assert!(
-                !s.tray_usage_brighter.is_empty(),
-                "{lang:?} has an empty tray_usage_brighter"
-            );
-            assert!(
-                !s.tray_usage_dimmer.is_empty(),
-                "{lang:?} has an empty tray_usage_dimmer"
-            );
-            assert!(
-                !s.tray_menu_settings.is_empty(),
-                "{lang:?} has an empty tray_menu_settings"
-            );
-            assert!(
-                !s.tray_menu_open_log_folder.is_empty(),
-                "{lang:?} has an empty tray_menu_open_log_folder"
-            );
-            assert!(
-                !s.tray_menu_quit_fmt.is_empty(),
-                "{lang:?} has an empty tray_menu_quit_fmt"
-            );
-            assert!(
-                !s.key_mod_ctrl.is_empty(),
-                "{lang:?} has an empty key_mod_ctrl"
-            );
-            assert!(
-                !s.key_mod_alt.is_empty(),
-                "{lang:?} has an empty key_mod_alt"
-            );
-            assert!(
-                !s.key_mod_shift.is_empty(),
-                "{lang:?} has an empty key_mod_shift"
-            );
-            assert!(
-                !s.key_mod_win.is_empty(),
-                "{lang:?} has an empty key_mod_win"
-            );
-            assert!(
-                !s.key_separator.is_empty(),
-                "{lang:?} has an empty key_separator"
-            );
+            for (name, value) in every_field(strings(lang)) {
+                assert!(!value.is_empty(), "{lang:?} has an empty {name}");
+            }
         }
     }
 

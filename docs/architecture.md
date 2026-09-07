@@ -1739,6 +1739,48 @@ This name is load-bearing for external integrations — e.g. a future autostart/
 
 Implementation: `src/platform/windows/single_instance.rs` (RAII `SingleInstance` guard held for the process lifetime), checked at the top of `main()`.
 
+### 16. User-Visible Strings
+
+Every string a user can read lives in one table, `src/core/i18n.rs`: a `Strings` struct with one
+`&'static str` field per string, the `ENGLISH` const that fills it in, and `strings(Lang)` to pick
+a table. It sits in `core/` because the OSD, the tray, the settings window, the controller and
+`BrightnessError::user_message` all draw from it, and none of them should own it.
+
+**Why a struct and not a catalog file.** Completeness becomes a compile-time property: adding a
+field breaks every language's initializer until it is filled in, and removing one breaks every
+reference. A JSON/`.po` catalog would move both failures to runtime. The cost is that a
+translation is a Rust file, which is the right trade for a table this size. A unit test names
+every field in declaration order and asserts none is empty, so a field added without a test entry
+shows up in review.
+
+**`TextKey`.** The settings window's control table (`settings/layout.rs`) is a `const`, so it
+cannot hold text that depends on the current language. It holds a `TextKey` instead, resolved by
+`Strings::get` when a control is created or re-labelled. The `match` there is exhaustive both
+ways, so a new variant and a new field each fail to compile until they are paired. `TextKey` has
+no other purpose — everything outside that `const` reads the field directly.
+
+**What deliberately stays untranslated.** Log messages, so a pasted log is readable by whoever is
+diagnosing it, and `Display` on `BrightnessError`, which is the logging representation. The
+canonical hotkey format (§3) and the log-level tokens (§8), because both round-trip through
+`config.json` — the picker's entries and `ParsedHotkey::display_text` are display-only, and the
+stored value is resolved from the combo's selected index, never from its text. Config field names,
+the product name, and the EDID fallback model name (`"Generic Monitor"`), which is part of a
+monitor's identity rather than a caption.
+
+**Not yet wired.** `ParsedHotkey::display_text` has no production caller: the settings window still
+shows the stored wire string, and parsing it only to re-render it would rewrite a hand-edited
+`"ctrl+shift+up"` as `"Ctrl+Shift+Up"` on screen — a visible change for no gain today. The seam
+exists, covered by tests, and waits for a language that actually renders differently. The tray's
+usage rows print the same wire string for the same reason; routing them through `display_text`
+needs a parse the tray does not do today.
+
+**Choosing the language.** There is no language setting yet, and three places hardcode English:
+`TRAY_LANG` in `platform/windows/tray.rs`, `capture_strings()` in `settings/capture.rs`, and the
+`let s = strings(...)` binding in `main.rs` — which is bound before `load_config()` runs, so
+making the language config-driven has to move it as well as change it. The controller resolves
+`Lang::English` inline at the sites where it composes hotkey status text, deliberately rather
+than carrying a language field, for the same reason. All of these change together.
+
 ---
 
 ## Maintenance Decisions
