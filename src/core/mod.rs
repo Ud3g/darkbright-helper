@@ -6,6 +6,7 @@
 //! - [`config`] - Configuration types and file handling
 //! - [`controller`] - Message-driven orchestration behind platform seams
 //! - `edid` - EDID parsing for monitor identification (crate-internal)
+//! - [`i18n`] - The user-visible string table, one per language
 //! - [`logfile`] - Size-capped rolling file sink for diagnostic logging
 //! - [`panic_hook`] - Process-wide panic logging hook
 //! - [`reconcile`] - Refresh/respawn tracking and reconciliation policies
@@ -20,6 +21,7 @@ pub mod brightness;
 pub mod config;
 pub mod controller;
 pub(crate) mod edid;
+pub mod i18n;
 pub mod logfile;
 pub mod panic_hook;
 pub mod reconcile;
