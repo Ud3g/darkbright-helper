@@ -692,6 +692,14 @@ pub(super) fn with_window_state(f: impl FnOnce(&WindowState)) {
     });
 }
 
+/// The string table in the settings window's language, falling back to the
+/// default language when the window state is not reachable.
+fn window_strings() -> &'static Strings {
+    let mut lang = Lang::default();
+    with_window_state(|state| lang = state.lang);
+    strings(lang)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Focus Bookkeeping (WM_ACTIVATE / WM_SETFOCUS)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1243,10 +1251,12 @@ fn handle_autostart_click(hwnd: HWND) {
         // while clearing the StartupApproved veto fails), and `!checked`
         // would then show unchecked despite Run actually being set.
         set_checked(hwnd, ID_AUTOSTART, autostart::is_enabled());
+        let s = window_strings();
         show_owned_error_message_box(
             hwnd,
-            "darkbright-helper - Autostart",
-            &format!("Couldn't update the Windows startup entry:\n{e}"),
+            &format!("darkbright-helper - {}", s.msgbox_title_autostart),
+            &s.msgbox_autostart_failed_fmt
+                .replace("{error}", &e.to_string()),
         );
     }
 }
@@ -1274,8 +1284,12 @@ fn handle_restore_click(hwnd: HWND) {
 /// activation alone left focus stranded on `hwnd`, `WM_SETFOCUS`'s own
 /// `restore_focus` call catches it immediately.
 fn confirm_restore_defaults(hwnd: HWND) -> bool {
-    let message = wide("Reset all settings to their defaults? Hotkeys are applied immediately.");
-    let title = wide("darkbright-helper - Restore Defaults");
+    let s = window_strings();
+    let message = wide(s.msgbox_restore_defaults_question);
+    let title = wide(&format!(
+        "darkbright-helper - {}",
+        s.msgbox_title_restore_defaults
+    ));
     let result = unsafe {
         MessageBoxW(
             Some(hwnd),

@@ -172,6 +172,38 @@ pub struct Strings {
     pub button_close: &'static str,
     /// The settings window's title bar text.
     pub window_title: &'static str,
+
+    // --- Message boxes ---
+    //
+    // Titles carry the product name, which is not translated; the translation
+    // supplies only the part after the dash. `Display` on `BrightnessError`
+    // stays English for logs — see `BrightnessError::user_message`.
+    /// Message box body shown when a second instance is started.
+    pub msgbox_already_running: &'static str,
+    /// Title suffix for a fatal startup failure.
+    pub msgbox_title_startup_error: &'static str,
+    /// Title suffix for a hotkey registration failure.
+    pub msgbox_title_hotkey_error: &'static str,
+    /// Title suffix for the autostart registry failure.
+    pub msgbox_title_autostart: &'static str,
+    /// Title suffix for the restore-defaults confirmation.
+    pub msgbox_title_restore_defaults: &'static str,
+    /// Lead line of a fatal startup failure, above the error detail.
+    pub msgbox_startup_failed_lead: &'static str,
+    /// Advice shown when the OS refused to start a thread.
+    pub msgbox_thread_spawn_advice: &'static str,
+    /// Lead line of a hotkey registration failure, above the error detail.
+    pub msgbox_hotkey_failed_lead: &'static str,
+    /// Advice shown when hotkey registration failed. Takes the config file
+    /// path, so the translation must contain `{path}`.
+    pub msgbox_hotkey_advice_fmt: &'static str,
+    /// Body of the autostart failure. Takes the error detail, so the
+    /// translation must contain `{error}`.
+    pub msgbox_autostart_failed_fmt: &'static str,
+    /// Body of the restore-defaults confirmation.
+    pub msgbox_restore_defaults_question: &'static str,
+    /// Placeholder used when the config path cannot be determined.
+    pub msgbox_config_file_fallback: &'static str,
 }
 
 /// A label in the settings window's control table.
@@ -334,6 +366,19 @@ pub const ENGLISH: Strings = Strings {
     button_restore_defaults: "Restore defaults",
     button_close: "Close",
     window_title: "darkbright-helper Settings",
+
+    msgbox_already_running: "darkbright-helper is already running.",
+    msgbox_title_startup_error: "Startup Error",
+    msgbox_title_hotkey_error: "Hotkey Error",
+    msgbox_title_autostart: "Autostart",
+    msgbox_title_restore_defaults: "Restore Defaults",
+    msgbox_startup_failed_lead: "darkbright-helper could not start:",
+    msgbox_thread_spawn_advice: "The system would not start a thread, which usually means it is out of resources. Close some applications, or restart the computer, and try again.",
+    msgbox_hotkey_failed_lead: "Failed to register hotkeys:",
+    msgbox_hotkey_advice_fmt: "Possible solutions:\n• Close other applications that might be using these hotkeys\n• Change the hotkey configuration in:\n  {path}\n• Restart the application after making changes",
+    msgbox_autostart_failed_fmt: "Couldn't update the Windows startup entry:\n{error}",
+    msgbox_restore_defaults_question: "Reset all settings to their defaults? Hotkeys are applied immediately.",
+    msgbox_config_file_fallback: "config file",
 };
 
 /// The string table for `lang`.
@@ -518,6 +563,18 @@ mod tests {
                 "{lang:?} footer must keep exactly two <a> spans, or SysLink indices shift"
             );
             assert_eq!(text.matches("</a>").count(), 2);
+        }
+    }
+
+    #[test]
+    fn message_box_formats_keep_their_placeholders() {
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            assert!(s.msgbox_hotkey_advice_fmt.contains("{path}"), "{lang:?}");
+            assert!(
+                s.msgbox_autostart_failed_fmt.contains("{error}"),
+                "{lang:?}"
+            );
         }
     }
 }
