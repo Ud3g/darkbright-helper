@@ -47,11 +47,69 @@ pub struct Strings {
     // --- On-screen display ---
     /// Shown in the OSD's error row when a DDC write failed.
     pub osd_ddc_error: &'static str,
+
+    // --- Tray tooltip ---
+    /// Tooltip fragment: the DDC worker is not running.
+    pub tray_tip_ddc_unavailable: &'static str,
+    /// Tooltip fragment: the DDC worker is not answering.
+    pub tray_tip_monitor_unresponsive: &'static str,
+    /// Tooltip fragment: the hotkey thread stopped.
+    pub tray_tip_hotkeys_stopped: &'static str,
+    /// Tooltip fragment: a rebind did not take effect.
+    pub tray_tip_hotkey_change_failed: &'static str,
+    /// Tooltip fragment: the log file could not be opened.
+    pub tray_tip_file_logging_off: &'static str,
+
+    // --- Tray warning rows ---
+    /// Warning row shown when the DDC worker is not running.
+    pub tray_warn_ddc_unavailable: &'static str,
+    /// Warning row shown when a monitor stopped answering.
+    pub tray_warn_monitor_unresponsive: &'static str,
+    /// Warning row shown when the hotkey thread died for good.
+    pub tray_warn_hotkeys_stopped: &'static str,
+    /// Warning row shown when a hotkey rebind failed.
+    pub tray_warn_hotkey_change_failed: &'static str,
+    /// Warning row shown when file logging could not start.
+    pub tray_warn_file_logging_failed: &'static str,
+
+    // --- Tray usage rows and commands ---
+    /// Heading above the two hotkey usage rows.
+    pub tray_usage_heading: &'static str,
+    /// Usage row label for the brightness-up hotkey.
+    pub tray_usage_brighter: &'static str,
+    /// Usage row label for the brightness-down hotkey.
+    pub tray_usage_dimmer: &'static str,
+    /// Menu command opening the settings window.
+    pub tray_menu_settings: &'static str,
+    /// Menu command opening the log folder in Explorer.
+    pub tray_menu_open_log_folder: &'static str,
+    /// Menu command that exits the app. Takes the product name, so the
+    /// translation must contain `{name}`.
+    pub tray_menu_quit_fmt: &'static str,
 }
 
 /// The English strings. Every other language is a translation of this table.
 pub const ENGLISH: Strings = Strings {
     osd_ddc_error: "DDC Error - Adjustment failed",
+
+    tray_tip_ddc_unavailable: "DDC unavailable",
+    tray_tip_monitor_unresponsive: "monitor not responding",
+    tray_tip_hotkeys_stopped: "hotkeys stopped",
+    tray_tip_hotkey_change_failed: "hotkey change failed",
+    tray_tip_file_logging_off: "file logging off",
+
+    tray_warn_ddc_unavailable: "⚠ DDC unavailable — press a brightness hotkey to retry",
+    tray_warn_monitor_unresponsive: "⚠ Monitor not responding — restart the app if this persists",
+    tray_warn_hotkeys_stopped: "⚠ Hotkeys stopped working — restart the app",
+    tray_warn_hotkey_change_failed: "⚠ Hotkey change failed — try another combination",
+    tray_warn_file_logging_failed: "⚠ File logging failed to start — check the log folder is writable",
+
+    tray_usage_heading: "Point mouse at a monitor, then:",
+    tray_usage_brighter: "Brighter",
+    tray_usage_dimmer: "Dimmer",
+    tray_menu_settings: "Settings",
+    tray_menu_open_log_folder: "Open Log Folder",
+    tray_menu_quit_fmt: "Quit {name}",
 };
 
 /// The string table for `lang`.
@@ -86,11 +144,85 @@ mod tests {
                 !s.osd_ddc_error.is_empty(),
                 "{lang:?} has an empty osd_ddc_error"
             );
+            assert!(
+                !s.tray_tip_ddc_unavailable.is_empty(),
+                "{lang:?} has an empty tray_tip_ddc_unavailable"
+            );
+            assert!(
+                !s.tray_tip_monitor_unresponsive.is_empty(),
+                "{lang:?} has an empty tray_tip_monitor_unresponsive"
+            );
+            assert!(
+                !s.tray_tip_hotkeys_stopped.is_empty(),
+                "{lang:?} has an empty tray_tip_hotkeys_stopped"
+            );
+            assert!(
+                !s.tray_tip_hotkey_change_failed.is_empty(),
+                "{lang:?} has an empty tray_tip_hotkey_change_failed"
+            );
+            assert!(
+                !s.tray_tip_file_logging_off.is_empty(),
+                "{lang:?} has an empty tray_tip_file_logging_off"
+            );
+            assert!(
+                !s.tray_warn_ddc_unavailable.is_empty(),
+                "{lang:?} has an empty tray_warn_ddc_unavailable"
+            );
+            assert!(
+                !s.tray_warn_monitor_unresponsive.is_empty(),
+                "{lang:?} has an empty tray_warn_monitor_unresponsive"
+            );
+            assert!(
+                !s.tray_warn_hotkeys_stopped.is_empty(),
+                "{lang:?} has an empty tray_warn_hotkeys_stopped"
+            );
+            assert!(
+                !s.tray_warn_hotkey_change_failed.is_empty(),
+                "{lang:?} has an empty tray_warn_hotkey_change_failed"
+            );
+            assert!(
+                !s.tray_warn_file_logging_failed.is_empty(),
+                "{lang:?} has an empty tray_warn_file_logging_failed"
+            );
+            assert!(
+                !s.tray_usage_heading.is_empty(),
+                "{lang:?} has an empty tray_usage_heading"
+            );
+            assert!(
+                !s.tray_usage_brighter.is_empty(),
+                "{lang:?} has an empty tray_usage_brighter"
+            );
+            assert!(
+                !s.tray_usage_dimmer.is_empty(),
+                "{lang:?} has an empty tray_usage_dimmer"
+            );
+            assert!(
+                !s.tray_menu_settings.is_empty(),
+                "{lang:?} has an empty tray_menu_settings"
+            );
+            assert!(
+                !s.tray_menu_open_log_folder.is_empty(),
+                "{lang:?} has an empty tray_menu_open_log_folder"
+            );
+            assert!(
+                !s.tray_menu_quit_fmt.is_empty(),
+                "{lang:?} has an empty tray_menu_quit_fmt"
+            );
         }
     }
 
     #[test]
     fn english_is_the_table_returned_for_english() {
         assert_eq!(strings(Lang::English).osd_ddc_error, ENGLISH.osd_ddc_error);
+    }
+
+    #[test]
+    fn the_quit_command_keeps_its_product_name_placeholder() {
+        for &lang in Lang::ALL {
+            assert!(
+                strings(lang).tray_menu_quit_fmt.contains("{name}"),
+                "{lang:?} dropped the {{name}} placeholder from the quit command"
+            );
+        }
     }
 }

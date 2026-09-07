@@ -35,6 +35,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
+use crate::core::i18n::{Lang, Strings, strings};
 use crate::core::state::{
     BrightnessMessage, DdcHealth, HealthWarnings, TrayMenuData, changed_rows, monitor_menu_line,
 };
@@ -130,21 +131,21 @@ const MENU_REFRESH_TIMER_ID: usize = 1;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Composes the tray tooltip text from the active warnings.
-fn compose_tooltip(warnings: HealthWarnings) -> String {
+fn compose_tooltip(s: &Strings, warnings: HealthWarnings) -> String {
     let mut parts: Vec<&str> = Vec::new();
     match warnings.ddc {
         DdcHealth::Ok => {}
-        DdcHealth::WorkerDead => parts.push("DDC unavailable"),
-        DdcHealth::WorkerHung => parts.push("monitor not responding"),
+        DdcHealth::WorkerDead => parts.push(s.tray_tip_ddc_unavailable),
+        DdcHealth::WorkerHung => parts.push(s.tray_tip_monitor_unresponsive),
     }
     if warnings.hotkeys_lost {
-        parts.push("hotkeys stopped");
+        parts.push(s.tray_tip_hotkeys_stopped);
     }
     if warnings.hotkeys_degraded {
-        parts.push("hotkey change failed");
+        parts.push(s.tray_tip_hotkey_change_failed);
     }
     if warnings.file_log_failed {
-        parts.push("file logging off");
+        parts.push(s.tray_tip_file_logging_off);
     }
     if parts.is_empty() {
         TRAY_TOOLTIP.to_string()
@@ -154,34 +155,34 @@ fn compose_tooltip(warnings: HealthWarnings) -> String {
 }
 
 /// Grayed warning lines shown at the top of the tray menu.
-fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
+fn warning_menu_lines(s: &Strings, warnings: HealthWarnings) -> Vec<&'static str> {
     let mut lines = Vec::new();
     match warnings.ddc {
         DdcHealth::Ok => {}
         // A keypress clears the respawn backoff, so this retry is real.
         DdcHealth::WorkerDead => {
-            lines.push("⚠ DDC unavailable — press a brightness hotkey to retry");
+            lines.push(s.tray_warn_ddc_unavailable);
         }
         // Nothing the user can press unsticks a blocked DDC call. It often
         // frees itself, so restarting is advice, not an instruction.
         DdcHealth::WorkerHung => {
-            lines.push("⚠ Monitor not responding — restart the app if this persists");
+            lines.push(s.tray_warn_monitor_unresponsive);
         }
     }
     if warnings.hotkeys_lost {
         // The give-up latch only clears with a fresh process.
-        lines.push("⚠ Hotkeys stopped working — restart the app");
+        lines.push(s.tray_warn_hotkeys_stopped);
     }
     if warnings.hotkeys_degraded {
         // Unlike hotkeys_lost, this clears on the next successful rebind —
         // no restart needed.
-        lines.push("⚠ Hotkey change failed — try another combination");
+        lines.push(s.tray_warn_hotkey_change_failed);
     }
     if warnings.file_log_failed {
         // "Open Log Folder" sits a few items below in this same menu, which is
         // what someone hunting for a missing log clicks — so point at the
         // folder rather than explain an I/O error nobody can act on.
-        lines.push("⚠ File logging failed to start — check the log folder is writable");
+        lines.push(s.tray_warn_file_logging_failed);
     }
     lines
 }
@@ -199,11 +200,11 @@ fn warning_menu_lines(warnings: HealthWarnings) -> Vec<&'static str> {
 ///
 /// The bindings come from the running configuration, so a user who rebound
 /// them is taught the keys that actually work.
-fn usage_menu_lines(hotkey_up: &str, hotkey_down: &str) -> [String; 3] {
+fn usage_menu_lines(s: &Strings, hotkey_up: &str, hotkey_down: &str) -> [String; 3] {
     [
-        "Point mouse at a monitor, then:".to_string(),
-        format!("Brighter\t{hotkey_up}"),
-        format!("Dimmer\t{hotkey_down}"),
+        s.tray_usage_heading.to_string(),
+        format!("{}\t{hotkey_up}", s.tray_usage_brighter),
+        format!("{}\t{hotkey_down}", s.tray_usage_dimmer),
     ]
 }
 
@@ -282,6 +283,21 @@ thread_local! {
     /// Last hotkey pair received from the main thread, kept as a fallback for
     /// the usage rows when a menu open's `TrayMenuOpening` request times out.
     static LAST_HOTKEYS: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+
+    /// UI language for the tooltip and menu text built on this thread, set
+    /// once by `TrayIcon::new`. A later cycle will drive this from config;
+    /// today it is always `Lang::English`.
+    static TRAY_LANG: RefCell<Lang> = const { RefCell::new(Lang::English) };
+}
+
+/// Sets the thread-local UI language used to build tray text.
+fn set_tray_lang(lang: Lang) {
+    TRAY_LANG.with(|l| *l.borrow_mut() = lang);
+}
+
+/// The string table for the tray thread's current language.
+fn tray_strings() -> &'static Strings {
+    strings(TRAY_LANG.with(|l| *l.borrow()))
 }
 
 /// Bookkeeping for the popup menu currently on screen.
@@ -599,7 +615,7 @@ fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
         icons.normal
     };
 
-    let tooltip = compose_tooltip(warnings);
+    let tooltip = compose_tooltip(tray_strings(), warnings);
     let nid = create_notify_icon_data(hwnd, icon, &tooltip, NIF_ICON | NIF_TIP | NIF_SHOWTIP);
     unsafe {
         if !Shell_NotifyIconW(NIM_MODIFY, &raw const nid).as_bool() {
@@ -849,13 +865,14 @@ fn show_context_menu(hwnd: HWND) {
         };
 
         let menu_data = request_menu_data(MENU_DATA_TIMEOUT);
+        let s = tray_strings();
 
         let mut row_names: Vec<String> = Vec::new();
         let mut row_texts: Vec<String> = Vec::new();
 
         if let Some(ref data) = menu_data {
             // Degraded-subsystem warnings come first so they cannot be missed.
-            let warn_lines = warning_menu_lines(data.warnings);
+            let warn_lines = warning_menu_lines(s, data.warnings);
             for (index, line) in warn_lines.iter().enumerate() {
                 // Menu IDs are u32; the warning count is at most 2
                 #[expect(clippy::cast_possible_truncation)]
@@ -895,7 +912,7 @@ fn show_context_menu(hwnd: HWND) {
             None => LAST_HOTKEYS.with(|last| last.borrow().clone()),
         };
         if let Some((hotkey_up, hotkey_down)) = hotkeys {
-            let lines = usage_menu_lines(&hotkey_up, &hotkey_down);
+            let lines = usage_menu_lines(s, &hotkey_up, &hotkey_down);
             for (index, line) in lines.iter().enumerate() {
                 // Menu IDs are u32; this block is exactly three rows.
                 #[expect(clippy::cast_possible_truncation)]
@@ -905,9 +922,19 @@ fn show_context_menu(hwnd: HWND) {
             append_separator(hmenu);
         }
 
-        append_menu_item(hmenu, MF_STRING, MENU_ID_SETTINGS, "Settings");
-        append_menu_item(hmenu, MF_STRING, MENU_ID_OPEN_LOGS, "Open Log Folder");
-        append_menu_item(hmenu, MF_STRING, MENU_ID_QUIT, &format!("Quit {APP_NAME}"));
+        append_menu_item(hmenu, MF_STRING, MENU_ID_SETTINGS, s.tray_menu_settings);
+        append_menu_item(
+            hmenu,
+            MF_STRING,
+            MENU_ID_OPEN_LOGS,
+            s.tray_menu_open_log_folder,
+        );
+        append_menu_item(
+            hmenu,
+            MF_STRING,
+            MENU_ID_QUIT,
+            &s.tray_menu_quit_fmt.replace("{name}", APP_NAME),
+        );
 
         append_separator(hmenu);
         let version_text = format!("{APP_NAME} v{}", version_string());
@@ -1214,6 +1241,7 @@ impl TrayIcon {
 
         // Store sender in thread-local storage for window procedure access
         set_tray_sender(sender);
+        set_tray_lang(Lang::English);
 
         let icon_handle = load_tray_icon()?;
 
@@ -1321,11 +1349,12 @@ impl Drop for TrayIcon {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::i18n::ENGLISH;
 
     #[test]
     fn tooltip_plain_when_healthy() {
         assert_eq!(
-            compose_tooltip(HealthWarnings::default()),
+            compose_tooltip(&ENGLISH, HealthWarnings::default()),
             "darkbright-helper"
         );
     }
@@ -1341,7 +1370,7 @@ mod tests {
     #[test]
     fn tooltip_lists_active_warnings() {
         assert_eq!(
-            compose_tooltip(ddc_only(DdcHealth::WorkerDead)),
+            compose_tooltip(&ENGLISH, ddc_only(DdcHealth::WorkerDead)),
             "darkbright-helper – DDC unavailable"
         );
 
@@ -1349,7 +1378,10 @@ mod tests {
             hotkeys_lost: true,
             ..HealthWarnings::default()
         };
-        assert_eq!(compose_tooltip(keys), "darkbright-helper – hotkeys stopped");
+        assert_eq!(
+            compose_tooltip(&ENGLISH, keys),
+            "darkbright-helper – hotkeys stopped"
+        );
 
         let both = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
@@ -1358,7 +1390,7 @@ mod tests {
             file_log_failed: false,
         };
         assert_eq!(
-            compose_tooltip(both),
+            compose_tooltip(&ENGLISH, both),
             "darkbright-helper – DDC unavailable, hotkeys stopped"
         );
     }
@@ -1370,7 +1402,7 @@ mod tests {
             ..HealthWarnings::default()
         };
         assert_eq!(
-            compose_tooltip(degraded),
+            compose_tooltip(&ENGLISH, degraded),
             "darkbright-helper – hotkey change failed"
         );
     }
@@ -1378,7 +1410,7 @@ mod tests {
     #[test]
     fn tooltip_says_not_responding_for_a_hung_worker() {
         assert_eq!(
-            compose_tooltip(ddc_only(DdcHealth::WorkerHung)),
+            compose_tooltip(&ENGLISH, ddc_only(DdcHealth::WorkerHung)),
             "darkbright-helper – monitor not responding"
         );
     }
@@ -1390,14 +1422,14 @@ mod tests {
             ..HealthWarnings::default()
         };
         assert_eq!(
-            compose_tooltip(logging),
+            compose_tooltip(&ENGLISH, logging),
             "darkbright-helper – file logging off"
         );
     }
 
     #[test]
     fn menu_warning_lines_match_active_warnings() {
-        assert!(warning_menu_lines(HealthWarnings::default()).is_empty());
+        assert!(warning_menu_lines(&ENGLISH, HealthWarnings::default()).is_empty());
 
         let all = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
@@ -1405,7 +1437,7 @@ mod tests {
             hotkeys_degraded: true,
             file_log_failed: true,
         };
-        let lines = warning_menu_lines(all);
+        let lines = warning_menu_lines(&ENGLISH, all);
         assert_eq!(lines.len(), 4);
         assert!(lines[0].contains("DDC"));
         assert!(lines[1].contains("Hotkeys"));
@@ -1417,11 +1449,11 @@ mod tests {
     fn only_a_dead_worker_is_advertised_as_hotkey_recoverable() {
         // A keypress clears the respawn backoff, so the advice is sound here…
         let dead = ddc_only(DdcHealth::WorkerDead);
-        assert!(warning_menu_lines(dead)[0].contains("hotkey"));
+        assert!(warning_menu_lines(&ENGLISH, dead)[0].contains("hotkey"));
 
         // …but nothing the user can press unsticks a blocked DDC call, so
         // offering the same retry would be a false affordance.
-        let line = warning_menu_lines(ddc_only(DdcHealth::WorkerHung))[0];
+        let line = warning_menu_lines(&ENGLISH, ddc_only(DdcHealth::WorkerHung))[0];
         assert!(!line.contains("hotkey"), "must not promise a hotkey retry");
         assert!(line.contains("restart"));
     }
@@ -1432,7 +1464,7 @@ mod tests {
             file_log_failed: true,
             ..HealthWarnings::default()
         };
-        let lines = warning_menu_lines(logging);
+        let lines = warning_menu_lines(&ENGLISH, logging);
         assert_eq!(lines.len(), 1);
         // The same menu carries "Open Log Folder" a few items down, which is
         // what someone hunting for a missing log clicks — so the line points
@@ -1482,8 +1514,16 @@ mod tests {
     }
 
     #[test]
+    fn usage_rows_keep_the_tab_that_right_aligns_the_shortcut_column() {
+        let rows = usage_menu_lines(&ENGLISH, "Ctrl+Shift+Up", "Ctrl+Shift+Down");
+        assert_eq!(rows[0], "Point mouse at a monitor, then:");
+        assert_eq!(rows[1], "Brighter\tCtrl+Shift+Up");
+        assert_eq!(rows[2], "Dimmer\tCtrl+Shift+Down");
+    }
+
+    #[test]
     fn usage_lines_show_the_configured_hotkeys_in_the_shortcut_column() {
-        let lines = usage_menu_lines("Alt+F1", "Alt+F2");
+        let lines = usage_menu_lines(&ENGLISH, "Alt+F1", "Alt+F2");
 
         // The header names the mouse step; the hotkeys never appear in it.
         assert!(lines[0].contains("monitor"));
