@@ -86,6 +86,22 @@ pub struct Strings {
     /// Menu command that exits the app. Takes the product name, so the
     /// translation must contain `{name}`.
     pub tray_menu_quit_fmt: &'static str,
+
+    // --- Hotkey display ---
+    //
+    // These are display-only. The canonical hotkey format written to
+    // config.json is always English and lives in `ParsedHotkey`'s `Display`
+    // impl; translating these never changes what is stored.
+    /// Display name of the Ctrl modifier.
+    pub key_mod_ctrl: &'static str,
+    /// Display name of the Alt modifier.
+    pub key_mod_alt: &'static str,
+    /// Display name of the Shift modifier.
+    pub key_mod_shift: &'static str,
+    /// Display name of the Windows modifier.
+    pub key_mod_win: &'static str,
+    /// Separator placed between modifiers and the key name.
+    pub key_separator: &'static str,
 }
 
 /// The English strings. Every other language is a translation of this table.
@@ -110,6 +126,12 @@ pub const ENGLISH: Strings = Strings {
     tray_menu_settings: "Settings",
     tray_menu_open_log_folder: "Open Log Folder",
     tray_menu_quit_fmt: "Quit {name}",
+
+    key_mod_ctrl: "Ctrl",
+    key_mod_alt: "Alt",
+    key_mod_shift: "Shift",
+    key_mod_win: "Win",
+    key_separator: "+",
 };
 
 /// The string table for `lang`.
@@ -207,6 +229,26 @@ mod tests {
             assert!(
                 !s.tray_menu_quit_fmt.is_empty(),
                 "{lang:?} has an empty tray_menu_quit_fmt"
+            );
+            assert!(
+                !s.key_mod_ctrl.is_empty(),
+                "{lang:?} has an empty key_mod_ctrl"
+            );
+            assert!(
+                !s.key_mod_alt.is_empty(),
+                "{lang:?} has an empty key_mod_alt"
+            );
+            assert!(
+                !s.key_mod_shift.is_empty(),
+                "{lang:?} has an empty key_mod_shift"
+            );
+            assert!(
+                !s.key_mod_win.is_empty(),
+                "{lang:?} has an empty key_mod_win"
+            );
+            assert!(
+                !s.key_separator.is_empty(),
+                "{lang:?} has an empty key_separator"
             );
         }
     }

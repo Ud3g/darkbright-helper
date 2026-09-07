@@ -37,6 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::core::controller::HotkeyPort;
+use crate::core::i18n::Strings;
 use crate::core::state::{BrightnessMessage, HotkeyOp};
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -769,8 +770,43 @@ impl ParsedHotkey {
     pub const fn new(modifiers: HOT_KEY_MODIFIERS, vk_code: VIRTUAL_KEY) -> Self {
         Self { modifiers, vk_code }
     }
+
+    /// The hotkey as a user should read it, in `s`'s language.
+    ///
+    /// Identical to the [`Display`](std::fmt::Display) output in English; a
+    /// translation changes only what is shown, never what is stored. Key names
+    /// themselves are not translated — they name physical keycaps.
+    #[must_use]
+    pub fn display_text(&self, s: &Strings) -> String {
+        let mut parts = Vec::new();
+
+        if self.modifiers.contains(MOD_CONTROL) {
+            parts.push(s.key_mod_ctrl);
+        }
+        if self.modifiers.contains(MOD_ALT) {
+            parts.push(s.key_mod_alt);
+        }
+        if self.modifiers.contains(MOD_SHIFT) {
+            parts.push(s.key_mod_shift);
+        }
+        if self.modifiers.contains(MOD_WIN) {
+            parts.push(s.key_mod_win);
+        }
+
+        let key_name = VK_TO_NAME
+            .iter()
+            .find(|(_, vk)| *vk == self.vk_code)
+            .map_or("Unknown", |(name, _)| name.as_str());
+
+        parts.push(key_name);
+        parts.join(s.key_separator)
+    }
 }
 
+/// The canonical hotkey format: English, stable across languages and versions.
+/// This is what `config.json` stores and what [`parse_hotkey`] reads back, so
+/// it must never be localized. Use [`ParsedHotkey::display_text`] for anything
+/// a user reads.
 impl std::fmt::Display for ParsedHotkey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = Vec::new();
@@ -1356,6 +1392,36 @@ mod tests {
     #[test]
     fn test_parse_multiple_keys_fails() {
         assert!(parse_hotkey("Ctrl+A+B").is_err());
+    }
+
+    #[test]
+    fn the_stored_format_is_unchanged_by_the_display_split() {
+        // config.json round-trips through Display; if this ever changes, every
+        // existing config file and every hand edit breaks.
+        let parsed = parse_hotkey("Ctrl+Shift+Up").expect("fixture must parse");
+        assert_eq!(parsed.to_string(), "Ctrl+Shift+Up");
+
+        let parsed = parse_hotkey("Ctrl+Alt+Win+F5").expect("fixture must parse");
+        assert_eq!(parsed.to_string(), "Ctrl+Alt+Win+F5");
+    }
+
+    #[test]
+    fn english_display_text_matches_the_stored_format() {
+        use crate::core::i18n::ENGLISH;
+
+        for spec in [
+            "Ctrl+Shift+Up",
+            "Ctrl+Shift+Down",
+            "Alt+Win+PageUp",
+            "Ctrl+F12",
+        ] {
+            let parsed = parse_hotkey(spec).expect("fixture must parse");
+            assert_eq!(
+                parsed.display_text(&ENGLISH),
+                parsed.to_string(),
+                "English display text must be identical to the stored format"
+            );
+        }
     }
 
     #[test]

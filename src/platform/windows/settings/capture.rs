@@ -25,6 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
+use crate::core::i18n::{Lang, Strings, strings};
 use crate::core::state::{BrightnessMessage, SettingChange};
 
 use super::super::hotkey::{bindings_conflict, hotkey_string};
@@ -266,30 +267,36 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(i32::from(vk.0)) < 0 }
 }
 
+/// The string table the settings window renders with. A later cycle drives
+/// this from config; today it is always English.
+fn capture_strings() -> &'static Strings {
+    strings(Lang::English)
+}
+
 /// The modifier-prefix preview shown while capturing (`"Ctrl+Shift+"`), or
 /// empty while no modifier is held yet — in which case the caller shows
 /// [`CAPTURE_PROMPT`] instead. Order matches [`hotkey::ParsedHotkey`]'s
 /// `Display` impl (Ctrl, Alt, Shift, Win) so the preview never reorders
 /// itself relative to the string a completed capture actually posts.
 #[must_use]
-fn preview_text(modifiers: HOT_KEY_MODIFIERS) -> String {
+fn preview_text(modifiers: HOT_KEY_MODIFIERS, s: &Strings) -> String {
     let mut parts = Vec::new();
     if modifiers.contains(MOD_CONTROL) {
-        parts.push("Ctrl");
+        parts.push(s.key_mod_ctrl);
     }
     if modifiers.contains(MOD_ALT) {
-        parts.push("Alt");
+        parts.push(s.key_mod_alt);
     }
     if modifiers.contains(MOD_SHIFT) {
-        parts.push("Shift");
+        parts.push(s.key_mod_shift);
     }
     if modifiers.contains(MOD_WIN) {
-        parts.push("Win");
+        parts.push(s.key_mod_win);
     }
     if parts.is_empty() {
         String::new()
     } else {
-        format!("{}+", parts.join("+"))
+        format!("{}{}", parts.join(s.key_separator), s.key_separator)
     }
 }
 
@@ -298,11 +305,16 @@ fn preview_text(modifiers: HOT_KEY_MODIFIERS) -> String {
 /// Pure and unit-tested without a live window — `idle_text` stands in for
 /// `window_text(hwnd)`.
 #[must_use]
-fn capture_display_text(capturing: bool, modifiers: HOT_KEY_MODIFIERS, idle_text: &str) -> String {
+fn capture_display_text(
+    capturing: bool,
+    modifiers: HOT_KEY_MODIFIERS,
+    idle_text: &str,
+    s: &Strings,
+) -> String {
     if !capturing {
         return idle_text.to_string();
     }
-    let preview = preview_text(modifiers);
+    let preview = preview_text(modifiers, s);
     if preview.is_empty() {
         CAPTURE_PROMPT.to_string()
     } else {
@@ -543,8 +555,9 @@ fn paint_capture(hwnd: HWND, hdc: HDC) {
 
     let cs = capture_state(hwnd);
     let idle_text = window_text(hwnd);
-    let text = capture_display_text(cs.capturing, cs.live_modifiers, &idle_text);
-    let is_placeholder = cs.capturing && preview_text(cs.live_modifiers).is_empty();
+    let s = capture_strings();
+    let text = capture_display_text(cs.capturing, cs.live_modifiers, &idle_text, s);
+    let is_placeholder = cs.capturing && preview_text(cs.live_modifiers, s).is_empty();
     let has_focus = unsafe { GetFocus() } == hwnd;
 
     with_window_state(|state| unsafe {
@@ -769,6 +782,7 @@ pub(super) unsafe extern "system" fn capture_wnd_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::i18n::ENGLISH;
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_UP;
 
     // ── Hotkey Capture Control (pure logic) ─────────────────────────────
@@ -840,24 +854,24 @@ mod tests {
 
     #[test]
     fn preview_text_is_empty_with_no_modifiers_held() {
-        assert_eq!(preview_text(HOT_KEY_MODIFIERS(0)), "");
+        assert_eq!(preview_text(HOT_KEY_MODIFIERS(0), &ENGLISH), "");
     }
 
     #[test]
     fn preview_text_orders_modifiers_ctrl_alt_shift_win() {
         let mods = MOD_WIN | MOD_SHIFT | MOD_ALT | MOD_CONTROL;
-        assert_eq!(preview_text(mods), "Ctrl+Alt+Shift+Win+");
+        assert_eq!(preview_text(mods, &ENGLISH), "Ctrl+Alt+Shift+Win+");
     }
 
     #[test]
     fn preview_text_a_single_modifier_still_gets_a_trailing_plus() {
-        assert_eq!(preview_text(MOD_CONTROL), "Ctrl+");
+        assert_eq!(preview_text(MOD_CONTROL, &ENGLISH), "Ctrl+");
     }
 
     #[test]
     fn capture_display_text_shows_idle_text_while_not_capturing() {
         assert_eq!(
-            capture_display_text(false, MOD_CONTROL, "Ctrl+Shift+Up"),
+            capture_display_text(false, MOD_CONTROL, "Ctrl+Shift+Up", &ENGLISH),
             "Ctrl+Shift+Up"
         );
     }
@@ -865,7 +879,7 @@ mod tests {
     #[test]
     fn capture_display_text_shows_the_prompt_before_any_modifier_is_held() {
         assert_eq!(
-            capture_display_text(true, HOT_KEY_MODIFIERS(0), "Ctrl+Shift+Up"),
+            capture_display_text(true, HOT_KEY_MODIFIERS(0), "Ctrl+Shift+Up", &ENGLISH),
             CAPTURE_PROMPT
         );
     }
@@ -873,7 +887,7 @@ mod tests {
     #[test]
     fn capture_display_text_shows_the_live_preview_once_a_modifier_is_held() {
         assert_eq!(
-            capture_display_text(true, MOD_CONTROL, "Ctrl+Shift+Up"),
+            capture_display_text(true, MOD_CONTROL, "Ctrl+Shift+Up", &ENGLISH),
             "Ctrl+"
         );
     }
