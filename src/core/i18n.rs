@@ -67,6 +67,104 @@ impl Lang {
     pub fn from_index(index: usize) -> Option<Lang> {
         Lang::ALL.get(index).copied()
     }
+
+    /// RFC 4647 §3.4 lookup of one language tag against the shipped
+    /// languages: the whole tag first, then with subtags removed from the
+    /// right until something matches. After each removal a trailing
+    /// single-character subtag (an extension or private-use singleton) is
+    /// removed too. Case-insensitive. `None` when nothing matches.
+    #[must_use]
+    pub fn lookup(tag: &str) -> Option<Lang> {
+        let lowered = tag.to_ascii_lowercase();
+        let mut subtags: Vec<&str> = lowered.split('-').collect();
+        loop {
+            let candidate = subtags.join("-");
+            if let Some(&lang) = Lang::ALL.iter().find(|l| l.tag() == candidate) {
+                return Some(lang);
+            }
+            subtags.pop()?;
+            if subtags.last().is_some_and(|s| s.len() == 1) {
+                subtags.pop();
+            }
+            if subtags.is_empty() {
+                return None;
+            }
+        }
+    }
+
+    /// The first entry of an ordered preference list (most preferred first)
+    /// that [`Lang::lookup`] resolves, or English when none does. The
+    /// documented fallback: English is the table every other language is a
+    /// translation of, so it is the one language that always exists.
+    #[must_use]
+    pub fn from_preferences(preferred: &[String]) -> Lang {
+        preferred
+            .iter()
+            .find_map(|tag| Lang::lookup(tag))
+            .unwrap_or(Lang::English)
+    }
+}
+
+/// The `language` config value that means "follow the OS display language".
+pub const SYSTEM_LANGUAGE: &str = "system";
+
+/// The parsed `language` config value: follow the OS, or one fixed language.
+///
+/// Only the choice is stored, never the language it resolved to, so a config
+/// carried to another machine follows that machine's OS language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LanguageSetting {
+    /// Follow the OS display language ([`SYSTEM_LANGUAGE`] in the file).
+    #[default]
+    System,
+    /// Always this language, whatever the OS says.
+    Fixed(Lang),
+}
+
+impl LanguageSetting {
+    /// Parses a config value. Accepts [`SYSTEM_LANGUAGE`] (any case) or any
+    /// tag [`Lang::lookup`] resolves; everything else, a well-formed but
+    /// unshipped tag included, is `None`, so the config loader reports it
+    /// like any other unparseable field.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case(SYSTEM_LANGUAGE) {
+            return Some(Self::System);
+        }
+        Lang::lookup(value).map(Self::Fixed)
+    }
+
+    /// The value written to the config file: [`SYSTEM_LANGUAGE`] or the
+    /// language's tag. A value read as `de-AT` is written back as `de`.
+    #[must_use]
+    pub fn wire(self) -> &'static str {
+        match self {
+            Self::System => SYSTEM_LANGUAGE,
+            Self::Fixed(lang) => lang.tag(),
+        }
+    }
+
+    /// The language to display, given the OS preference list.
+    #[must_use]
+    pub fn resolve(self, preferred: &[String]) -> Lang {
+        match self {
+            Self::System => Lang::from_preferences(preferred),
+            Self::Fixed(lang) => lang,
+        }
+    }
+}
+
+/// Seam for the OS's ordered UI-language preference list.
+///
+/// Read once at startup: Windows applies a change of the display language to
+/// already-running processes only after a sign-out, so the list read at
+/// process start matches what the rest of the desktop shows for the process
+/// lifetime. The binary calls it and hands the list to the controller as
+/// data; nothing in `core/` holds the source itself.
+pub trait LanguageSource {
+    /// Language tags, most preferred first. Empty when the OS cannot say,
+    /// which resolves to English.
+    fn preferred_languages(&self) -> Vec<String>;
 }
 
 /// Every user-visible string, for one language.
@@ -642,7 +740,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
 
 #[cfg(test)]
 mod tests {
-    use super::{ENGLISH, Lang, Strings, TextKey, strings};
+    use super::{ENGLISH, Lang, LanguageSetting, SYSTEM_LANGUAGE, Strings, TextKey, strings};
 
     #[test]
     fn every_language_tag_is_unique_and_lowercase() {
@@ -943,6 +1041,90 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn lookup_matches_whole_tags_case_insensitively() {
+        assert_eq!(Lang::lookup("de"), Some(Lang::German));
+        assert_eq!(Lang::lookup("DE"), Some(Lang::German));
+        assert_eq!(Lang::lookup("en"), Some(Lang::English));
+        assert_eq!(Lang::lookup("fr"), None);
+        assert_eq!(Lang::lookup(""), None);
+    }
+
+    #[test]
+    fn lookup_truncates_subtags_from_the_right() {
+        assert_eq!(Lang::lookup("de-AT"), Some(Lang::German));
+        assert_eq!(Lang::lookup("de-AT-1901"), Some(Lang::German));
+        assert_eq!(Lang::lookup("en-GB"), Some(Lang::English));
+        assert_eq!(Lang::lookup("fr-CA"), None);
+    }
+
+    #[test]
+    fn lookup_drops_a_singleton_left_trailing_by_truncation() {
+        // RFC 4647 §3.4: after removing the last subtag, a now-trailing
+        // single-character subtag (an extension or private-use singleton)
+        // is removed as well before the next comparison.
+        assert_eq!(Lang::lookup("de-x-foo"), Some(Lang::German));
+        assert_eq!(Lang::lookup("x-private"), None);
+    }
+
+    #[test]
+    fn from_preferences_takes_the_first_shipped_language() {
+        let prefs = |tags: &[&str]| tags.iter().map(|t| (*t).to_string()).collect::<Vec<_>>();
+        assert_eq!(Lang::from_preferences(&prefs(&["fr", "de"])), Lang::German);
+        assert_eq!(
+            Lang::from_preferences(&prefs(&["de-CH", "en"])),
+            Lang::German
+        );
+        assert_eq!(Lang::from_preferences(&prefs(&["fr"])), Lang::English);
+        assert_eq!(Lang::from_preferences(&[]), Lang::English);
+    }
+
+    #[test]
+    fn language_setting_parses_system_and_shipped_tags_only() {
+        assert_eq!(
+            LanguageSetting::parse("system"),
+            Some(LanguageSetting::System)
+        );
+        assert_eq!(
+            LanguageSetting::parse("SYSTEM"),
+            Some(LanguageSetting::System)
+        );
+        assert_eq!(
+            LanguageSetting::parse("de"),
+            Some(LanguageSetting::Fixed(Lang::German))
+        );
+        assert_eq!(
+            LanguageSetting::parse("de-CH"),
+            Some(LanguageSetting::Fixed(Lang::German))
+        );
+        assert_eq!(LanguageSetting::parse("fr"), None);
+        assert_eq!(LanguageSetting::parse("Deutsch"), None);
+        assert_eq!(LanguageSetting::parse("de_DE"), None);
+        assert_eq!(LanguageSetting::parse(""), None);
+    }
+
+    #[test]
+    fn language_setting_wire_round_trips() {
+        assert_eq!(LanguageSetting::System.wire(), SYSTEM_LANGUAGE);
+        assert_eq!(LanguageSetting::Fixed(Lang::German).wire(), "de");
+        for &lang in Lang::ALL {
+            let setting = LanguageSetting::Fixed(lang);
+            assert_eq!(LanguageSetting::parse(setting.wire()), Some(setting));
+        }
+        assert_eq!(LanguageSetting::default(), LanguageSetting::System);
+    }
+
+    #[test]
+    fn language_setting_resolves_system_through_the_preferences() {
+        let de = vec!["de-DE".to_string()];
+        assert_eq!(LanguageSetting::System.resolve(&de), Lang::German);
+        assert_eq!(
+            LanguageSetting::Fixed(Lang::English).resolve(&de),
+            Lang::English
+        );
+        assert_eq!(LanguageSetting::System.resolve(&[]), Lang::English);
     }
 
     #[test]
