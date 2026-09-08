@@ -48,16 +48,22 @@ longer German labels; that is the next cycle, and this one produces its input.
 ### 1. Config field and resolution (`core/`)
 
 **Config.** `Config` gains `language: String`, `#[serde(default = "default_language")]`, default
-`"system"`. `SettingsDirty` gains `language`; `restore_defaults` resets it to `"system"`;
-`overlay_dirty` copies it when flagged. The field sits at the root of the file, next to `version`,
-because it is not a property of any existing section.
+`"system"`. The field sits at the root of the file, next to `version`, because it is not a
+property of any existing section. `SettingsDirty` gains `language`, and every hand-maintained
+place that enumerates its flags follows: `SettingsDirty::any()` (an OR over the flags with no
+compile-time completeness; missing it would make a language-only session skip its close-time
+flush and, on the merge path, never write the field at all), `restore_defaults` (resets it to
+`"system"`), `overlay_dirty` (copies it when flagged), the `SettingsDirty` literal in
+`handle_restore_defaults` (must flag it so the reset reaches disk), and the doc comments that
+say "the ten user-facing settings", which become eleven.
 
 **Validation is strict.** `validate_and_fix` accepts exactly two shapes: the literal `"system"`
 (case-insensitive) or a tag that the lookup below resolves to a shipped language. Anything else,
 including a well-formed but unshipped tag such as `"fr"`, produces
 `ConfigNotice::Unparseable { field: "language", .. }` and is replaced by `"system"` in memory.
-This mirrors `logging.file_level`: a typo is reported, never silently honoured. The on-disk value
-is not rewritten by the repair; it changes only when the dialog writes the field.
+This mirrors `logging.file_level`: a typo is reported, never silently honoured, and like every
+other repaired field the replacement reaches disk with the next full save. The raw string is not
+preserved anywhere; the in-memory `Config` is the only source of truth for the language.
 
 **Types in `core/i18n.rs`:**
 
@@ -71,8 +77,10 @@ is not rewritten by the repair; it changes only when the dialog writes the field
   parses to `Fixed(German)` and, once the dialog re-saves it, is written back as `"de"`.
 - `Lang::lookup(tag: &str) -> Option<Lang>`: RFC 4647 §3.4 lookup of one tag against
   `Lang::ALL`. Lowercases, then compares the whole tag, then strips subtags from the right
-  (`de-AT-1901` → `de-AT` → `de`) until a shipped tag matches or nothing is left. A single-letter
-  subtag (an extension singleton such as `x`) is stripped together with the subtag before it.
+  (`de-AT-1901` → `de-AT` → `de`) until a shipped tag matches or nothing is left. After each
+  strip, if the new trailing subtag is a single character (an extension or private-use singleton
+  such as `x`), it is stripped as well before the next comparison: `de-x-foo` → `de-x` → `de`,
+  and `x-private` → `None`.
 - `Lang::from_preferences(preferred: &[String]) -> Lang`: the first entry in the list whose
   lookup succeeds, else `Lang::English`. Every entry is tried in order; a list whose first entry
   is unshipped and second is `de` yields German.
@@ -91,18 +99,23 @@ a platform capability with a platform-agnostic consumer. Unlike the controller s
 in `core/` calls it repeatedly, so it is not a type parameter of `Controller`; `main.rs` calls
 it once at startup and hands the resulting list to `Controller::new` as data.
 
-**Once at startup, by design.** Windows applies a change of the display language at the next
-sign-in, so a list read at process start is correct for the process lifetime. A future
-platform that changes the UI language live would re-read and post a message; nothing here
-precludes that, and nothing builds it.
+**Once at startup, by design.** The preferred-UI-language list itself can change while the
+process runs, but Windows applies such a change to already-running processes only after a
+sign-out, and every Windows program the user has open keeps its old language until then. A list
+read at process start therefore matches what the rest of the desktop shows for the process
+lifetime. A future platform that changes the UI language live would re-read and post a message;
+nothing here precludes that, and nothing builds it.
 
 **Windows implementation.** New file `src/platform/windows/locale.rs`, `pub struct
 WindowsLanguageSource;`, re-exported from `platform/windows/mod.rs` for the binary. It calls
-`GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, ..)` twice, the documented pattern: once with a
-null buffer to learn the size, then with a buffer of that size, and splits the returned
-double-NUL-terminated multi-string into tags. Any failure returns an empty list and logs one
-`warn` line; an empty list resolves to English. `Cargo.toml` gains the `Win32_Globalization`
-feature. `LOCALE_NAME_MAX_LENGTH` is not needed, since the call reports its own buffer size.
+`GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, ..)` twice, the documented pattern: once with
+`None` for the buffer and a size of 0 on input, which makes the call report the required size in
+UTF-16 units including both terminating NULs; then with a buffer of that size. The result is a
+double-NUL-terminated multi-string, split into tags at each NUL. The `windows` 0.62 binding
+returns `Result<()>`, so the crate's usual `?` + `map_err` shape applies. Any failure returns an
+empty list and logs one `warn` line; an empty list resolves to English. `Cargo.toml` gains the
+`Win32_Globalization` feature. `LOCALE_NAME_MAX_LENGTH` is not needed, since the call reports
+its own buffer size.
 
 ### 3. Controller
 
@@ -119,16 +132,25 @@ The controller owns the resolved language, as it owns every other piece of runti
 - `SettingsSnapshot` gains two fields: `language: LanguageSetting`, which the picker displays,
   and `lang: Lang`, which every label in the window is resolved in. Both come from the
   controller, so the window can never disagree with it.
-- The four `strings(Lang::English)` lookups the controller makes today read `self.lang`.
+- The six `strings(Lang::English)` lookups the controller makes today read `self.lang`.
 - `handle_restore_defaults` already resets the config and refreshes the window; it additionally
-  re-resolves the language and pushes it when it changed, exactly like a `Language` change.
+  re-resolves the language and pushes it when it changed, exactly like a `Language` change. The
+  refresh goes out first, the language push second; the window handles that order correctly
+  because a refresh never touches its language (see "Settings window" below).
 
-**The hotkey thread stops composing text.** Today it builds the "rebind failed and restore also
-failed" message itself, resolving the table inline because it has no language of its own.
-Instead, `BrightnessMessage::HotkeyRebindResult` carries `error: Option<String>` and a new
-`restore_error: Option<String>`, both raw `BrightnessError` `Display` output; the controller
-joins them with `hotkey_status_restore_also_failed_fmt` in its own language. After this,
-`platform/windows/hotkey.rs` imports nothing from `i18n` except in tests.
+**Language changes only ever originate in the settings window.** Both `SettingChange::Language`
+and `RestoreDefaults` are posted by the dialog, so a push can never race the window's own
+creation: by the time one is sent, the window exists and its `hwnd` slot is live. The
+`OPENING` sentinel path in `SettingsSinkImpl` therefore needs no special case for the language
+message; a post that finds no window is dropped like any other.
+
+**The hotkey thread stops composing user-facing text.** Today it builds the "rebind failed and
+restore also failed" message itself, resolving the table inline because it has no language of
+its own. Instead, `BrightnessMessage::HotkeyRebindResult` carries `error: Option<String>` and
+a new `restore_error: Option<String>`, both raw `BrightnessError` `Display` output; the
+controller joins them with `hotkey_status_restore_also_failed_fmt` in its own language. After
+this, the only `i18n` item `platform/windows/hotkey.rs` uses outside tests is the `Strings`
+parameter of `display_text`; the `strings()`/`Lang` lookup at the composition site goes away.
 
 ### 4. Receivers
 
@@ -143,16 +165,33 @@ first paint is right without a separate call.
 `controller.health_warnings()` once per loop tick and pushes changes through
 `TrayStatusHandle::notify`. The language follows the same pattern: `main.rs` keeps `last_lang`,
 and `TrayStatusHandle` gains `set_language(lang)`, posting a second private message
-(`WM_TRAY_LANG`, `wparam` = index into `Lang::ALL`). On receipt the tray thread calls
-`set_tray_lang`, its first caller outside `TrayIcon::new`, and re-issues the tooltip via
-`NIM_MODIFY` from the warnings it last received, which it now remembers in a thread-local next
-to `STATUS_ICONS`. The menu is rebuilt on every open, so it picks the language up the next time
-it is shown. `TrayIcon::new` takes the initial `Lang` so the first tooltip is right.
+(`WM_TRAY_LANG = WM_APP + 102`, the slot after `WM_TRAY_STATUS`; `wparam` = index into
+`Lang::ALL`, an out-of-range index is logged and ignored, never used to index). On receipt the
+tray thread calls `set_tray_lang`, its first caller outside `TrayIcon::new`, and re-issues the
+tooltip via `NIM_MODIFY` from the warnings it last received, which it now remembers in a
+thread-local next to `STATUS_ICONS`. The menu is rebuilt on every open, so it picks the
+language up the next time it is shown.
+
+The tray's status handle arrives on a channel some ticks after the tray thread starts, and
+`main.rs` already re-pushes `last_warnings` when it does. The language needs no such catch-up:
+`spawn_tray_thread` takes the initial `Lang`, so the first tooltip is right, and a language
+change cannot precede the handle because it can only come from the settings window, which is
+opened from the tray menu, which exists only once the tray thread is up.
 
 **Settings window.** `WindowState.lang` becomes `Cell<Lang>`, set from the snapshot's `lang`
-at creation rather than from `Lang::default()`. A new message `WM_APP_SETTINGS_LANG`
-(`WM_APP + 6`, `wparam` = index into `Lang::ALL`, no heap payload) is posted by
-`SettingsSinkImpl::set_language`. Its handler:
+at creation rather than from `Lang::default()`. **That cell has exactly two writers:** window
+creation, and the `WM_APP_SETTINGS_LANG` handler below. `apply_snapshot` ignores `snap.lang`
+on a refresh: if it updated the cell, `window_strings()` would answer in the new language while
+every label set by `SetWindowTextW` still showed the old one. A refresh therefore never changes
+the language, and the separate push always relabels in full.
+
+`WM_APP_SETTINGS_LANG` is `WM_APP + 6`, the sixth entry in the contiguous `WM_APP_SETTINGS_*`
+range. That range is pinned by a `const` assertion in `settings/window.rs` and is the span
+`drain_pending_payload_messages` filters on when reclaiming boxed payloads; both are extended
+to include the new constant, deliberately, as the comment there asks. The message carries its
+`Lang` as an index into `Lang::ALL` in `wparam` with no heap payload, so it has nothing to
+reclaim, and an out-of-range index is logged and ignored. `SettingsSinkImpl::set_language`
+posts it. Its handler:
 
 1. stores the new `Lang` in `WindowState.lang`;
 2. walks `CONTROLS` and calls `SetWindowTextW` on every control with a `TextKey`;
@@ -172,15 +211,24 @@ resolves from the loaded config and the detected list. The one message box that 
 loading, "already running", uses the OS language directly: a second instance must not read the
 config file, because the first instance may be saving it, and the single-instance guard has to
 come before anything else. A fixed language choice that differs from the OS language therefore
-does not reach that one box; §16 says so.
+does not reach that one box. This is a decision made here, recorded in §16 by this cycle, and
+it means the OS-language read is the one thing that now precedes the single-instance guard: a
+kernel32 call with no side effects, which the startup-order notes in §8 and §12 record.
 
 ### 5. The picker
 
 A new first row in the "General" section: a label (`TextKey::LabelLanguage`,
-`label_language`) at x 24 and a `COMBOBOX` at x 250, width 120, dropped height sized for the
-entries, ids `ID_LABEL_LANGUAGE` and `ID_LANGUAGE`. Every row below shifts down by one 30 px
-row and `BASE_WINDOW_HEIGHT` goes from 624 to 654; the hand-measured alignment note on the
-log-level row moves with it unchanged, since only `y` changes.
+`label_language`) at x 24 and a `COMBOBOX` at x 250, dropped height sized for the entries, ids
+`ID_LABEL_LANGUAGE` and `ID_LANGUAGE`. Every row below shifts down by one 30 px row and
+`BASE_WINDOW_HEIGHT` goes from 624 to 654; the hand-measured alignment note on the log-level
+row moves with it unchanged, since only `y` changes.
+
+**Width 120, not the log-level combo's 76.** The wider box is not a concession to German: the
+*English* entry "System default" plus the 17 px dropdown arrow does not fit 76 px at 9 pt. The
+right edge lands at 370, inside the 388 px content column. The two combos in the same column
+now end at different x positions; that mismatch is accepted here and listed in the overflow
+record so the hardening cycle aligns the column properly rather than this cycle guessing a
+width for both.
 
 Entries, in order: index 0 is `language_system_default` from the table ("System default",
 translated into the current UI language); index `i + 1` is `Lang::ALL[i].native_name()`. The
@@ -188,8 +236,9 @@ selection is resolved from `CB_GETCURSEL` to a `LanguageSetting` by index, never
 exactly as the log-level combo does. `apply_snapshot` selects the index for `snap.language`.
 `CBN_SELCHANGE` posts `SettingChange::Language`.
 
-The combo needs the same dark-mode subclass the log-level combo has and joins
-`configure_combo_height`.
+The dark-mode subclass is installed by window class in `create_controls`, so the new combo gets
+it for free. `configure_combo_height` is not free: it names `ID_LOG_LEVEL` directly and is
+generalised to run over both combos.
 
 ### 6. Hotkey display text
 
@@ -198,10 +247,12 @@ English it would only re-case a hand-edited `ctrl+shift+up` on screen; with a se
 the display genuinely differs, and that objection no longer applies.
 
 - **Capture fields.** The control's window text stays the canonical wire string: that is the
-  *value*, read back by `bindings_conflict` and re-posted on change. `paint_capture` parses it
-  and draws `display_text`; if parsing fails (it should not, the value came from the config
-  validator or the capture itself) the raw text is drawn. On a language switch the fields are
-  invalidated and repaint.
+  *value*, read back by `bindings_conflict` and re-posted on change. The parse and the
+  `display_text` call go into `capture_display_text`, the pure, host-tested function that
+  already decides what the field shows, not into `paint_capture`, which is only its GDI
+  wrapper; the idle branch parses the wire text and renders it, falling back to the raw text if
+  parsing fails (it should not, the value came from the config validator or the capture
+  itself). On a language switch the fields are invalidated and repaint.
 - **Tray usage rows.** `usage_menu_lines` receives the wire strings as today and renders them
   through `parse_hotkey` + `display_text`, falling back to the wire string on a parse error.
 - `preview_text` in the capture control already uses the table.
@@ -245,21 +296,26 @@ spec's `w`, with both numbers. It is ignored rather than asserting because Germa
 overflow today; the hardening cycle turns it into a gate once it passes. Running it, plus a
 screenshot pass over the German window, tooltip and menu, produces
 `personal/i18n-overflow-2026-09.md`: the list of overflowing labels with their measured and
-available widths, and the hotkey display lengths (`Strg+Umschalt+Nach-Rechts` is 25 characters
-against 16 in English). That file is the hardening cycle's input.
+available widths, the hotkey display lengths (`Strg+Umschalt+Nach-Rechts` is 25 characters
+against 16 in English), and the two combo boxes' unequal right edges from the picker row. That
+file is the hardening cycle's input.
 
 ### 9. Documentation
 
 - `docs/architecture.md` §4: `language` row in the field table (`"system"` or a shipped tag,
   default `"system"`) and a sentence on strict validation.
-- §14: the picker row in the control list and `WM_APP_SETTINGS_LANG` in the message list.
-- §16: "Choosing the language" rewritten to describe the one owner and the push paths; the "Not
-  yet wired" paragraph and the `pub`-items exception updated, since `Lang::ALL`, `Lang::tag` and
-  `display_text` now all have production callers; a new short "Adding a language" paragraph
-  (add the variant, the tag, the native name, the table; the compiler lists the rest).
+- §8 startup-ordering note and §12 startup order: the OS-language read now precedes the
+  single-instance guard.
+- §14: the picker row in the control list, `WM_APP_SETTINGS_LANG` in the message list, and the
+  `WM_APP_SETTINGS_*` range growing from five to six.
+- §16: "Choosing the language" rewritten to describe the one owner and the push paths, including
+  the "already running" box's OS-language exception; the "Not yet wired" paragraph and the
+  `pub`-items exception updated, since `Lang::ALL`, `Lang::tag` and `display_text` now all have
+  production callers; a new short "Adding a language" paragraph (add the variant, the tag, the
+  native name, the table; the compiler lists the rest).
 - "Integration Testing (Manual)": a "Language Switching Test" covering first start on a German
-  Windows, the picker, live relabelling, the tooltip, the menu, the OSD error row, and the
-  "already running" box.
+  Windows, the picker, live relabelling, the tooltip, the menu, the OSD error row, the "already
+  running" box, and Restore Defaults switching the UI back to the OS language mid-dialog.
 - `README.md`: one sentence under "Configuration" that the UI follows the Windows display
   language, currently English and German, and can be pinned in Settings.
 - `CLAUDE.md` module map: `locale.rs` added.
@@ -268,30 +324,41 @@ against 16 in English). That file is the hardening cycle's input.
 
 Host-testable in `core/`:
 
-- Lookup: `de` → German, `DE` → German, `de-AT` → German, `de-AT-1901` → German, `en-GB` →
-  English, `fr` → `None`, `""` → `None`; preference lists `["fr", "de"]` → German, `[]` →
-  English.
+- Lookup: `de` → German, `DE` → German, `de-AT` → German, `de-AT-1901` → German, `de-x-foo`
+  → German, `en-GB` → English, `fr` → `None`, `x-private` → `None`, `""` → `None`; preference
+  lists `["fr", "de"]` → German, `[]` → English.
 - `LanguageSetting::parse`: `"system"`, `"SYSTEM"`, `"de"`, `"de-CH"` accepted; `"fr"`,
   `"Deutsch"`, `"de_DE"`, `""` rejected. `wire()` round-trips `"system"` and `"de"`.
 - Config: an invalid `language` yields `Unparseable { field: "language" }` and `"system"`;
   a valid one passes unchanged; `restore_defaults` resets it; `overlay_dirty` copies it only
-  when flagged; the existing "every field is defaulted / restored" tests extend to it.
+  when flagged; `SettingsDirty::any()` is true for a language-only change; the existing "every
+  field is defaulted / restored" tests extend to it.
 - Controller: a `Language` change that alters the resolved language pushes to the OSD and
   settings fakes exactly once; one that does not alter it pushes nothing but still dirties and
-  saves; `settings_snapshot` carries both new fields; the restore-failed ack composes in the
-  controller's language.
-- `i18n`: the existing completeness test runs over `Lang::ALL`; a new test checks that every
-  `_fmt` field contains the same `{placeholder}` set in every language as in English; another
-  that `native_name` is non-empty and unique; another that every language's `footer_links`
-  contains exactly two `<a>`.
+  saves; a language-only session saves on close; `settings_snapshot` carries both new fields;
+  `RestoreDefaults` with a fixed language pushes the OS language after the refresh; the
+  restore-failed ack composes in the controller's language.
+- `i18n`: the existing completeness test runs over `Lang::ALL`; the hand-written `KEYS` array in
+  `every_key_resolves_to_a_non_empty_string_in_every_language` gains `LabelLanguage`; a new test
+  checks that every `_fmt` field contains the same `{placeholder}` set in every language as in
+  English; another that `native_name` is non-empty and unique; another that every language's
+  `footer_links` contains exactly two `<a>`.
 
 Windows-only, in-module:
 
 - `display_text` under `GERMAN` renders `Ctrl+Shift+Up` as `Strg+Umschalt+Nach-Oben`, and the
   existing `english_display_text_matches_the_stored_format` still passes.
-- The language combo maps each index to the right `LanguageSetting` and back.
-- `WindowsLanguageSource::preferred_languages` returns a non-empty list on CI (which runs on
-  `windows-latest`) whose entries all parse as tags.
+- `capture_display_text` renders a wire string through `display_text` in the idle state and
+  falls back to the raw text for an unparseable one.
+- The language combo maps each index to the right `LanguageSetting` and back, and a relabel
+  posts no `SettingChange`.
+- `WindowsLanguageSource::preferred_languages` on CI (`windows-latest`): the list is non-empty,
+  and every entry starts with a two- or three-letter ASCII primary subtag followed by nothing or
+  a hyphen. That second assertion is what pins `MUI_LANGUAGE_NAME`: the `MUI_LANGUAGE_ID` form
+  returns hex `LANGID` strings such as `0409`, which a loose "parses as a tag" check would pass.
+  The non-empty assertion assumes a runner account has a UI language, which every hosted
+  Windows image does; if that ever fails, the test drops to well-formedness with a note, not to
+  `#[ignore]`.
 - The layout fit tests (`every_tabstop_control_fits_inside_the_client_rect`, the overlap
   check) still pass with the shifted rows.
 
