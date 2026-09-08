@@ -429,14 +429,16 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// * `tx` - Channel sender to notify the main thread of tray events.
 /// * `status_tx` - Hands the tray's status handle back to the main thread so
 ///   it can push degraded-state icon/tooltip updates.
+/// * `lang` - Initial UI language for the tooltip and menu text.
 fn spawn_tray_thread(
     tx: mpsc::Sender<BrightnessMessage>,
     status_tx: mpsc::Sender<TrayStatusHandle>,
+    lang: Lang,
 ) {
     let spawned = std::thread::Builder::new()
         .name("tray".to_string())
         .spawn(move || {
-            match TrayIcon::new(tx) {
+            match TrayIcon::new(tx, lang) {
                 Ok(tray) => {
                     log::info!("System tray icon created");
                     if let Err(e) = status_tx.send(tray.status_handle()) {
@@ -665,7 +667,7 @@ fn main() {
     // The tray hands back a status handle for pushing degraded-state icon and
     // tooltip updates.
     let (tray_status_tx, tray_status_rx) = mpsc::channel();
-    spawn_tray_thread(tx.clone(), tray_status_tx);
+    spawn_tray_thread(tx.clone(), tray_status_tx, Lang::default());
     let mut tray_status: Option<TrayStatusHandle> = None;
     let mut last_warnings = HealthWarnings::default();
 
