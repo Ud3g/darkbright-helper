@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::core::i18n::{LanguageSetting, SYSTEM_LANGUAGE};
 use crate::error::{BrightnessError, Result};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -31,6 +32,8 @@ pub(crate) const DEFAULT_REFRESH_PERIODIC_SECONDS: u32 = 60;
 pub(crate) const DEFAULT_REFRESH_INACTIVITY_SECONDS: u32 = 30;
 /// Default level filter for the rolling log file.
 pub(crate) const DEFAULT_FILE_LOG_LEVEL: &str = "info";
+/// Default UI language choice: follow the OS display language.
+pub(crate) const DEFAULT_LANGUAGE: &str = SYSTEM_LANGUAGE;
 
 const OSD_TIMEOUT_MIN: u32 = 100;
 const OSD_TIMEOUT_MAX: u32 = 10000;
@@ -45,15 +48,15 @@ const REFRESH_INACTIVITY_MAX: u32 = 600;
 // Settings Dialog Support
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Tracks which of the ten user-facing settings a settings-dialog session has
-/// changed.
+/// Tracks which of the eleven user-facing settings a settings-dialog session
+/// has changed.
 ///
 /// Used to gate saves (nothing to write when [`SettingsDirty::any`] is
 /// `false`) and to merge a session's edits onto a `config.json` that may have
 /// been hand-edited while the dialog was open, via [`Config::overlay_dirty`]:
 /// only the flagged fields overwrite the on-disk value, everything else is
 /// left as found on disk.
-// Each flag maps 1:1 to one of the ten independently toggleable settings
+// Each flag maps 1:1 to one of the eleven independently toggleable settings
 // fields below; a state machine or paired enums would not fit a set of
 // independent booleans that are OR'd and copied field-by-field.
 #[expect(clippy::struct_excessive_bools)]
@@ -79,6 +82,8 @@ pub struct SettingsDirty {
     pub log_enabled: bool,
     /// `logging.file_level` was changed.
     pub log_level: bool,
+    /// `language` was changed.
+    pub language: bool,
 }
 
 impl SettingsDirty {
@@ -95,6 +100,7 @@ impl SettingsDirty {
             || self.intercept
             || self.log_enabled
             || self.log_level
+            || self.language
     }
 }
 
@@ -110,6 +116,12 @@ pub struct Config {
     /// current schema, and the value is reset to [`CONFIG_VERSION`].
     #[serde(default = "default_version")]
     pub(crate) version: u32,
+    /// UI language: `"system"` to follow the Windows display language, or a
+    /// BCP-47 tag of a shipped language (`"en"`, `"de"`). A regional tag
+    /// such as `"de-AT"` resolves to its language. Anything else is reported
+    /// and replaced by `"system"`.
+    #[serde(default = "default_language")]
+    pub language: String,
     /// Hotkey bindings.
     #[serde(default)]
     pub hotkeys: HotkeyConfig,
@@ -247,6 +259,9 @@ fn default_refresh_inactivity() -> u32 {
 fn default_file_log_level() -> String {
     DEFAULT_FILE_LOG_LEVEL.to_string()
 }
+fn default_language() -> String {
+    DEFAULT_LANGUAGE.to_string()
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Trait Implementations
@@ -256,6 +271,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             version: CONFIG_VERSION,
+            language: default_language(),
             hotkeys: HotkeyConfig::default(),
             monitors: HashMap::new(),
             osd: OsdConfig::default(),
@@ -848,6 +864,17 @@ impl Config {
             self.logging.file_level = DEFAULT_FILE_LOG_LEVEL.to_string();
         }
 
+        // Strict on purpose: a well-formed but unshipped tag is reported
+        // rather than silently shown in English, so a typo never hides.
+        if LanguageSetting::parse(&self.language).is_none() {
+            notices.push(ConfigNotice::Unparseable {
+                field: "language",
+                value: self.language.clone(),
+                default: DEFAULT_LANGUAGE.to_string(),
+            });
+            self.language = DEFAULT_LANGUAGE.to_string();
+        }
+
         notices
     }
 
@@ -885,12 +912,21 @@ impl Config {
         notices
     }
 
-    /// Resets the ten user-facing settings to their defaults, field by field.
+    /// The parsed `language` value. After validation this always parses; a
+    /// value that somehow does not falls back to following the OS.
+    #[must_use]
+    pub fn language_setting(&self) -> LanguageSetting {
+        LanguageSetting::parse(&self.language).unwrap_or_default()
+    }
+
+    /// Resets the eleven user-facing settings to their defaults, field by
+    /// field.
     ///
     /// Never swaps in [`Config::default()`] wholesale: `monitors` entries are
     /// a user-visible, hand-editable part of `config.json` and must survive a
     /// restore, and `version` is preserved rather than reset.
     pub(crate) fn restore_defaults(&mut self) {
+        self.language = default_language();
         self.hotkeys.brightness_up = default_hotkey_up();
         self.hotkeys.brightness_down = default_hotkey_down();
         self.hotkeys.intercept_brightness_keys = false;
@@ -944,6 +980,9 @@ impl Config {
         }
         if dirty.log_level {
             disk.logging.file_level.clone_from(&self.logging.file_level);
+        }
+        if dirty.language {
+            disk.language.clone_from(&self.language);
         }
     }
 }
@@ -1022,6 +1061,58 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn language_defaults_to_system() {
+        let config: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(config.language, "system");
+        assert_eq!(Config::default().language, DEFAULT_LANGUAGE);
+        assert_eq!(config.language_setting(), LanguageSetting::System);
+    }
+
+    #[test]
+    fn a_shipped_language_tag_passes_validation_unchanged() {
+        let json = r#"{ "language": "de-AT" }"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.validate_and_fix().is_empty());
+        assert_eq!(
+            config.language, "de-AT",
+            "the loader never rewrites the value"
+        );
+        assert_eq!(
+            config.language_setting(),
+            LanguageSetting::Fixed(crate::core::i18n::Lang::German)
+        );
+    }
+
+    #[test]
+    fn an_unshipped_or_malformed_language_is_repaired_to_system() {
+        for bad in ["fr", "Deutsch", "de_DE", ""] {
+            let json = format!(r#"{{ "language": "{bad}" }}"#);
+            let mut config: Config = serde_json::from_str(&json).unwrap();
+            let notices = config.validate_and_fix();
+            assert_eq!(config.language, DEFAULT_LANGUAGE, "{bad}");
+            assert_eq!(
+                notices,
+                vec![ConfigNotice::Unparseable {
+                    field: "language",
+                    value: bad.to_string(),
+                    default: DEFAULT_LANGUAGE.to_string(),
+                }],
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_language_only_change_counts_as_dirty() {
+        let dirty = SettingsDirty {
+            language: true,
+            ..Default::default()
+        };
+        assert!(dirty.any());
+        assert!(!SettingsDirty::default().any());
     }
 
     #[test]
@@ -1533,9 +1624,10 @@ mod tests {
             |d| d.log_level = true,
             |c| c.logging.file_level.clone(),
         ),
+        ("language", |d| d.language = true, |c| c.language.clone()),
     ];
 
-    /// The ten user-facing settings as `(field, value)` rows, in
+    /// The eleven user-facing settings as `(field, value)` rows, in
     /// [`USER_FIELDS`] order.
     fn user_field_values(c: &Config) -> Vec<(&'static str, String)> {
         USER_FIELDS
@@ -1557,6 +1649,7 @@ mod tests {
         cfg.refresh.inactivity_seconds = 44;
         cfg.logging.file_enabled = true;
         cfg.logging.file_level = "trace".to_string();
+        cfg.language = "de".to_string();
         cfg
     }
 
@@ -1584,6 +1677,7 @@ mod tests {
                 intercept: true,
                 log_enabled: true,
                 log_level: true,
+                language: true,
             }
         );
 

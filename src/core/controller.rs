@@ -780,6 +780,7 @@ where
             intercept: true,
             log_enabled: true,
             log_level: true,
+            language: true,
         };
         self.pending_save_since = Some(now);
 

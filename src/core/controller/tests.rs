@@ -1605,6 +1605,7 @@ fn restore_defaults_resets_all_fields_and_schedules_a_save() {
             intercept: true,
             log_enabled: true,
             log_level: true,
+            language: true,
         },
         "every field is marked dirty"
     );
