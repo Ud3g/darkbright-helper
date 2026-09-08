@@ -14,34 +14,58 @@
 //! translated.
 
 /// A language the user interface can be displayed in.
-///
-/// Only English exists today. The enum is here so that consumers already take
-/// a language parameter and adding a second one touches no call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lang {
     /// English, the fallback for every unmatched locale.
     #[default]
     English,
+    /// German.
+    German,
 }
 
 impl Lang {
     /// Every language the app can display, in the order the picker shows them.
-    ///
-    /// Only the tests in this module read it so far, so it is `pub` rather than
-    /// `pub(crate)`: it is the seam a language picker enumerates, and narrowing
-    /// it would leave only deleting an API that is meant to be kept.
-    pub const ALL: &'static [Lang] = &[Lang::English];
+    pub const ALL: &'static [Lang] = &[Lang::English, Lang::German];
 
-    /// The BCP-47 tag identifying this language, for locale matching and for
-    /// the value stored in the config file.
-    ///
-    /// `pub` for the same reason as [`Lang::ALL`]: locale detection and the
-    /// stored language value both need it, and neither exists yet.
+    /// The BCP-47 tag identifying this language: what `config.json` stores
+    /// for a fixed choice and what locale matching compares against. Always
+    /// lowercase and generic (`de`, never `de-DE`).
     #[must_use]
     pub fn tag(self) -> &'static str {
         match self {
             Lang::English => "en",
+            Lang::German => "de",
         }
+    }
+
+    /// The language's name in itself, for the picker: a user who cannot read
+    /// the current UI language can still find their own.
+    #[must_use]
+    pub fn native_name(self) -> &'static str {
+        match self {
+            Lang::English => "English",
+            Lang::German => "Deutsch",
+        }
+    }
+
+    /// Position in [`Lang::ALL`]. Used to carry a language through a Win32
+    /// message `wparam` and as the picker's combo index.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every `Lang` variant is listed in [`Lang::ALL`].
+    #[must_use]
+    pub fn index(self) -> usize {
+        Lang::ALL
+            .iter()
+            .position(|&l| l == self)
+            .expect("every Lang variant is listed in Lang::ALL")
+    }
+
+    /// Inverse of [`Lang::index`]; `None` for an index outside [`Lang::ALL`].
+    #[must_use]
+    pub fn from_index(index: usize) -> Option<Lang> {
+        Lang::ALL.get(index).copied()
     }
 }
 
@@ -503,11 +527,116 @@ pub(crate) const ENGLISH: Strings = Strings {
     msgbox_config_file_fallback: "config file",
 };
 
+/// The German strings.
+pub(crate) const GERMAN: Strings = Strings {
+    osd_ddc_error: "DDC-Fehler - Anpassung fehlgeschlagen",
+
+    tray_tip_ddc_unavailable: "DDC nicht verfügbar",
+    tray_tip_monitor_unresponsive: "Monitor antwortet nicht",
+    tray_tip_hotkeys_stopped: "Hotkeys gestoppt",
+    tray_tip_hotkey_change_failed: "Hotkey-Änderung fehlgeschlagen",
+    tray_tip_file_logging_off: "Dateiprotokoll aus",
+
+    tray_warn_ddc_unavailable: "⚠ DDC nicht verfügbar — Helligkeits-Hotkey drücken, um es erneut zu versuchen",
+    tray_warn_monitor_unresponsive: "⚠ Monitor antwortet nicht — App neu starten, falls das anhält",
+    tray_warn_hotkeys_stopped: "⚠ Hotkeys funktionieren nicht mehr — App neu starten",
+    tray_warn_hotkey_change_failed: "⚠ Hotkey-Änderung fehlgeschlagen — andere Kombination versuchen",
+    tray_warn_file_logging_failed: "⚠ Dateiprotokoll konnte nicht gestartet werden — prüfen, ob der Protokollordner beschreibbar ist",
+
+    tray_usage_heading: "Maus auf einen Monitor zeigen, dann:",
+    tray_usage_brighter: "Heller",
+    tray_usage_dimmer: "Dunkler",
+    tray_menu_settings: "Einstellungen",
+    tray_menu_open_log_folder: "Protokollordner öffnen",
+    tray_menu_quit_fmt: "{name} beenden",
+
+    key_mod_ctrl: "Strg",
+    key_mod_alt: "Alt",
+    key_mod_shift: "Umschalt",
+    key_mod_win: "Win",
+    key_separator: "+",
+
+    key_up: "Nach-Oben",
+    key_down: "Nach-Unten",
+    key_left: "Nach-Links",
+    key_right: "Nach-Rechts",
+    key_page_up: "Bild auf",
+    key_page_down: "Bild ab",
+    key_home: "Pos1",
+    key_end: "Ende",
+    key_insert: "Einfg",
+    key_delete: "Entf",
+    key_space: "Leertaste",
+    key_tab: "Tab",
+    key_enter: "Eingabe",
+    key_escape: "Esc",
+    key_backspace: "Rücktaste",
+
+    header_general: "Allgemein",
+    label_language: "Sprache",
+    language_system_default: "Systemstandard",
+    autostart: "Mit Windows starten",
+    label_step: "Helligkeitsschritt pro Tastendruck",
+    unit_percent_step: "%",
+    header_hotkeys: "Hotkeys",
+    label_hotkey_up: "Helligkeit erhöhen",
+    label_hotkey_down: "Helligkeit verringern",
+    intercept: "Versuchen, dedizierte Helligkeitstasten abzufangen",
+    hint_intercept: "(funktioniert nicht mit allen Tastaturen; manche Antivirenprogramme melden Low-Level-Hooks)",
+    header_osd: "Bildschirmanzeige",
+    label_timeout: "Anzeigedauer",
+    unit_milliseconds: "ms",
+    label_opacity: "Deckkraft",
+    unit_percent_opacity: "%",
+    header_advanced: "Erweitert",
+    resync_check: "Helligkeit abgleichen alle",
+    unit_seconds_resync: "s",
+    inactivity_check: "Abgleich nach Inaktivität von",
+    unit_seconds_inactivity: "s",
+    log_check: "Protokolldatei schreiben",
+    label_log_level: "Stufe:",
+    log_level_error: "error (Fehler)",
+    log_level_warn: "warn (Warnung)",
+    log_level_info: "info (Info)",
+    log_level_debug: "debug (Debug)",
+    log_level_trace: "trace (Ablaufverfolgung)",
+    hint_logging: "(Protokolländerungen gelten nach dem Neustart; debug und darunter protokollieren Monitor-Seriennummern und Pfade)",
+    footer_links: "<a>Konfigurationsdatei öffnen</a> \u{b7} <a>Protokollordner öffnen</a>",
+    button_restore_defaults: "Standardwerte wiederherstellen",
+    button_close: "Schließen",
+    window_title: "darkbright-helper Einstellungen",
+
+    capture_prompt: "Tastenkombination drücken… (Esc zum Abbrechen)",
+    capture_reject_no_modifier: "Strg, Alt oder Win hinzufügen (Umschalt allein reicht nicht)",
+    capture_reject_unnameable_key: "Diese Taste kann nicht als Hotkey verwendet werden",
+    capture_reject_duplicate: "Bereits dem anderen Helligkeits-Hotkey zugewiesen",
+
+    hotkey_status_unreachable: "Hotkey-Thread nicht erreichbar",
+    hotkey_status_no_response: "Hotkey-Thread hat nicht geantwortet",
+    hotkey_status_unknown_error: "unbekannter Fehler",
+    hotkey_status_restore_also_failed_fmt: "{error}; Wiederherstellen ebenfalls fehlgeschlagen: {restore_error}",
+    hotkey_notice_interception_unavailable: "Abfangen der Helligkeitstasten nicht verfügbar; einfache Tastenregistrierung wird verwendet",
+
+    msgbox_already_running: "darkbright-helper läuft bereits.",
+    msgbox_title_startup_error: "Startfehler",
+    msgbox_title_hotkey_error: "Hotkey-Fehler",
+    msgbox_title_autostart: "Autostart",
+    msgbox_title_restore_defaults: "Standardwerte wiederherstellen",
+    msgbox_startup_failed_lead: "darkbright-helper konnte nicht gestartet werden:",
+    msgbox_thread_spawn_advice: "Das System hat keinen Thread gestartet, was meist bedeutet, dass die Ressourcen knapp sind. Einige Anwendungen schließen oder den Computer neu starten und es erneut versuchen.",
+    msgbox_hotkey_failed_lead: "Hotkeys konnten nicht registriert werden:",
+    msgbox_hotkey_advice_fmt: "Mögliche Lösungen:\n• Andere Anwendungen schließen, die diese Hotkeys verwenden könnten\n• Die Hotkey-Konfiguration ändern in:\n  {path}\n• Die Anwendung nach der Änderung neu starten",
+    msgbox_autostart_failed_fmt: "Der Windows-Autostarteintrag konnte nicht aktualisiert werden:\n{error}",
+    msgbox_restore_defaults_question: "Alle Einstellungen auf die Standardwerte zurücksetzen? Hotkeys werden sofort übernommen.",
+    msgbox_config_file_fallback: "Konfigurationsdatei",
+};
+
 /// The string table for `lang`.
 #[must_use]
 pub fn strings(lang: Lang) -> &'static Strings {
     match lang {
         Lang::English => &ENGLISH,
+        Lang::German => &GERMAN,
     }
 }
 
@@ -744,6 +873,94 @@ mod tests {
             let text = strings(lang).hotkey_status_restore_also_failed_fmt;
             assert!(text.contains("{error}"), "{lang:?}");
             assert!(text.contains("{restore_error}"), "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn german_exists_with_its_tag_and_native_name() {
+        assert_eq!(Lang::German.tag(), "de");
+        assert_eq!(Lang::German.native_name(), "Deutsch");
+        assert_eq!(Lang::English.native_name(), "English");
+        assert_eq!(Lang::ALL, &[Lang::English, Lang::German]);
+        assert_eq!(strings(Lang::German).button_close, "Schließen");
+    }
+
+    #[test]
+    fn native_names_are_non_empty_and_unique() {
+        let mut seen = Vec::new();
+        for lang in Lang::ALL {
+            let name = lang.native_name();
+            assert!(!name.is_empty(), "{lang:?} has an empty native name");
+            assert!(!seen.contains(&name), "duplicate native name {name}");
+            seen.push(name);
+        }
+    }
+
+    #[test]
+    fn index_round_trips_through_all() {
+        for (i, &lang) in Lang::ALL.iter().enumerate() {
+            assert_eq!(lang.index(), i);
+            assert_eq!(Lang::from_index(i), Some(lang));
+        }
+        assert_eq!(Lang::from_index(Lang::ALL.len()), None);
+    }
+
+    #[test]
+    fn every_format_field_keeps_the_english_placeholders() {
+        // Each `_fmt` field and the placeholders it must carry. A translation
+        // that drops or misspells one would leave `{path}` literal on screen.
+        type FormatCase = (
+            &'static str,
+            fn(&Strings) -> &'static str,
+            &'static [&'static str],
+        );
+        let formats: &[FormatCase] = &[
+            ("tray_menu_quit_fmt", |s| s.tray_menu_quit_fmt, &["{name}"]),
+            (
+                "hotkey_status_restore_also_failed_fmt",
+                |s| s.hotkey_status_restore_also_failed_fmt,
+                &["{error}", "{restore_error}"],
+            ),
+            (
+                "msgbox_hotkey_advice_fmt",
+                |s| s.msgbox_hotkey_advice_fmt,
+                &["{path}"],
+            ),
+            (
+                "msgbox_autostart_failed_fmt",
+                |s| s.msgbox_autostart_failed_fmt,
+                &["{error}"],
+            ),
+        ];
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for (name, get, placeholders) in formats {
+                for placeholder in *placeholders {
+                    assert!(
+                        get(s).contains(placeholder),
+                        "{lang:?}: {name} lost {placeholder}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn log_level_entries_lead_with_the_stored_token_in_every_language() {
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for (token, shown) in [
+                ("error", s.log_level_error),
+                ("warn", s.log_level_warn),
+                ("info", s.log_level_info),
+                ("debug", s.log_level_debug),
+                ("trace", s.log_level_trace),
+            ] {
+                assert!(
+                    shown.starts_with(token),
+                    "{lang:?}: log level entry {shown:?} must start with the stored token {token}"
+                );
+            }
         }
     }
 }
