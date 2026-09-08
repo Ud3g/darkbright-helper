@@ -2185,6 +2185,9 @@ impl SettingsSink for SettingsSinkImpl {
     fn assert_topmost(&mut self) {
         self.post_simple(WM_APP_SETTINGS_TOPMOST);
     }
+    fn set_language(&mut self, _lang: Lang) {
+        // Relabelling is wired in the settings window itself.
+    }
 }
 
 #[cfg(test)]

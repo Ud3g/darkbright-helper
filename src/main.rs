@@ -640,6 +640,7 @@ fn main() {
 
     let mut controller = Controller::new(
         config.clone(),
+        Vec::new(),
         osd,
         OverlayManager::default(),
         supervisor,

@@ -619,6 +619,7 @@ impl HotkeyManager {
             success,
             fallback_active,
             error,
+            restore_error: None,
         });
     }
 
