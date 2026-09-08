@@ -1266,6 +1266,87 @@ mod tests {
         assert_eq!(BASE_WINDOW_HEIGHT, 654);
     }
 
+    /// Prints every label whose text, measured at 96 DPI in the window's
+    /// own fonts, is wider than its control. Ignored because German is
+    /// known to overflow today; the hardening cycle turns this into a gate.
+    /// Run: `cargo test --locked report_label_overflow -- --ignored --nocapture`
+    #[test]
+    #[ignore = "diagnostic: prints the overflow record for the layout-hardening cycle"]
+    fn report_label_overflow() {
+        use super::super::window::{build_font, wide};
+        use crate::core::i18n::{Lang, strings};
+        use windows::Win32::Graphics::Gdi::{
+            DT_CALCRECT, DT_SINGLELINE, DT_WORDBREAK, DeleteObject, DrawTextW, GetDC, ReleaseDC,
+            SelectObject,
+        };
+        use windows::Win32::Graphics::Gdi::{FW_BOLD, FW_NORMAL};
+
+        let dpi = 96;
+        let regular = build_font(dpi, FW_NORMAL);
+        let bold = build_font(dpi, FW_BOLD);
+        let hdc = unsafe { GetDC(None) };
+        assert!(!hdc.is_invalid(), "no screen DC");
+
+        let hints = [ID_HK_HINT, ID_LOG_HINT];
+        println!("| lang | id | text | available | measured | overflow |");
+        println!("|---|---|---|---|---|---|");
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for spec in CONTROLS {
+                let Some(key) = spec.text else { continue };
+                let text = s.get(key);
+                let font = if is_section_header(spec.id) {
+                    bold
+                } else {
+                    regular
+                };
+                let mut buf = wide(text);
+                let is_hint = hints.contains(&spec.id);
+                let mut rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: if is_hint { spec.w } else { 0 },
+                    bottom: 0,
+                };
+                let flags = if is_hint {
+                    DT_CALCRECT | DT_WORDBREAK
+                } else {
+                    DT_CALCRECT | DT_SINGLELINE
+                };
+                // SAFETY: `hdc` is a valid screen DC obtained above and released
+                // below; `font` is one of the two GDI fonts built above and
+                // still owned at this point; `buf` outlives the call and
+                // DrawTextW only reads the number of code units its own length
+                // reports.
+                unsafe {
+                    let old = SelectObject(hdc, font.into());
+                    DrawTextW(hdc, &mut buf, &raw mut rect, flags);
+                    SelectObject(hdc, old);
+                }
+                let (available, measured) = if is_hint {
+                    (spec.h, rect.bottom - rect.top)
+                } else {
+                    (spec.w, rect.right - rect.left)
+                };
+                if measured > available {
+                    println!(
+                        "| {} | {} | {text} | {available} | {measured} | +{} |",
+                        lang.tag(),
+                        spec.id,
+                        measured - available
+                    );
+                }
+            }
+        }
+        // SAFETY: releases the DC obtained via GetDC above and frees the two
+        // fonts built above; each is dropped exactly once, after its last use.
+        unsafe {
+            ReleaseDC(None, hdc);
+            let _ = DeleteObject(regular.into());
+            let _ = DeleteObject(bold.into());
+        }
+    }
+
     #[test]
     fn every_range_spec_updown_id_is_a_real_control_with_a_sane_range() {
         let ids: std::collections::HashSet<u16> = CONTROLS.iter().map(|c| c.id).collect();
