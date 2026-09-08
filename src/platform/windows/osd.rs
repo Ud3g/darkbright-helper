@@ -163,6 +163,11 @@ pub(super) struct OsdRenderState {
     /// Whether an error occurred.
     pub(super) is_error: bool,
     /// Language the error row (and any future OSD text) is rendered in.
+    ///
+    /// Nothing assigns it: the state starts at [`Default`] and every update
+    /// writes only the fields above, so the OSD always renders in the default
+    /// language. Adding a language setting has to give this field an
+    /// assignment path — there is no `set_*` to find, unlike the tray's.
     pub(super) lang: Lang,
 }
 

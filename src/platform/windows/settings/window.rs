@@ -43,7 +43,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
-use crate::core::i18n::{Lang, Strings, TextKey, strings};
+use crate::core::i18n::{Lang, Strings, strings};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
@@ -694,7 +694,7 @@ pub(super) fn with_window_state(f: impl FnOnce(&WindowState)) {
 
 /// The string table in the settings window's language, falling back to the
 /// default language when the window state is not reachable.
-fn window_strings() -> &'static Strings {
+pub(super) fn window_strings() -> &'static Strings {
     let mut lang = Lang::default();
     with_window_state(|state| lang = state.lang);
     strings(lang)
@@ -1849,7 +1849,10 @@ fn create_settings_window(
     // all happen before the window is ever shown, so the open does not
     // visibly assemble itself on screen.
     let lang = Lang::default();
-    let title = wide(strings(lang).get(TextKey::WindowTitle));
+    let title = wide(strings(lang).window_title);
+    // SAFETY: `CreateWindowExW` copies the NUL-terminated title `PCWSTR` points
+    // at while it builds the window, and `title` still owns that buffer for the
+    // whole call.
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_TOPMOST,

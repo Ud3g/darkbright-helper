@@ -25,14 +25,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-use crate::core::i18n::{Lang, Strings, strings};
+use crate::core::i18n::Strings;
 use crate::core::state::{BrightnessMessage, SettingChange};
 
 use super::super::hotkey::{bindings_conflict, hotkey_string};
 use super::dark;
 use super::layout::{ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP};
 use super::window::{
-    get_text, post_change, send_message, set_text, wide, window_text, with_window_state,
+    get_text, post_change, send_message, set_text, wide, window_strings, window_text,
+    with_window_state,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,12 +253,6 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
     unsafe { GetKeyState(i32::from(vk.0)) < 0 }
 }
 
-/// The string table the settings window renders with. A later cycle drives
-/// this from config; today it is always English.
-fn capture_strings() -> &'static Strings {
-    strings(Lang::English)
-}
-
 /// The modifier-prefix preview shown while capturing (`"Ctrl+Shift+"`), or
 /// empty while no modifier is held yet — in which case the caller shows
 /// [`Strings::capture_prompt`] instead. Order matches [`hotkey::ParsedHotkey`]'s
@@ -460,7 +455,7 @@ fn handle_capture_keydown(hwnd: HWND, vk: VIRTUAL_KEY) {
     with_window_state(|state| other_binding = get_text(state.hwnd, other_id));
 
     let modifiers = live_modifier_flags();
-    match evaluate_candidate(modifiers, vk, &other_binding, capture_strings()) {
+    match evaluate_candidate(modifiers, vk, &other_binding, window_strings()) {
         CaptureOutcome::Accept(candidate) => accept_capture(hwnd, candidate, change),
         CaptureOutcome::Rejected(message) => reject_capture(message),
     }
@@ -541,7 +536,7 @@ fn paint_capture(hwnd: HWND, hdc: HDC) {
 
     let cs = capture_state(hwnd);
     let idle_text = window_text(hwnd);
-    let s = capture_strings();
+    let s = window_strings();
     let text = capture_display_text(cs.capturing, cs.live_modifiers, &idle_text, s);
     let is_placeholder = cs.capturing && preview_text(cs.live_modifiers, s).is_empty();
     let has_focus = unsafe { GetFocus() } == hwnd;
