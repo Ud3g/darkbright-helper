@@ -1266,6 +1266,13 @@ mod tests {
         assert_eq!(BASE_WINDOW_HEIGHT, 654);
     }
 
+    /// Strips `SysLink`'s `<a>`/`</a>` anchor markup: it is the control's own
+    /// hyperlink syntax, never text the control draws, so measuring it as
+    /// visible width would overstate what the user actually sees.
+    fn strip_syslink_markup(text: &str) -> String {
+        text.replace("<a>", "").replace("</a>", "")
+    }
+
     /// Prints every label whose text, measured at 96 DPI in the window's
     /// own fonts, is wider than its control. Ignored because German is
     /// known to overflow today; the hardening cycle turns this into a gate.
@@ -1294,13 +1301,18 @@ mod tests {
             let s = strings(lang);
             for spec in CONTROLS {
                 let Some(key) = spec.text else { continue };
-                let text = s.get(key);
+                let raw_text = s.get(key);
+                let text = if spec.class == "SysLink" {
+                    strip_syslink_markup(raw_text)
+                } else {
+                    raw_text.to_string()
+                };
                 let font = if is_section_header(spec.id) {
                     bold
                 } else {
                     regular
                 };
-                let mut buf = wide(text);
+                let mut buf = wide(&text);
                 let is_hint = hints.contains(&spec.id);
                 let mut rect = RECT {
                     left: 0,
