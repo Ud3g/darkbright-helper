@@ -93,7 +93,7 @@ impl Lang {
     }
 
     /// The first entry of an ordered preference list (most preferred first)
-    /// that [`Lang::lookup`] resolves, or English when none does. The
+    /// that `Lang::lookup` resolves, or English when none does. The
     /// documented fallback: English is the table every other language is a
     /// translation of, so it is the one language that always exists.
     #[must_use]
@@ -114,7 +114,7 @@ pub(crate) const SYSTEM_LANGUAGE: &str = "system";
 /// carried to another machine follows that machine's OS language.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LanguageSetting {
-    /// Follow the OS display language ([`SYSTEM_LANGUAGE`] in the file).
+    /// Follow the OS display language (`SYSTEM_LANGUAGE` in the file).
     #[default]
     System,
     /// Always this language, whatever the OS says.
