@@ -110,9 +110,53 @@ pub struct Strings {
     /// Separator placed between modifiers and the key name.
     pub key_separator: &'static str,
 
+    // --- Key names ---
+    //
+    // Display names for the keys `VK_TO_NAME` in `platform/windows/hotkey.rs`
+    // can name, one field per key a translation may render differently.
+    // Function keys, `Plus`, `Minus`, letters and digits keep their wire
+    // name in every language and have no field. German follows the wording
+    // Windows itself uses in accelerator labels and on the German key cap
+    // (Pos1, Entf, Einfg, Bild auf, Rücktaste, Nach-Oben); a later language
+    // should follow its own platform convention the same way.
+    /// Display name of the Up arrow key.
+    pub key_up: &'static str,
+    /// Display name of the Down arrow key.
+    pub key_down: &'static str,
+    /// Display name of the Left arrow key.
+    pub key_left: &'static str,
+    /// Display name of the Right arrow key.
+    pub key_right: &'static str,
+    /// Display name of Page Up.
+    pub key_page_up: &'static str,
+    /// Display name of Page Down.
+    pub key_page_down: &'static str,
+    /// Display name of Home.
+    pub key_home: &'static str,
+    /// Display name of End.
+    pub key_end: &'static str,
+    /// Display name of Insert.
+    pub key_insert: &'static str,
+    /// Display name of Delete.
+    pub key_delete: &'static str,
+    /// Display name of the space bar.
+    pub key_space: &'static str,
+    /// Display name of Tab.
+    pub key_tab: &'static str,
+    /// Display name of Enter.
+    pub key_enter: &'static str,
+    /// Display name of Escape.
+    pub key_escape: &'static str,
+    /// Display name of Backspace.
+    pub key_backspace: &'static str,
+
     // --- Settings window ---
     /// Section header above the general settings.
     pub header_general: &'static str,
+    /// Label before the language picker.
+    pub label_language: &'static str,
+    /// First entry of the language picker: follow the OS display language.
+    pub language_system_default: &'static str,
     /// Checkbox enabling the Windows startup entry.
     pub autostart: &'static str,
     /// Label for the per-keypress brightness step.
@@ -259,6 +303,13 @@ pub struct Strings {
 pub(crate) enum TextKey {
     /// Section header above the general settings.
     HeaderGeneral,
+    /// Label before the language picker.
+    // Non-test code doesn't construct this yet; the picker control that will
+    // is a later change, and `#[expect]` can't be used because the test
+    // target already constructs it (in the `KEYS` array below) while the
+    // non-test target doesn't. Remove this attribute once the picker lands.
+    #[allow(dead_code)]
+    LabelLanguage,
     /// Checkbox enabling the Windows startup entry.
     Autostart,
     /// Label for the per-keypress brightness step.
@@ -319,6 +370,7 @@ impl Strings {
     pub(crate) fn get(&self, key: TextKey) -> &'static str {
         match key {
             TextKey::HeaderGeneral => self.header_general,
+            TextKey::LabelLanguage => self.label_language,
             TextKey::Autostart => self.autostart,
             TextKey::LabelStep => self.label_step,
             TextKey::UnitPercentStep => self.unit_percent_step,
@@ -376,7 +428,25 @@ pub(crate) const ENGLISH: Strings = Strings {
     key_mod_win: "Win",
     key_separator: "+",
 
+    key_up: "Up",
+    key_down: "Down",
+    key_left: "Left",
+    key_right: "Right",
+    key_page_up: "PageUp",
+    key_page_down: "PageDown",
+    key_home: "Home",
+    key_end: "End",
+    key_insert: "Insert",
+    key_delete: "Delete",
+    key_space: "Space",
+    key_tab: "Tab",
+    key_enter: "Enter",
+    key_escape: "Escape",
+    key_backspace: "Backspace",
+
     header_general: "General",
+    label_language: "Language",
+    language_system_default: "System default",
     autostart: "Start with Windows",
     label_step: "Brightness step per keypress",
     unit_percent_step: "%",
@@ -473,7 +543,10 @@ mod tests {
             tray_warn_hotkey_change_failed, tray_warn_file_logging_failed, tray_usage_heading,
             tray_usage_brighter, tray_usage_dimmer, tray_menu_settings, tray_menu_open_log_folder,
             tray_menu_quit_fmt, key_mod_ctrl, key_mod_alt, key_mod_shift, key_mod_win,
-            key_separator, header_general, autostart, label_step, unit_percent_step, header_hotkeys,
+            key_separator, key_up, key_down, key_left, key_right, key_page_up, key_page_down,
+            key_home, key_end, key_insert, key_delete, key_space, key_tab, key_enter, key_escape,
+            key_backspace, header_general, label_language, language_system_default, autostart,
+            label_step, unit_percent_step, header_hotkeys,
             label_hotkey_up, label_hotkey_down, intercept, hint_intercept, header_osd,
             label_timeout, unit_milliseconds, label_opacity, unit_percent_opacity, header_advanced,
             resync_check, unit_seconds_resync, inactivity_check, unit_seconds_inactivity, log_check,
@@ -507,7 +580,14 @@ mod tests {
             ("tray_menu_quit_fmt", tray_menu_quit_fmt), ("key_mod_ctrl", key_mod_ctrl),
             ("key_mod_alt", key_mod_alt), ("key_mod_shift", key_mod_shift),
             ("key_mod_win", key_mod_win), ("key_separator", key_separator),
-            ("header_general", header_general), ("autostart", autostart),
+            ("key_up", key_up), ("key_down", key_down), ("key_left", key_left),
+            ("key_right", key_right), ("key_page_up", key_page_up), ("key_page_down", key_page_down),
+            ("key_home", key_home), ("key_end", key_end), ("key_insert", key_insert),
+            ("key_delete", key_delete), ("key_space", key_space), ("key_tab", key_tab),
+            ("key_enter", key_enter), ("key_escape", key_escape), ("key_backspace", key_backspace),
+            ("header_general", header_general), ("label_language", label_language),
+            ("language_system_default", language_system_default),
+            ("autostart", autostart),
             ("label_step", label_step), ("unit_percent_step", unit_percent_step),
             ("header_hotkeys", header_hotkeys), ("label_hotkey_up", label_hotkey_up),
             ("label_hotkey_down", label_hotkey_down), ("intercept", intercept),
@@ -574,6 +654,7 @@ mod tests {
     fn every_key_resolves_to_a_non_empty_string_in_every_language() {
         const KEYS: &[TextKey] = &[
             TextKey::HeaderGeneral,
+            TextKey::LabelLanguage,
             TextKey::Autostart,
             TextKey::LabelStep,
             TextKey::UnitPercentStep,
@@ -605,6 +686,31 @@ mod tests {
                 assert!(!s.get(key).is_empty(), "{lang:?} has no text for {key:?}");
             }
         }
+    }
+
+    #[test]
+    fn english_key_names_equal_the_wire_names() {
+        // In English the display name of every named key is its wire name,
+        // which is what keeps `english_display_text_matches_the_stored_format`
+        // in hotkey.rs true after key names are routed through this table.
+        let s = strings(Lang::English);
+        assert_eq!(s.key_up, "Up");
+        assert_eq!(s.key_down, "Down");
+        assert_eq!(s.key_left, "Left");
+        assert_eq!(s.key_right, "Right");
+        assert_eq!(s.key_page_up, "PageUp");
+        assert_eq!(s.key_page_down, "PageDown");
+        assert_eq!(s.key_home, "Home");
+        assert_eq!(s.key_end, "End");
+        assert_eq!(s.key_insert, "Insert");
+        assert_eq!(s.key_delete, "Delete");
+        assert_eq!(s.key_space, "Space");
+        assert_eq!(s.key_tab, "Tab");
+        assert_eq!(s.key_enter, "Enter");
+        assert_eq!(s.key_escape, "Escape");
+        assert_eq!(s.key_backspace, "Backspace");
+        assert_eq!(s.label_language, "Language");
+        assert_eq!(s.language_system_default, "System default");
     }
 
     #[test]
