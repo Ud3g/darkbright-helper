@@ -25,6 +25,7 @@ pub(crate) mod config_store;
 pub mod ddc;
 pub(crate) mod ddc_worker;
 pub mod hotkey;
+pub(crate) mod locale;
 pub mod osd;
 mod osd_render;
 pub mod overlay;
@@ -36,6 +37,7 @@ pub(crate) mod tray;
 
 pub use config_store::WindowsConfigStore;
 pub use ddc_worker::DdcSupervisor;
+pub use locale::WindowsLanguageSource;
 pub use power::PowerEventListener;
 pub use settings::SettingsSinkImpl;
 pub use single_instance::{InstanceLock, SingleInstance};
