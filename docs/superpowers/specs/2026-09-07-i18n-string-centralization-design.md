@@ -182,3 +182,20 @@ behaviour changes.**
 
 This cycle makes the app translatable. It does not make it translated, and it does not make the
 settings window survive a translation. Both are known, both are planned, and neither belongs here.
+
+---
+
+## Corrections (recorded after implementation)
+
+This document is a point-in-time design record and is left as it was written. Two of its claims
+turned out to be wrong, and are noted here so a later reader does not inherit them:
+
+- **"None live in `src/core/`"** (opening paragraph) is not true. The settings window's inline
+  hotkey status line is composed in `core/controller.rs`, which resolves the string table there
+  rather than carrying a language of its own. The table's home in `core/` is what makes that
+  work; nothing had to move.
+- **"the settings layout fit tests" assert on English literals** (Testing section) is not true.
+  `every_tabstop_control_fits_inside_the_client_rect` is purely geometric, and no test measures
+  label text at all. The regression guard that does exist is
+  `english_display_text_matches_the_stored_format` in `platform/windows/hotkey.rs`, which pins
+  the display rendering to the `config.json` wire format.

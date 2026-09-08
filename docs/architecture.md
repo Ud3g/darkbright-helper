@@ -1749,15 +1749,17 @@ a table. It sits in `core/` because the OSD, the tray, the settings window, the 
 **Why a struct and not a catalog file.** Completeness becomes a compile-time property: adding a
 field breaks every language's initializer until it is filled in, and removing one breaks every
 reference. A JSON/`.po` catalog would move both failures to runtime. The cost is that a
-translation is a Rust file, which is the right trade for a table this size. A unit test names
-every field in declaration order and asserts none is empty, so a field added without a test entry
-shows up in review.
+translation is a Rust file, which is the right trade for a table this size. A unit test
+destructures the whole table with no rest pattern and asserts no field is empty, so a field added
+without a test entry is a compile error rather than something a reviewer has to notice.
 
 **`TextKey`.** The settings window's control table (`settings/layout.rs`) is a `const`, so it
 cannot hold text that depends on the current language. It holds a `TextKey` instead, resolved by
-`Strings::get` when a control is created or re-labelled. The `match` there is exhaustive both
-ways, so a new variant and a new field each fail to compile until they are paired. `TextKey` has
-no other purpose — everything outside that `const` reads the field directly.
+`Strings::get` when a control is created or re-labelled. There is one variant per row of that
+table and no others: a new variant fails to compile until it is given a field, so the two cannot
+drift apart. The reverse does not hold — a new `Strings` field needs no variant, and breaks only
+the language tables that must now fill it in. `TextKey` has no other purpose; everything outside
+that `const`, the window title included, reads the field directly.
 
 **What deliberately stays untranslated.** Log messages, so a pasted log is readable by whoever is
 diagnosing it, and `Display` on `BrightnessError`, which is the logging representation. Text that
@@ -1777,13 +1779,34 @@ exists, covered by tests, and waits for a language that actually renders differe
 usage rows print the same wire string for the same reason; routing them through `display_text`
 needs a parse the tray does not do today.
 
-**Choosing the language.** There is no language setting yet, and three places hardcode English:
-`TRAY_LANG` in `platform/windows/tray.rs`, `capture_strings()` in `settings/capture.rs`, and the
-`let s = strings(...)` binding in `main.rs` — which is bound before `load_config()` runs, so
-making the language config-driven has to move it as well as change it. The controller
-(`core/controller.rs`) and the hotkey thread (`platform/windows/hotkey.rs`) resolve
-`Lang::English` inline where they compose hotkey status text, deliberately rather than carrying a
-language of their own, for the same reason. All of these change together.
+Three items are therefore `pub` with no consumer outside their own tests — `Lang::ALL`,
+`Lang::tag` and `ParsedHotkey::display_text`. That is deliberate, and the exception to "`pub`
+means the binary or `tests/` names it" (`code-conventions.md` §2): narrowing them to
+`pub(crate)` makes `dead_code` fire, and the only ways out are an `allow` or deleting an API a
+language picker, locale matching and a translated UI each need by name. Each says so in its own
+doc comment. `display_text`'s `"Unknown"` key fallback stays English and out of the table for a
+different reason: `parse_hotkey` rejects a key it cannot name, so nothing built from a config
+value can reach it — it can only surface a hotkey assembled from a raw VK code, where it reads
+as a diagnostic rather than as a caption.
+
+**Choosing the language.** There is no language setting yet, so every table lookup ends at the
+default language. Four places decide that, and a fifth is a gap rather than a decision:
+
+- `TRAY_LANG` in `platform/windows/tray.rs`, set once at startup through `set_tray_lang`.
+- The `let s = strings(...)` binding in `main.rs`, bound *before* `load_config()` runs — so
+  making the language config-driven has to move it as well as change it.
+- The `lang` seeded into `WindowState` in `create_settings_window` (`settings/window.rs`), which
+  every settings control label resolves through: the window and its hotkey-capture children both
+  read it via `window_strings()`, so they can never disagree.
+- The controller (`core/controller.rs`) and the hotkey thread (`platform/windows/hotkey.rs`),
+  which resolve the language inline where they compose hotkey status text rather than carrying
+  one of their own — there is no per-thread state for it to live in.
+- `OsdRenderState.lang` in `platform/windows/osd.rs` has *no* assignment path at all: the
+  thread-local starts at `Default` and every update writes only the brightness fields, so the OSD
+  renders in the default language whatever the rest of the app does. Adding a language setting
+  has to give this field a writer, not just change an existing one.
+
+All of these change together.
 
 ---
 
