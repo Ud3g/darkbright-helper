@@ -26,10 +26,17 @@ pub enum Lang {
 
 impl Lang {
     /// Every language the app can display, in the order the picker shows them.
+    ///
+    /// Only the tests in this module read it so far, so it is `pub` rather than
+    /// `pub(crate)`: it is the seam a language picker enumerates, and narrowing
+    /// it would leave only deleting an API that is meant to be kept.
     pub const ALL: &'static [Lang] = &[Lang::English];
 
     /// The BCP-47 tag identifying this language, for locale matching and for
     /// the value stored in the config file.
+    ///
+    /// `pub` for the same reason as [`Lang::ALL`]: locale detection and the
+    /// stored language value both need it, and neither exists yet.
     #[must_use]
     pub fn tag(self) -> &'static str {
         match self {
@@ -249,7 +256,7 @@ pub struct Strings {
 /// current language. It holds one of these instead, resolved when a control is
 /// created or re-labelled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TextKey {
+pub(crate) enum TextKey {
     /// Section header above the general settings.
     HeaderGeneral,
     /// Checkbox enabling the Windows startup entry.
@@ -300,8 +307,6 @@ pub enum TextKey {
     ButtonRestoreDefaults,
     /// Button closing the settings window.
     ButtonClose,
-    /// The settings window's title bar text.
-    WindowTitle,
 }
 
 impl Strings {
@@ -311,7 +316,7 @@ impl Strings {
     /// here until it is given a field, and a new field fails to compile in
     /// every language table until it is translated.
     #[must_use]
-    pub fn get(&self, key: TextKey) -> &'static str {
+    pub(crate) fn get(&self, key: TextKey) -> &'static str {
         match key {
             TextKey::HeaderGeneral => self.header_general,
             TextKey::Autostart => self.autostart,
@@ -338,13 +343,12 @@ impl Strings {
             TextKey::FooterLinks => self.footer_links,
             TextKey::ButtonRestoreDefaults => self.button_restore_defaults,
             TextKey::ButtonClose => self.button_close,
-            TextKey::WindowTitle => self.window_title,
         }
     }
 }
 
 /// The English strings. Every other language is a translation of this table.
-pub const ENGLISH: Strings = Strings {
+pub(crate) const ENGLISH: Strings = Strings {
     osd_ddc_error: "DDC Error - Adjustment failed",
 
     tray_tip_ddc_unavailable: "DDC unavailable",
@@ -453,93 +457,92 @@ mod tests {
         }
     }
 
-    /// Pairs each named field of `s` with its value.
-    macro_rules! fields {
-        ($s:expr, $($f:ident),+ $(,)?) => {
-            [$((stringify!($f), $s.$f)),+]
-        };
-    }
-
-    /// Every field of the table, in declaration order. Written out by hand so
-    /// that a field added without an entry here is visible in review rather
-    /// than silently untested.
+    /// Every field of the table, paired with its name.
+    ///
+    /// The destructuring binding carries no rest pattern, so a field added to
+    /// [`Strings`] without an entry here is a compile error (`E0027`) rather
+    /// than something a reviewer has to catch. The pattern is packed several
+    /// names to a line, and the function is exempt from rustfmt, because one
+    /// name per line puts it past the line-count lint.
+    #[rustfmt::skip]
     fn every_field(s: &Strings) -> impl IntoIterator<Item = (&'static str, &'static str)> {
-        fields![
-            s,
-            osd_ddc_error,
-            tray_tip_ddc_unavailable,
-            tray_tip_monitor_unresponsive,
-            tray_tip_hotkeys_stopped,
-            tray_tip_hotkey_change_failed,
-            tray_tip_file_logging_off,
-            tray_warn_ddc_unavailable,
-            tray_warn_monitor_unresponsive,
-            tray_warn_hotkeys_stopped,
-            tray_warn_hotkey_change_failed,
-            tray_warn_file_logging_failed,
-            tray_usage_heading,
-            tray_usage_brighter,
-            tray_usage_dimmer,
-            tray_menu_settings,
-            tray_menu_open_log_folder,
-            tray_menu_quit_fmt,
-            key_mod_ctrl,
-            key_mod_alt,
-            key_mod_shift,
-            key_mod_win,
-            key_separator,
-            header_general,
-            autostart,
-            label_step,
-            unit_percent_step,
-            header_hotkeys,
-            label_hotkey_up,
-            label_hotkey_down,
-            intercept,
-            hint_intercept,
-            header_osd,
-            label_timeout,
-            unit_milliseconds,
-            label_opacity,
-            unit_percent_opacity,
-            header_advanced,
-            resync_check,
-            unit_seconds_resync,
-            inactivity_check,
-            unit_seconds_inactivity,
-            log_check,
-            label_log_level,
-            log_level_error,
-            log_level_warn,
-            log_level_info,
-            log_level_debug,
-            log_level_trace,
-            hint_logging,
-            footer_links,
-            button_restore_defaults,
-            button_close,
-            window_title,
-            capture_prompt,
-            capture_reject_no_modifier,
-            capture_reject_unnameable_key,
-            capture_reject_duplicate,
-            hotkey_status_unreachable,
-            hotkey_status_no_response,
-            hotkey_status_unknown_error,
-            hotkey_status_restore_also_failed_fmt,
-            hotkey_notice_interception_unavailable,
-            msgbox_already_running,
-            msgbox_title_startup_error,
-            msgbox_title_hotkey_error,
-            msgbox_title_autostart,
-            msgbox_title_restore_defaults,
-            msgbox_startup_failed_lead,
-            msgbox_thread_spawn_advice,
-            msgbox_hotkey_failed_lead,
-            msgbox_hotkey_advice_fmt,
-            msgbox_autostart_failed_fmt,
-            msgbox_restore_defaults_question,
-            msgbox_config_file_fallback,
+        let Strings {
+            osd_ddc_error, tray_tip_ddc_unavailable, tray_tip_monitor_unresponsive,
+            tray_tip_hotkeys_stopped, tray_tip_hotkey_change_failed, tray_tip_file_logging_off,
+            tray_warn_ddc_unavailable, tray_warn_monitor_unresponsive, tray_warn_hotkeys_stopped,
+            tray_warn_hotkey_change_failed, tray_warn_file_logging_failed, tray_usage_heading,
+            tray_usage_brighter, tray_usage_dimmer, tray_menu_settings, tray_menu_open_log_folder,
+            tray_menu_quit_fmt, key_mod_ctrl, key_mod_alt, key_mod_shift, key_mod_win,
+            key_separator, header_general, autostart, label_step, unit_percent_step, header_hotkeys,
+            label_hotkey_up, label_hotkey_down, intercept, hint_intercept, header_osd,
+            label_timeout, unit_milliseconds, label_opacity, unit_percent_opacity, header_advanced,
+            resync_check, unit_seconds_resync, inactivity_check, unit_seconds_inactivity, log_check,
+            label_log_level, log_level_error, log_level_warn, log_level_info, log_level_debug,
+            log_level_trace, hint_logging, footer_links, button_restore_defaults, button_close,
+            window_title, capture_prompt, capture_reject_no_modifier, capture_reject_unnameable_key,
+            capture_reject_duplicate, hotkey_status_unreachable, hotkey_status_no_response,
+            hotkey_status_unknown_error, hotkey_status_restore_also_failed_fmt,
+            hotkey_notice_interception_unavailable, msgbox_already_running,
+            msgbox_title_startup_error, msgbox_title_hotkey_error, msgbox_title_autostart,
+            msgbox_title_restore_defaults, msgbox_startup_failed_lead, msgbox_thread_spawn_advice,
+            msgbox_hotkey_failed_lead, msgbox_hotkey_advice_fmt, msgbox_autostart_failed_fmt,
+            msgbox_restore_defaults_question, msgbox_config_file_fallback,
+        } = *s;
+        [
+            ("osd_ddc_error", osd_ddc_error),
+            ("tray_tip_ddc_unavailable", tray_tip_ddc_unavailable),
+            ("tray_tip_monitor_unresponsive", tray_tip_monitor_unresponsive),
+            ("tray_tip_hotkeys_stopped", tray_tip_hotkeys_stopped),
+            ("tray_tip_hotkey_change_failed", tray_tip_hotkey_change_failed),
+            ("tray_tip_file_logging_off", tray_tip_file_logging_off),
+            ("tray_warn_ddc_unavailable", tray_warn_ddc_unavailable),
+            ("tray_warn_monitor_unresponsive", tray_warn_monitor_unresponsive),
+            ("tray_warn_hotkeys_stopped", tray_warn_hotkeys_stopped),
+            ("tray_warn_hotkey_change_failed", tray_warn_hotkey_change_failed),
+            ("tray_warn_file_logging_failed", tray_warn_file_logging_failed),
+            ("tray_usage_heading", tray_usage_heading),
+            ("tray_usage_brighter", tray_usage_brighter), ("tray_usage_dimmer", tray_usage_dimmer),
+            ("tray_menu_settings", tray_menu_settings),
+            ("tray_menu_open_log_folder", tray_menu_open_log_folder),
+            ("tray_menu_quit_fmt", tray_menu_quit_fmt), ("key_mod_ctrl", key_mod_ctrl),
+            ("key_mod_alt", key_mod_alt), ("key_mod_shift", key_mod_shift),
+            ("key_mod_win", key_mod_win), ("key_separator", key_separator),
+            ("header_general", header_general), ("autostart", autostart),
+            ("label_step", label_step), ("unit_percent_step", unit_percent_step),
+            ("header_hotkeys", header_hotkeys), ("label_hotkey_up", label_hotkey_up),
+            ("label_hotkey_down", label_hotkey_down), ("intercept", intercept),
+            ("hint_intercept", hint_intercept), ("header_osd", header_osd),
+            ("label_timeout", label_timeout), ("unit_milliseconds", unit_milliseconds),
+            ("label_opacity", label_opacity), ("unit_percent_opacity", unit_percent_opacity),
+            ("header_advanced", header_advanced), ("resync_check", resync_check),
+            ("unit_seconds_resync", unit_seconds_resync), ("inactivity_check", inactivity_check),
+            ("unit_seconds_inactivity", unit_seconds_inactivity), ("log_check", log_check),
+            ("label_log_level", label_log_level), ("log_level_error", log_level_error),
+            ("log_level_warn", log_level_warn), ("log_level_info", log_level_info),
+            ("log_level_debug", log_level_debug), ("log_level_trace", log_level_trace),
+            ("hint_logging", hint_logging), ("footer_links", footer_links),
+            ("button_restore_defaults", button_restore_defaults), ("button_close", button_close),
+            ("window_title", window_title), ("capture_prompt", capture_prompt),
+            ("capture_reject_no_modifier", capture_reject_no_modifier),
+            ("capture_reject_unnameable_key", capture_reject_unnameable_key),
+            ("capture_reject_duplicate", capture_reject_duplicate),
+            ("hotkey_status_unreachable", hotkey_status_unreachable),
+            ("hotkey_status_no_response", hotkey_status_no_response),
+            ("hotkey_status_unknown_error", hotkey_status_unknown_error),
+            ("hotkey_status_restore_also_failed_fmt", hotkey_status_restore_also_failed_fmt),
+            ("hotkey_notice_interception_unavailable", hotkey_notice_interception_unavailable),
+            ("msgbox_already_running", msgbox_already_running),
+            ("msgbox_title_startup_error", msgbox_title_startup_error),
+            ("msgbox_title_hotkey_error", msgbox_title_hotkey_error),
+            ("msgbox_title_autostart", msgbox_title_autostart),
+            ("msgbox_title_restore_defaults", msgbox_title_restore_defaults),
+            ("msgbox_startup_failed_lead", msgbox_startup_failed_lead),
+            ("msgbox_thread_spawn_advice", msgbox_thread_spawn_advice),
+            ("msgbox_hotkey_failed_lead", msgbox_hotkey_failed_lead),
+            ("msgbox_hotkey_advice_fmt", msgbox_hotkey_advice_fmt),
+            ("msgbox_autostart_failed_fmt", msgbox_autostart_failed_fmt),
+            ("msgbox_restore_defaults_question", msgbox_restore_defaults_question),
+            ("msgbox_config_file_fallback", msgbox_config_file_fallback),
         ]
     }
 
@@ -595,7 +598,6 @@ mod tests {
             TextKey::FooterLinks,
             TextKey::ButtonRestoreDefaults,
             TextKey::ButtonClose,
-            TextKey::WindowTitle,
         ];
         for &lang in Lang::ALL {
             let s = strings(lang);

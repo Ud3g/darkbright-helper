@@ -782,6 +782,15 @@ impl ParsedHotkey {
     /// Identical to the [`Display`](std::fmt::Display) output in English; a
     /// translation changes only what is shown, never what is stored. Key names
     /// themselves are not translated — they name physical keycaps.
+    ///
+    /// Only tests call it so far, so it is `pub` rather than `pub(crate)`: it is
+    /// the seam a translated UI renders through, and wiring it today would
+    /// re-render a hand-edited `"ctrl+shift+up"` as `"Ctrl+Shift+Up"` on screen.
+    ///
+    /// The `"Unknown"` key fallback stays English and out of [`Strings`]: it is
+    /// unreachable for any hotkey [`parse_hotkey`] produced — parsing rejects a
+    /// key with no name — so it can only surface a `ParsedHotkey` built from a
+    /// raw VK code, where it reads as a diagnostic rather than as a caption.
     #[must_use]
     pub fn display_text(&self, s: &Strings) -> String {
         let mut parts = Vec::new();
@@ -1415,18 +1424,45 @@ mod tests {
     fn english_display_text_matches_the_stored_format() {
         use crate::core::i18n::ENGLISH;
 
-        for spec in [
-            "Ctrl+Shift+Up",
-            "Ctrl+Shift+Down",
-            "Alt+Win+PageUp",
-            "Ctrl+F12",
-        ] {
-            let parsed = parse_hotkey(spec).expect("fixture must parse");
-            assert_eq!(
-                parsed.display_text(&ENGLISH),
-                parsed.to_string(),
-                "English display text must be identical to the stored format"
-            );
+        // The two renderings duplicate the modifier and key-name block, and
+        // config.json round-trips through Display, so any divergence would
+        // write a string back that parse_hotkey cannot read. Exhaustive over
+        // every nameable key and every modifier combination, plus a VK code
+        // with no name, which is the one branch parse_hotkey cannot reach.
+        let nameless = VIRTUAL_KEY(0);
+        assert!(
+            !VK_TO_NAME.iter().any(|(_, vk)| *vk == nameless),
+            "the fallback case below only means something while VK 0 has no name"
+        );
+
+        let keys: Vec<VIRTUAL_KEY> = VK_TO_NAME
+            .iter()
+            .map(|(_, vk)| *vk)
+            .chain(std::iter::once(nameless))
+            .collect();
+
+        for &vk in &keys {
+            for mask in 0..16_u16 {
+                let mut modifiers = HOT_KEY_MODIFIERS(0);
+                if mask & 1 != 0 {
+                    modifiers |= MOD_CONTROL;
+                }
+                if mask & 2 != 0 {
+                    modifiers |= MOD_ALT;
+                }
+                if mask & 4 != 0 {
+                    modifiers |= MOD_SHIFT;
+                }
+                if mask & 8 != 0 {
+                    modifiers |= MOD_WIN;
+                }
+                let parsed = ParsedHotkey::new(modifiers, vk);
+                assert_eq!(
+                    parsed.display_text(&ENGLISH),
+                    parsed.to_string(),
+                    "English display text must be identical to the stored format"
+                );
+            }
         }
     }
 
