@@ -426,11 +426,6 @@ pub(crate) enum TextKey {
     /// Section header above the general settings.
     HeaderGeneral,
     /// Label before the language picker.
-    // Non-test code doesn't construct this yet; the picker control that will
-    // is a later change, and `#[expect]` can't be used because the test
-    // target already constructs it (in the `KEYS` array below) while the
-    // non-test target doesn't. Remove this attribute once the picker lands.
-    #[allow(dead_code)]
     LabelLanguage,
     /// Checkbox enabling the Windows startup entry.
     Autostart,
