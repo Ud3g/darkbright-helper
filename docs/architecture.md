@@ -1679,7 +1679,11 @@ there is no dialog-manager state recording which control had it. This was
 found the hard way (focus stranding on the window after a message box
 closed) and is now handled by hand: `WM_ACTIVATE` saves the focused child on
 deactivate and restores it on reactivate, and `WM_SETFOCUS` self-heals
-whenever focus lands on the top level through some other path.
+whenever focus lands on the top level through some other path. Initial focus
+goes to the "Start with Windows" checkbox rather than to the Language combo
+above it: a drop-down list commits a new selection on a single arrow key or
+wheel notch, so focusing it would let one stray keypress pin the UI language
+in the config.
 
 **Uncommitted edits on Close.** A value typed into a numeric edit but not yet
 committed (no `EN_KILLFOCUS` yet) still survives Close or Esc without an

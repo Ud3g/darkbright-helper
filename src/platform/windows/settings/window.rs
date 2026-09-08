@@ -2056,7 +2056,12 @@ fn create_settings_window(
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
-        if let Ok(first) = GetDlgItem(Some(hwnd), i32::from(ID_LANGUAGE)) {
+        // Focus lands on the autostart checkbox, not on the language combo
+        // that precedes it in tab order: a drop-down list changes its
+        // selection on a single arrow key or wheel notch, which here would
+        // pin the UI language in the config before the user touched
+        // anything. The combo stays one Shift+Tab away.
+        if let Ok(first) = GetDlgItem(Some(hwnd), i32::from(ID_AUTOSTART)) {
             let _ = SetFocus(Some(first));
         }
     }
