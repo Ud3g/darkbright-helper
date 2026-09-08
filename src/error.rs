@@ -2,6 +2,8 @@
 
 use thiserror::Error;
 
+use crate::core::i18n::Strings;
+
 /// Type alias for Results using the application's error type.
 pub type Result<T> = std::result::Result<T, BrightnessError>;
 
@@ -90,6 +92,24 @@ pub enum BrightnessError {
 }
 
 impl BrightnessError {
+    /// The message to show a user in a dialog, in `s`'s language.
+    ///
+    /// Only the variants that can actually reach a message box get their own
+    /// wording. Everything else falls back to the English
+    /// [`Display`](std::fmt::Display) output, which is the logging
+    /// representation — inventing user-facing text for a message no user can
+    /// see would be a translation burden with no reader.
+    #[must_use]
+    pub fn user_message(&self, s: &Strings) -> String {
+        match self {
+            BrightnessError::ThreadSpawn { .. } => format!(
+                "{}\n\n{self}\n\n{}",
+                s.msgbox_startup_failed_lead, s.msgbox_thread_spawn_advice
+            ),
+            _ => self.to_string(),
+        }
+    }
+
     /// Creates a new DDC communication error.
     pub(crate) fn ddc_communication(
         monitor: impl Into<String>,
@@ -175,5 +195,45 @@ impl BrightnessError {
             field: field.into(),
             message: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BrightnessError;
+    use crate::core::i18n::ENGLISH;
+
+    #[test]
+    fn thread_spawn_gets_a_translatable_user_message() {
+        let e = BrightnessError::ThreadSpawn {
+            name: "ddc",
+            source: std::io::Error::other("no resources"),
+        };
+        let msg = e.user_message(&ENGLISH);
+        // No manual pass can trigger this dialog, so the whole shape of the
+        // message is asserted here: lead line, the Display detail that says
+        // which thread failed, the advice, and the blank lines between them.
+        assert!(
+            msg.starts_with(ENGLISH.msgbox_startup_failed_lead),
+            "the lead line must come first, got {msg:?}"
+        );
+        assert!(
+            msg.contains("Failed to spawn the ddc thread"),
+            "the error detail must be embedded, got {msg:?}"
+        );
+        assert!(msg.contains(ENGLISH.msgbox_thread_spawn_advice));
+        assert_eq!(
+            msg.matches("\n\n").count(),
+            2,
+            "the three parts stay separated by blank lines, got {msg:?}"
+        );
+    }
+
+    #[test]
+    fn a_variant_with_no_dialog_path_falls_back_to_the_log_representation() {
+        // Variants that never reach a message box must not invent user-facing
+        // text; the English Display output is the honest fallback.
+        let e = BrightnessError::ChannelSend;
+        assert_eq!(e.user_message(&ENGLISH), e.to_string());
     }
 }

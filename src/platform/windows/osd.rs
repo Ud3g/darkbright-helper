@@ -36,6 +36,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, w};
 
 use super::{SafeHwnd, hmonitor_from_isize, last_error_as_brightness_error, osd_render};
+use crate::core::i18n::Lang;
 use crate::core::state::MonitorState;
 use crate::error::{BrightnessError, Result};
 
@@ -161,6 +162,13 @@ pub(super) struct OsdRenderState {
     pub(super) overlay_opacity: u8,
     /// Whether an error occurred.
     pub(super) is_error: bool,
+    /// Language the error row (and any future OSD text) is rendered in.
+    ///
+    /// Nothing assigns it: the state starts at [`Default`] and every update
+    /// writes only the fields above, so the OSD always renders in the default
+    /// language. Adding a language setting has to give this field an
+    /// assignment path — there is no `set_*` to find, unlike the tray's.
+    pub(super) lang: Lang,
 }
 
 /// Ensures the window class is registered exactly once.

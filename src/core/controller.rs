@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::core::brightness::calculate_adjustment;
 use crate::core::config::{Config, SettingsDirty};
+use crate::core::i18n::{Lang, strings};
 use crate::core::reconcile::{
     HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REBIND_TIMEOUT, REFRESH_TIMEOUT, RefreshTracker,
     RespawnOutcome, SAVE_DEBOUNCE, SET_TIMEOUT,
@@ -587,8 +588,13 @@ where
             // sitting in the same fields (clearing them here would silently
             // drop that earlier change instead of saving it).
             self.hotkeys_degraded = true;
+            // Status text reaches the settings window, so it comes from the
+            // string table. The language is resolved on the spot rather than
+            // held on the controller: nothing can select anything but English
+            // yet, and a field would only have to be threaded through until it
+            // can.
             self.settings
-                .hotkey_error("Could not reach the hotkey thread");
+                .hotkey_error(strings(Lang::English).hotkey_status_unreachable);
             let snapshot = self.settings_snapshot();
             self.settings.refresh(&snapshot);
         }
@@ -606,7 +612,7 @@ where
             self.pending_hotkey_op = None;
             self.hotkeys_degraded = true;
             self.settings
-                .hotkey_error("Could not reach the hotkey thread");
+                .hotkey_error(strings(Lang::English).hotkey_status_unreachable);
         }
     }
 
@@ -621,7 +627,7 @@ where
             self.pending_hotkey_op = None;
             self.hotkeys_degraded = true;
             self.settings
-                .hotkey_error("Could not reach the hotkey thread");
+                .hotkey_error(strings(Lang::English).hotkey_status_unreachable);
         }
     }
 
@@ -685,16 +691,19 @@ where
             }
             self.hotkeys_degraded = false;
             if fallback_active {
-                self.settings.hotkey_notice(
-                    "Brightness-key interception unavailable; using plain key registration",
-                );
+                self.settings
+                    .hotkey_notice(strings(Lang::English).hotkey_notice_interception_unavailable);
             }
             return;
         }
 
         self.fail_hotkey_op(
             op,
-            &error.unwrap_or_else(|| "unknown error".to_string()),
+            &error.unwrap_or_else(|| {
+                strings(Lang::English)
+                    .hotkey_status_unknown_error
+                    .to_string()
+            }),
             now,
         );
     }
@@ -1407,7 +1416,7 @@ where
         {
             log::error!(op:? = op; "Hotkey thread did not respond to posted operation");
             self.pending_hotkey_op = None;
-            self.fail_hotkey_op(op, "Hotkey thread did not respond", now);
+            self.fail_hotkey_op(op, strings(Lang::English).hotkey_status_no_response, now);
         }
     }
 

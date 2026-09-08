@@ -25,13 +25,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
+use crate::core::i18n::Strings;
 use crate::core::state::{BrightnessMessage, SettingChange};
 
 use super::super::hotkey::{bindings_conflict, hotkey_string};
 use super::dark;
 use super::layout::{ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP};
 use super::window::{
-    get_text, post_change, send_message, set_text, wide, window_text, with_window_state,
+    get_text, post_change, send_message, set_text, wide, window_strings, window_text,
+    with_window_state,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -94,21 +96,6 @@ impl Default for CaptureState {
         }
     }
 }
-
-/// The prompt shown for the whole time a field is capturing and no modifier
-/// is held yet. Exact wording is part of this control's contract.
-const CAPTURE_PROMPT: &str = "Press a key combination… (Esc to cancel)";
-
-/// Inline rejection: the candidate had no Ctrl/Alt/Win modifier. Shift alone
-/// is deliberately insufficient — see [`has_required_modifier`].
-const REJECT_NO_MODIFIER: &str = "Add Ctrl, Alt, or Win (Shift alone isn't enough)";
-/// Inline rejection: `hotkey_string` returned `None`, i.e. `key_name`
-/// cannot represent the pressed key (so it could not round-trip through
-/// `config.json`).
-const REJECT_UNNAMEABLE_KEY: &str = "That key can't be used as a hotkey";
-/// Inline rejection: the candidate's canonical form matches the other
-/// hotkey field's current binding (see [`bindings_conflict`]).
-const REJECT_DUPLICATE: &str = "Already assigned to the other brightness hotkey";
 
 /// Retrieves `hwnd`'s [`CaptureState`] pointer from `GWLP_USERDATA`, or a
 /// null pointer before `WM_CREATE` has run / after `WM_NCDESTROY` has freed
@@ -268,43 +255,48 @@ fn key_is_down(vk: VIRTUAL_KEY) -> bool {
 
 /// The modifier-prefix preview shown while capturing (`"Ctrl+Shift+"`), or
 /// empty while no modifier is held yet — in which case the caller shows
-/// [`CAPTURE_PROMPT`] instead. Order matches [`hotkey::ParsedHotkey`]'s
+/// [`Strings::capture_prompt`] instead. Order matches [`hotkey::ParsedHotkey`]'s
 /// `Display` impl (Ctrl, Alt, Shift, Win) so the preview never reorders
 /// itself relative to the string a completed capture actually posts.
 #[must_use]
-fn preview_text(modifiers: HOT_KEY_MODIFIERS) -> String {
+fn preview_text(modifiers: HOT_KEY_MODIFIERS, s: &Strings) -> String {
     let mut parts = Vec::new();
     if modifiers.contains(MOD_CONTROL) {
-        parts.push("Ctrl");
+        parts.push(s.key_mod_ctrl);
     }
     if modifiers.contains(MOD_ALT) {
-        parts.push("Alt");
+        parts.push(s.key_mod_alt);
     }
     if modifiers.contains(MOD_SHIFT) {
-        parts.push("Shift");
+        parts.push(s.key_mod_shift);
     }
     if modifiers.contains(MOD_WIN) {
-        parts.push("Win");
+        parts.push(s.key_mod_win);
     }
     if parts.is_empty() {
         String::new()
     } else {
-        format!("{}+", parts.join("+"))
+        format!("{}{}", parts.join(s.key_separator), s.key_separator)
     }
 }
 
 /// What [`paint_capture`] draws: `idle_text` unchanged while idle, otherwise
-/// the live preview or, before any modifier is held, [`CAPTURE_PROMPT`].
+/// the live preview or, before any modifier is held, [`Strings::capture_prompt`].
 /// Pure and unit-tested without a live window — `idle_text` stands in for
 /// `window_text(hwnd)`.
 #[must_use]
-fn capture_display_text(capturing: bool, modifiers: HOT_KEY_MODIFIERS, idle_text: &str) -> String {
+fn capture_display_text(
+    capturing: bool,
+    modifiers: HOT_KEY_MODIFIERS,
+    idle_text: &str,
+    s: &Strings,
+) -> String {
     if !capturing {
         return idle_text.to_string();
     }
-    let preview = preview_text(modifiers);
+    let preview = preview_text(modifiers, s);
     if preview.is_empty() {
-        CAPTURE_PROMPT.to_string()
+        s.capture_prompt.to_string()
     } else {
         preview
     }
@@ -331,15 +323,16 @@ fn evaluate_candidate(
     modifiers: HOT_KEY_MODIFIERS,
     vk: VIRTUAL_KEY,
     other_binding: &str,
+    s: &Strings,
 ) -> CaptureOutcome {
     if !has_required_modifier(modifiers) {
-        return CaptureOutcome::Rejected(REJECT_NO_MODIFIER);
+        return CaptureOutcome::Rejected(s.capture_reject_no_modifier);
     }
     let Some(candidate) = hotkey_string(modifiers, vk) else {
-        return CaptureOutcome::Rejected(REJECT_UNNAMEABLE_KEY);
+        return CaptureOutcome::Rejected(s.capture_reject_unnameable_key);
     };
     if bindings_conflict(&candidate, other_binding) {
-        return CaptureOutcome::Rejected(REJECT_DUPLICATE);
+        return CaptureOutcome::Rejected(s.capture_reject_duplicate);
     }
     CaptureOutcome::Accept(candidate)
 }
@@ -462,7 +455,7 @@ fn handle_capture_keydown(hwnd: HWND, vk: VIRTUAL_KEY) {
     with_window_state(|state| other_binding = get_text(state.hwnd, other_id));
 
     let modifiers = live_modifier_flags();
-    match evaluate_candidate(modifiers, vk, &other_binding) {
+    match evaluate_candidate(modifiers, vk, &other_binding, window_strings()) {
         CaptureOutcome::Accept(candidate) => accept_capture(hwnd, candidate, change),
         CaptureOutcome::Rejected(message) => reject_capture(message),
     }
@@ -527,7 +520,7 @@ fn wide_for_draw(s: &str) -> Vec<u16> {
 /// Paints one capture control: idle shows its own window text (the current
 /// binding, however it last got there — population or a completed
 /// capture); capturing shows the live preview or, before any modifier is
-/// held, [`CAPTURE_PROMPT`] in `COLOR_GRAYTEXT` (a placeholder look,
+/// held, [`Strings::capture_prompt`] in `COLOR_GRAYTEXT` (a placeholder look,
 /// `GetSysColor`-based per this task's palette rule); an idle control that
 /// currently holds keyboard focus also gets a focus rectangle. Capturing
 /// never draws a focus rectangle of its own — the prompt/preview already
@@ -543,8 +536,9 @@ fn paint_capture(hwnd: HWND, hdc: HDC) {
 
     let cs = capture_state(hwnd);
     let idle_text = window_text(hwnd);
-    let text = capture_display_text(cs.capturing, cs.live_modifiers, &idle_text);
-    let is_placeholder = cs.capturing && preview_text(cs.live_modifiers).is_empty();
+    let s = window_strings();
+    let text = capture_display_text(cs.capturing, cs.live_modifiers, &idle_text, s);
+    let is_placeholder = cs.capturing && preview_text(cs.live_modifiers, s).is_empty();
     let has_focus = unsafe { GetFocus() } == hwnd;
 
     with_window_state(|state| unsafe {
@@ -769,6 +763,7 @@ pub(super) unsafe extern "system" fn capture_wnd_proc(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::i18n::ENGLISH;
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_UP;
 
     // ── Hotkey Capture Control (pure logic) ─────────────────────────────
@@ -840,24 +835,24 @@ mod tests {
 
     #[test]
     fn preview_text_is_empty_with_no_modifiers_held() {
-        assert_eq!(preview_text(HOT_KEY_MODIFIERS(0)), "");
+        assert_eq!(preview_text(HOT_KEY_MODIFIERS(0), &ENGLISH), "");
     }
 
     #[test]
     fn preview_text_orders_modifiers_ctrl_alt_shift_win() {
         let mods = MOD_WIN | MOD_SHIFT | MOD_ALT | MOD_CONTROL;
-        assert_eq!(preview_text(mods), "Ctrl+Alt+Shift+Win+");
+        assert_eq!(preview_text(mods, &ENGLISH), "Ctrl+Alt+Shift+Win+");
     }
 
     #[test]
     fn preview_text_a_single_modifier_still_gets_a_trailing_plus() {
-        assert_eq!(preview_text(MOD_CONTROL), "Ctrl+");
+        assert_eq!(preview_text(MOD_CONTROL, &ENGLISH), "Ctrl+");
     }
 
     #[test]
     fn capture_display_text_shows_idle_text_while_not_capturing() {
         assert_eq!(
-            capture_display_text(false, MOD_CONTROL, "Ctrl+Shift+Up"),
+            capture_display_text(false, MOD_CONTROL, "Ctrl+Shift+Up", &ENGLISH),
             "Ctrl+Shift+Up"
         );
     }
@@ -865,48 +860,65 @@ mod tests {
     #[test]
     fn capture_display_text_shows_the_prompt_before_any_modifier_is_held() {
         assert_eq!(
-            capture_display_text(true, HOT_KEY_MODIFIERS(0), "Ctrl+Shift+Up"),
-            CAPTURE_PROMPT
+            capture_display_text(true, HOT_KEY_MODIFIERS(0), "Ctrl+Shift+Up", &ENGLISH),
+            ENGLISH.capture_prompt
         );
     }
 
     #[test]
     fn capture_display_text_shows_the_live_preview_once_a_modifier_is_held() {
         assert_eq!(
-            capture_display_text(true, MOD_CONTROL, "Ctrl+Shift+Up"),
+            capture_display_text(true, MOD_CONTROL, "Ctrl+Shift+Up", &ENGLISH),
             "Ctrl+"
         );
     }
 
     #[test]
     fn evaluate_candidate_accepts_a_valid_non_conflicting_binding() {
-        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x42), "Ctrl+Shift+Up"); // Ctrl+B
+        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x42), "Ctrl+Shift+Up", &ENGLISH); // Ctrl+B
         assert_eq!(outcome, CaptureOutcome::Accept("Ctrl+B".to_string()));
     }
 
     #[test]
     fn evaluate_candidate_rejects_no_modifier_at_all() {
-        let outcome = evaluate_candidate(HOT_KEY_MODIFIERS(0), VIRTUAL_KEY(0x42), "Ctrl+Shift+Up");
-        assert_eq!(outcome, CaptureOutcome::Rejected(REJECT_NO_MODIFIER));
+        let outcome = evaluate_candidate(
+            HOT_KEY_MODIFIERS(0),
+            VIRTUAL_KEY(0x42),
+            "Ctrl+Shift+Up",
+            &ENGLISH,
+        );
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected(ENGLISH.capture_reject_no_modifier)
+        );
     }
 
     #[test]
     fn evaluate_candidate_rejects_shift_alone() {
-        let outcome = evaluate_candidate(MOD_SHIFT, VK_UP, "Ctrl+Shift+Down");
-        assert_eq!(outcome, CaptureOutcome::Rejected(REJECT_NO_MODIFIER));
+        let outcome = evaluate_candidate(MOD_SHIFT, VK_UP, "Ctrl+Shift+Down", &ENGLISH);
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected(ENGLISH.capture_reject_no_modifier)
+        );
     }
 
     #[test]
     fn evaluate_candidate_rejects_a_key_the_parser_cannot_name() {
         // No entry in KEY_MAP/VK_TO_NAME for this virtual-key code.
-        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x07), "Ctrl+Shift+Up");
-        assert_eq!(outcome, CaptureOutcome::Rejected(REJECT_UNNAMEABLE_KEY));
+        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x07), "Ctrl+Shift+Up", &ENGLISH);
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected(ENGLISH.capture_reject_unnameable_key)
+        );
     }
 
     #[test]
     fn evaluate_candidate_rejects_a_binding_the_other_field_already_has() {
-        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "Ctrl+Shift+Up");
-        assert_eq!(outcome, CaptureOutcome::Rejected(REJECT_DUPLICATE));
+        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "Ctrl+Shift+Up", &ENGLISH);
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected(ENGLISH.capture_reject_duplicate)
+        );
     }
 
     #[test]
@@ -914,15 +926,18 @@ mod tests {
         // A hand-edited config.json can spell the same binding with its
         // modifiers in a different order; that must still be caught as the
         // same duplicate, not missed on a literal-string comparison.
-        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "shift+ctrl+up");
-        assert_eq!(outcome, CaptureOutcome::Rejected(REJECT_DUPLICATE));
+        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "shift+ctrl+up", &ENGLISH);
+        assert_eq!(
+            outcome,
+            CaptureOutcome::Rejected(ENGLISH.capture_reject_duplicate)
+        );
     }
 
     #[test]
     fn evaluate_candidate_does_not_conflict_with_unparseable_other_field_text() {
         // Matches bindings_conflict's own permissiveness: an unparseable
         // "other" binding never blocks a capture.
-        let outcome = evaluate_candidate(MOD_CONTROL, VK_UP, "garbage");
+        let outcome = evaluate_candidate(MOD_CONTROL, VK_UP, "garbage", &ENGLISH);
         assert_eq!(outcome, CaptureOutcome::Accept("Ctrl+Up".to_string()));
     }
 }

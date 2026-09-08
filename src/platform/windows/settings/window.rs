@@ -43,6 +43,7 @@ use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
+use crate::core::i18n::{Lang, Strings, strings};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
@@ -249,8 +250,22 @@ fn build_font(dpi: u32, weight: FONT_WEIGHT) -> HFONT {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Log level dropdown entries, in the order `CB_ADDSTRING` inserts them —
-/// index into this array is the combo selection index.
+/// index into this array is the combo selection index. The stored config
+/// values: never translated, since `log::LevelFilter` parses these and a
+/// user editing `config.json` by hand needs to see them.
 const LOG_LEVELS: [&str; 5] = ["error", "warn", "info", "debug", "trace"];
+
+/// What the log level picker shows for the entry at `index`, falling back to
+/// the first level for an index outside `LOG_LEVELS`.
+fn log_level_display(s: &Strings, index: usize) -> &'static str {
+    match index {
+        1 => s.log_level_warn,
+        2 => s.log_level_info,
+        3 => s.log_level_debug,
+        4 => s.log_level_trace,
+        _ => s.log_level_error,
+    }
+}
 
 /// UTF-16, NUL-terminated encoding of `s` for a `PCWSTR` argument that only
 /// needs to live for the duration of one FFI call.
@@ -264,7 +279,14 @@ pub(super) fn wide(s: &str) -> Vec<u16> {
 /// `CreateWindowExW` is logged and skipped rather than aborting the whole
 /// window, matching how the rest of this crate degrades a UI by one element
 /// rather than failing outright.
-fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_bold: HFONT) {
+fn create_controls(
+    hwnd: HWND,
+    hinstance: HINSTANCE,
+    font_regular: HFONT,
+    font_bold: HFONT,
+    lang: Lang,
+) {
+    let s = strings(lang);
     for spec in CONTROLS {
         let class = match spec.class {
             "STATIC" => WC_STATIC,
@@ -291,7 +313,10 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
         let text = if spec.id == ID_VERSION {
             wide(&format!("v{}", version_string()))
         } else {
-            wide(spec.text)
+            let label = spec
+                .text
+                .map_or(String::new(), |key| s.get(key).to_string());
+            wide(&label)
         };
         let id = HMENU(std::ptr::without_provenance_mut(usize::from(spec.id)));
         let style = WINDOW_STYLE(spec.style) | WS_CHILD | WS_VISIBLE;
@@ -333,8 +358,8 @@ fn create_controls(hwnd: HWND, hinstance: HINSTANCE, font_regular: HFONT, font_b
         }
 
         if spec.id == ID_LOG_LEVEL {
-            for level in LOG_LEVELS {
-                let level_wide = wide(level);
+            for index in 0..LOG_LEVELS.len() {
+                let level_wide = wide(log_level_display(s, index));
                 // SAFETY: `CB_ADDSTRING` copies the NUL-terminated string
                 // `lparam` points at into the combo's own storage. The message
                 // is sent, not posted, so `level_wide` still owns that buffer
@@ -552,6 +577,9 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// [`with_window_state`] for the invariant that keeps this sound.
 pub(super) struct WindowState {
     pub(super) hwnd: HWND,
+    /// The language every control label was resolved in at creation time.
+    /// Only English exists today, so this never changes after construction.
+    pub(super) lang: Lang,
     sender: Sender<BrightnessMessage>,
     /// The slot [`SettingsSinkImpl`] posts through, shared with the
     /// controller's thread. Held here so `WM_DESTROY` can clear it back to
@@ -662,6 +690,14 @@ pub(super) fn with_window_state(f: impl FnOnce(&WindowState)) {
             f(state);
         }
     });
+}
+
+/// The string table in the settings window's language, falling back to the
+/// default language when the window state is not reachable.
+pub(super) fn window_strings() -> &'static Strings {
+    let mut lang = Lang::default();
+    with_window_state(|state| lang = state.lang);
+    strings(lang)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1215,10 +1251,12 @@ fn handle_autostart_click(hwnd: HWND) {
         // while clearing the StartupApproved veto fails), and `!checked`
         // would then show unchecked despite Run actually being set.
         set_checked(hwnd, ID_AUTOSTART, autostart::is_enabled());
+        let s = window_strings();
         show_owned_error_message_box(
             hwnd,
-            "darkbright-helper - Autostart",
-            &format!("Couldn't update the Windows startup entry:\n{e}"),
+            &format!("darkbright-helper - {}", s.msgbox_title_autostart),
+            &s.msgbox_autostart_failed_fmt
+                .replace("{error}", &e.to_string()),
         );
     }
 }
@@ -1246,8 +1284,12 @@ fn handle_restore_click(hwnd: HWND) {
 /// activation alone left focus stranded on `hwnd`, `WM_SETFOCUS`'s own
 /// `restore_focus` call catches it immediately.
 fn confirm_restore_defaults(hwnd: HWND) -> bool {
-    let message = wide("Reset all settings to their defaults? Hotkeys are applied immediately.");
-    let title = wide("darkbright-helper - Restore Defaults");
+    let s = window_strings();
+    let message = wide(s.msgbox_restore_defaults_question);
+    let title = wide(&format!(
+        "darkbright-helper - {}",
+        s.msgbox_title_restore_defaults
+    ));
     let result = unsafe {
         MessageBoxW(
             Some(hwnd),
@@ -1806,11 +1848,16 @@ fn create_settings_window(
     // No WS_VISIBLE here: control creation, layout and snapshot population
     // all happen before the window is ever shown, so the open does not
     // visibly assemble itself on screen.
+    let lang = Lang::default();
+    let title = wide(strings(lang).window_title);
+    // SAFETY: `CreateWindowExW` copies the NUL-terminated title `PCWSTR` points
+    // at while it builds the window, and `title` still owns that buffer for the
+    // whole call.
     let hwnd = unsafe {
         CreateWindowExW(
             WS_EX_TOPMOST,
             class_name,
-            w!("darkbright-helper Settings"),
+            PCWSTR(title.as_ptr()),
             WS_CAPTION | WS_SYSMENU,
             placement.x,
             placement.y,
@@ -1827,13 +1874,9 @@ fn create_settings_window(
     let font_regular = build_font(placement.dpi, FW_NORMAL);
     let font_bold = build_font(placement.dpi, FW_BOLD);
 
-    create_controls(hwnd, hinstance.into(), font_regular, font_bold);
-    layout(hwnd, placement.dpi);
-    configure_updowns(hwnd);
-    configure_combo_height(hwnd);
-
     let state = WindowState {
         hwnd,
+        lang,
         sender: tx.clone(),
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular: Cell::new(font_regular),
@@ -1855,6 +1898,11 @@ fn create_settings_window(
         last_posted_periodic: Cell::new(None),
         last_posted_inactivity: Cell::new(None),
     };
+
+    create_controls(hwnd, hinstance.into(), font_regular, font_bold, state.lang);
+    layout(hwnd, placement.dpi);
+    configure_updowns(hwnd);
+    configure_combo_height(hwnd);
     apply_snapshot(&state, snapshot);
     // Store state before applying the theme, not after: apply_theme's
     // RedrawWindow call synchronously re-enters every child's paint path,
@@ -2152,6 +2200,29 @@ mod tests {
         assert_eq!(log_level_index("debug"), Some(3));
         assert_eq!(log_level_index("trace"), Some(4));
         assert_eq!(log_level_index("bogus"), None);
+    }
+
+    #[test]
+    fn the_stored_log_level_values_are_never_taken_from_the_display_text() {
+        use crate::core::i18n::ENGLISH;
+
+        // config.json holds these exact tokens; log::LevelFilter parses them.
+        assert_eq!(LOG_LEVELS, ["error", "warn", "info", "debug", "trace"]);
+
+        for (index, stored) in LOG_LEVELS.iter().enumerate() {
+            let shown = log_level_display(&ENGLISH, index);
+            assert!(
+                shown.starts_with(stored),
+                "the display text must lead with the stored token so a hand-edited \
+                 config stays readable; got {shown} for {stored}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_index_falls_back_to_the_first_level() {
+        use crate::core::i18n::ENGLISH;
+        assert_eq!(log_level_display(&ENGLISH, 99), ENGLISH.log_level_error);
     }
 
     #[test]

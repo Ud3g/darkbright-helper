@@ -17,6 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_SYSMENU, WS_TABSTOP,
 };
 
+use crate::core::i18n::TextKey;
 use crate::error::{BrightnessError, Result};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,7 +152,9 @@ pub(super) struct ControlSpec {
     y: i32,
     w: i32,
     h: i32,
-    pub(super) text: &'static str,
+    /// The label to show, or `None` for controls whose text is set at runtime
+    /// (edit fields, spinners, the version line) or that have none (separators).
+    pub(super) text: Option<TextKey>,
 }
 
 /// Base window client size at 96 DPI (100% scaling); see [`scale_dimension`].
@@ -171,7 +174,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 12,
         w: 376,
         h: 16,
-        text: "General",
+        text: Some(TextKey::HeaderGeneral),
     },
     ControlSpec {
         id: ID_SEP_GENERAL,
@@ -181,7 +184,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 32,
         w: 376,
         h: 2,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_AUTOSTART,
@@ -191,7 +194,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 42,
         w: 300,
         h: 20,
-        text: "Start with Windows",
+        text: Some(TextKey::Autostart),
     },
     ControlSpec {
         id: ID_LABEL_STEP,
@@ -201,7 +204,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 72,
         w: 220,
         h: 20,
-        text: "Brightness step per keypress",
+        text: Some(TextKey::LabelStep),
     },
     ControlSpec {
         id: ID_STEP_EDIT,
@@ -211,7 +214,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 70,
         w: 60,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_STEP_UPDOWN,
@@ -221,7 +224,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 70,
         w: 16,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_STEP_UNIT,
@@ -231,7 +234,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 72,
         w: 20,
         h: 20,
-        text: "%",
+        text: Some(TextKey::UnitPercentStep),
     },
     // ── Hotkeys ─────────────────────────────────────────────────────────
     ControlSpec {
@@ -242,7 +245,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 108,
         w: 376,
         h: 16,
-        text: "Hotkeys",
+        text: Some(TextKey::HeaderHotkeys),
     },
     ControlSpec {
         id: ID_SEP_HOTKEYS,
@@ -252,7 +255,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 128,
         w: 376,
         h: 2,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_HK_UP,
@@ -262,7 +265,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 140,
         w: 140,
         h: 20,
-        text: "Brightness up",
+        text: Some(TextKey::LabelHotkeyUp),
     },
     ControlSpec {
         id: ID_HK_UP,
@@ -272,7 +275,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 138,
         w: 218,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_HK_DOWN,
@@ -282,7 +285,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 170,
         w: 140,
         h: 20,
-        text: "Brightness down",
+        text: Some(TextKey::LabelHotkeyDown),
     },
     ControlSpec {
         id: ID_HK_DOWN,
@@ -292,7 +295,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 168,
         w: 218,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_INTERCEPT,
@@ -302,7 +305,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 198,
         w: 340,
         h: 20,
-        text: "Try to intercept dedicated brightness keys",
+        text: Some(TextKey::Intercept),
     },
     // Muted explainer text under the intercept checkbox.
     ControlSpec {
@@ -313,7 +316,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 222,
         w: 328,
         h: 34,
-        text: "(may not work with all keyboards; some antivirus software flags low-level hooks)",
+        text: Some(TextKey::HintIntercept),
     },
     // Inline hotkey status line, empty until handle_hotkey_message_text sets
     // it; whether it renders as an error (red) or a notice (muted) is a
@@ -326,7 +329,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 262,
         w: 340,
         h: 16,
-        text: "",
+        text: None,
     },
     // ── On-screen display ───────────────────────────────────────────────
     ControlSpec {
@@ -337,7 +340,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 294,
         w: 376,
         h: 16,
-        text: "On-screen display",
+        text: Some(TextKey::HeaderOsd),
     },
     ControlSpec {
         id: ID_SEP_OSD,
@@ -347,7 +350,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 314,
         w: 376,
         h: 2,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT,
@@ -357,7 +360,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 326,
         w: 140,
         h: 20,
-        text: "Display duration",
+        text: Some(TextKey::LabelTimeout),
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_EDIT,
@@ -367,7 +370,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 324,
         w: 60,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_UPDOWN,
@@ -377,7 +380,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 324,
         w: 16,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT_UNIT,
@@ -387,7 +390,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 326,
         w: 30,
         h: 20,
-        text: "ms",
+        text: Some(TextKey::UnitMilliseconds),
     },
     ControlSpec {
         id: ID_LABEL_OPACITY,
@@ -397,7 +400,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 356,
         w: 140,
         h: 20,
-        text: "Opacity",
+        text: Some(TextKey::LabelOpacity),
     },
     ControlSpec {
         id: ID_OSD_OPACITY_EDIT,
@@ -407,7 +410,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 354,
         w: 60,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_OSD_OPACITY_UPDOWN,
@@ -417,7 +420,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 354,
         w: 16,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_OPACITY_UNIT,
@@ -427,7 +430,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 356,
         w: 20,
         h: 20,
-        text: "%",
+        text: Some(TextKey::UnitPercentOpacity),
     },
     // ── Advanced ────────────────────────────────────────────────────────
     ControlSpec {
@@ -438,7 +441,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 392,
         w: 376,
         h: 16,
-        text: "Advanced",
+        text: Some(TextKey::HeaderAdvanced),
     },
     ControlSpec {
         id: ID_SEP_ADVANCED,
@@ -448,7 +451,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 412,
         w: 376,
         h: 2,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_RESYNC_CHECK,
@@ -458,7 +461,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 422,
         w: 220,
         h: 20,
-        text: "Resync brightness every",
+        text: Some(TextKey::ResyncCheck),
     },
     ControlSpec {
         id: ID_RESYNC_EDIT,
@@ -468,7 +471,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 420,
         w: 60,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_RESYNC_UPDOWN,
@@ -478,7 +481,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 420,
         w: 16,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_RESYNC_UNIT,
@@ -488,7 +491,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 422,
         w: 20,
         h: 20,
-        text: "s",
+        text: Some(TextKey::UnitSecondsResync),
     },
     ControlSpec {
         id: ID_INACT_CHECK,
@@ -498,7 +501,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 452,
         w: 220,
         h: 20,
-        text: "Resync after inactivity of",
+        text: Some(TextKey::InactivityCheck),
     },
     ControlSpec {
         id: ID_INACT_EDIT,
@@ -508,7 +511,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 450,
         w: 60,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_INACT_UPDOWN,
@@ -518,7 +521,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 450,
         w: 16,
         h: 22,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LABEL_INACT_UNIT,
@@ -528,7 +531,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 452,
         w: 20,
         h: 20,
-        text: "s",
+        text: Some(TextKey::UnitSecondsInactivity),
     },
     ControlSpec {
         id: ID_LOG_CHECK,
@@ -538,7 +541,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 482,
         w: 140,
         h: 20,
-        text: "Write log file",
+        text: Some(TextKey::LogCheck),
     },
     // Same y as ID_LOG_CHECK's, not offset for its checkbox's own
     // vertical centering: a BUTTON checkbox centering its label per the
@@ -557,7 +560,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 482,
         w: 74,
         h: 20,
-        text: "Level:",
+        text: Some(TextKey::LabelLogLevel),
     },
     // The combo's `h` is the height of the *dropped-down* list, a Win32
     // quirk: the closed control renders at the font's line height regardless
@@ -575,7 +578,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 480,
         w: 76,
         h: 120,
-        text: "",
+        text: None,
     },
     ControlSpec {
         id: ID_LOG_HINT,
@@ -585,7 +588,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 506,
         w: 340,
         h: 32,
-        text: "(logging changes take effect after restart; debug and below log monitor serials and paths)",
+        text: Some(TextKey::HintLogging),
     },
     // ── Footer ──────────────────────────────────────────────────────────
     // One SysLink carries both links as flowing text, `iLink` (0 = config
@@ -602,7 +605,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 554,
         w: 250,
         h: 20,
-        text: "<a>Open config file</a> \u{b7} <a>Open log folder</a>",
+        text: Some(TextKey::FooterLinks),
     },
     ControlSpec {
         id: ID_RESTORE,
@@ -612,7 +615,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 586,
         w: 110,
         h: 26,
-        text: "Restore defaults",
+        text: Some(TextKey::ButtonRestoreDefaults),
     },
     ControlSpec {
         id: ID_CLOSE,
@@ -622,10 +625,10 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 586,
         w: 80,
         h: 26,
-        text: "Close",
+        text: Some(TextKey::ButtonClose),
     },
     // Which build is running, in the free space left of the buttons and
-    // vertically centred against them. `text` is empty because the string is
+    // vertically centred against them. `text` is `None` because the string is
     // only known at build time: `window`'s control creation substitutes
     // `core::version` output for this one id.
     //
@@ -640,7 +643,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         y: 590,
         w: 172,
         h: 18,
-        text: "",
+        text: None,
     },
 ];
 

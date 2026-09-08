@@ -37,6 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::core::controller::HotkeyPort;
+use crate::core::i18n::{Lang, Strings, strings};
 use crate::core::state::{BrightnessMessage, HotkeyOp};
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -642,10 +643,16 @@ impl HotkeyManager {
                             self.send_ack(HotkeyOp::Rebind, true, fallback_active, None);
                         }
                         Err(e) => {
+                            // This reaches the settings window's status
+                            // line, so its wording comes from the string
+                            // table; the two error details it joins are
+                            // `BrightnessError` `Display` output and stay
+                            // English.
                             let message = match self.restore_previous_bindings() {
-                                Some(restore_err) => {
-                                    format!("{e}; restore also failed: {restore_err}")
-                                }
+                                Some(restore_err) => strings(Lang::English)
+                                    .hotkey_status_restore_also_failed_fmt
+                                    .replace("{error}", &e.to_string())
+                                    .replace("{restore_error}", &restore_err),
                                 None => e.to_string(),
                             };
                             self.send_ack(HotkeyOp::Rebind, false, false, Some(message));
@@ -769,8 +776,52 @@ impl ParsedHotkey {
     pub const fn new(modifiers: HOT_KEY_MODIFIERS, vk_code: VIRTUAL_KEY) -> Self {
         Self { modifiers, vk_code }
     }
+
+    /// The hotkey as a user should read it, in `s`'s language.
+    ///
+    /// Identical to the [`Display`](std::fmt::Display) output in English; a
+    /// translation changes only what is shown, never what is stored. Key names
+    /// themselves are not translated — they name physical keycaps.
+    ///
+    /// Only tests call it so far, so it is `pub` rather than `pub(crate)`: it is
+    /// the seam a translated UI renders through, and wiring it today would
+    /// re-render a hand-edited `"ctrl+shift+up"` as `"Ctrl+Shift+Up"` on screen.
+    ///
+    /// The `"Unknown"` key fallback stays English and out of [`Strings`]: it is
+    /// unreachable for any hotkey [`parse_hotkey`] produced — parsing rejects a
+    /// key with no name — so it can only surface a `ParsedHotkey` built from a
+    /// raw VK code, where it reads as a diagnostic rather than as a caption.
+    #[must_use]
+    pub fn display_text(&self, s: &Strings) -> String {
+        let mut parts = Vec::new();
+
+        if self.modifiers.contains(MOD_CONTROL) {
+            parts.push(s.key_mod_ctrl);
+        }
+        if self.modifiers.contains(MOD_ALT) {
+            parts.push(s.key_mod_alt);
+        }
+        if self.modifiers.contains(MOD_SHIFT) {
+            parts.push(s.key_mod_shift);
+        }
+        if self.modifiers.contains(MOD_WIN) {
+            parts.push(s.key_mod_win);
+        }
+
+        let key_name = VK_TO_NAME
+            .iter()
+            .find(|(_, vk)| *vk == self.vk_code)
+            .map_or("Unknown", |(name, _)| name.as_str());
+
+        parts.push(key_name);
+        parts.join(s.key_separator)
+    }
 }
 
+/// The canonical hotkey format: English, stable across languages and versions.
+/// This is what `config.json` stores and what [`parse_hotkey`] reads back, so
+/// it must never be localized. Use [`ParsedHotkey::display_text`] for anything
+/// a user reads.
 impl std::fmt::Display for ParsedHotkey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut parts = Vec::new();
@@ -1356,6 +1407,63 @@ mod tests {
     #[test]
     fn test_parse_multiple_keys_fails() {
         assert!(parse_hotkey("Ctrl+A+B").is_err());
+    }
+
+    #[test]
+    fn the_stored_format_is_unchanged_by_the_display_split() {
+        // config.json round-trips through Display; if this ever changes, every
+        // existing config file and every hand edit breaks.
+        let parsed = parse_hotkey("Ctrl+Shift+Up").expect("fixture must parse");
+        assert_eq!(parsed.to_string(), "Ctrl+Shift+Up");
+
+        let parsed = parse_hotkey("Ctrl+Alt+Win+F5").expect("fixture must parse");
+        assert_eq!(parsed.to_string(), "Ctrl+Alt+Win+F5");
+    }
+
+    #[test]
+    fn english_display_text_matches_the_stored_format() {
+        use crate::core::i18n::ENGLISH;
+
+        // The two renderings duplicate the modifier and key-name block, and
+        // config.json round-trips through Display, so any divergence would
+        // write a string back that parse_hotkey cannot read. Exhaustive over
+        // every nameable key and every modifier combination, plus a VK code
+        // with no name, which is the one branch parse_hotkey cannot reach.
+        let nameless = VIRTUAL_KEY(0);
+        assert!(
+            !VK_TO_NAME.iter().any(|(_, vk)| *vk == nameless),
+            "the fallback case below only means something while VK 0 has no name"
+        );
+
+        let keys: Vec<VIRTUAL_KEY> = VK_TO_NAME
+            .iter()
+            .map(|(_, vk)| *vk)
+            .chain(std::iter::once(nameless))
+            .collect();
+
+        for &vk in &keys {
+            for mask in 0..16_u16 {
+                let mut modifiers = HOT_KEY_MODIFIERS(0);
+                if mask & 1 != 0 {
+                    modifiers |= MOD_CONTROL;
+                }
+                if mask & 2 != 0 {
+                    modifiers |= MOD_ALT;
+                }
+                if mask & 4 != 0 {
+                    modifiers |= MOD_SHIFT;
+                }
+                if mask & 8 != 0 {
+                    modifiers |= MOD_WIN;
+                }
+                let parsed = ParsedHotkey::new(modifiers, vk);
+                assert_eq!(
+                    parsed.display_text(&ENGLISH),
+                    parsed.to_string(),
+                    "English display text must be identical to the stored format"
+                );
+            }
+        }
     }
 
     #[test]

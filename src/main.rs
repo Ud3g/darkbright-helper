@@ -25,6 +25,7 @@ use windows::core::BOOL;
 
 use darkbright_helper::core::config::{Config, ConfigLoad, ConfigLoadOutcome, ConfigNotice};
 use darkbright_helper::core::controller::Controller;
+use darkbright_helper::core::i18n::{Lang, strings};
 use darkbright_helper::core::logfile::{LOG_FILE_NAME, LOG_MAX_BYTES, RotatingFileWriter};
 use darkbright_helper::core::panic_hook;
 use darkbright_helper::core::reconcile::{
@@ -549,6 +550,8 @@ fn main() {
     // record panics through the logger before the default handler runs.
     panic_hook::install();
 
+    let s = strings(Lang::default());
+
     // Enforce a single instance per logon session before spawning any worker,
     // window, or hotkey. A second launch informs the user and exits, so it
     // leaves no duplicate tray icon, overlay, or failed hotkey registration.
@@ -560,7 +563,7 @@ fn main() {
             Ok(InstanceLock::Acquired(guard)) => (Some(guard), None),
             Ok(InstanceLock::AlreadyRunning) => {
                 log::info!("Another instance is already running; exiting");
-                show_info_message_box("darkbright-helper", "darkbright-helper is already running.");
+                show_info_message_box("darkbright-helper", s.msgbox_already_running);
                 return;
             }
             Err(e) => (None, Some(e)),
@@ -607,14 +610,8 @@ fn main() {
         Err(e) => {
             log::error!(error:% = e; "Fatal error starting the DDC worker");
             show_error_message_box(
-                "darkbright-helper - Startup Error",
-                &format!(
-                    "darkbright-helper could not start:
-
-                     {e}
-
-                     The system would not start a thread, which usually means it                      is out of resources. Close some applications, or restart the                      computer, and try again."
-                ),
+                &format!("darkbright-helper - {}", s.msgbox_title_startup_error),
+                &e.user_message(s),
             );
             return;
         }
@@ -694,33 +691,24 @@ fn main() {
             // below applies to it, and the title would misattribute the cause.
             let (title, message) = if matches!(e, BrightnessError::ThreadSpawn { .. }) {
                 (
-                    "darkbright-helper - Startup Error",
-                    format!(
-                        "darkbright-helper could not start:\n\n\
-                     {e}\n\n\
-                     The system would not start a thread, which usually means it \
-                     is out of resources. Close some applications, or restart the \
-                     computer, and try again."
-                    ),
+                    format!("darkbright-helper - {}", s.msgbox_title_startup_error),
+                    e.user_message(s),
                 )
             } else {
                 let config_path = Config::default_path().map_or_else(
-                    || "config file".to_string(),
+                    || s.msgbox_config_file_fallback.to_string(),
                     |p| p.to_string_lossy().to_string(),
                 );
                 (
-                    "darkbright-helper - Hotkey Error",
+                    format!("darkbright-helper - {}", s.msgbox_title_hotkey_error),
                     format!(
-                        "Failed to register hotkeys:\n\n\
-                         {e}\n\n\
-                         Possible solutions:\n\
-                         • Close other applications that might be using these hotkeys\n\
-                         • Change the hotkey configuration in:\n  {config_path}\n\
-                         • Restart the application after making changes"
+                        "{}\n\n{e}\n\n{}",
+                        s.msgbox_hotkey_failed_lead,
+                        s.msgbox_hotkey_advice_fmt.replace("{path}", &config_path)
                     ),
                 )
             };
-            show_error_message_box(title, &message);
+            show_error_message_box(&title, &message);
             return;
         }
     };

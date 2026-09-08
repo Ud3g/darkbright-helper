@@ -14,10 +14,9 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::core::w;
 
-use super::osd::{OsdMetrics, OsdRenderState};
+use crate::core::i18n::strings;
 
-/// Error message displayed when DDC communication fails.
-const ERROR_MESSAGE: &str = "DDC Error - Adjustment failed";
+use super::osd::{OsdMetrics, OsdRenderState};
 
 /// Hardware brightness bar fill color (golden/orange).
 const BAR_FILL_COLOR: u32 = 0x00D0_A030; // BGR: 48, 160, 208
@@ -213,7 +212,12 @@ pub(super) unsafe fn paint(
     draw_brightness_bars(mem_dc, client_rect, state, metrics);
 
     if state.is_error {
-        draw_error_message(mem_dc, client_rect, ERROR_MESSAGE, metrics);
+        draw_error_message(
+            mem_dc,
+            client_rect,
+            strings(state.lang).osd_ddc_error,
+            metrics,
+        );
     }
 
     buffer.blit_to(hdc);
@@ -487,5 +491,20 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
         SetBkMode(hdc, TRANSPARENT);
         SetTextColor(hdc, COLORREF(ERROR_TEXT_COLOR));
         let _ = TextOutW(hdc, x, y, &wide_text);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_error_row_text_comes_from_the_string_table() {
+        use crate::core::i18n::{Lang, strings};
+
+        // The renderer must not carry its own copy of this text; a translation
+        // would then only change one of the two.
+        assert_eq!(
+            strings(Lang::English).osd_ddc_error,
+            "DDC Error - Adjustment failed"
+        );
     }
 }
