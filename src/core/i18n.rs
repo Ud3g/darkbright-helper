@@ -74,7 +74,7 @@ impl Lang {
     /// single-character subtag (an extension or private-use singleton) is
     /// removed too. Case-insensitive. `None` when nothing matches.
     #[must_use]
-    pub fn lookup(tag: &str) -> Option<Lang> {
+    pub(crate) fn lookup(tag: &str) -> Option<Lang> {
         let lowered = tag.to_ascii_lowercase();
         let mut subtags: Vec<&str> = lowered.split('-').collect();
         loop {
@@ -106,7 +106,7 @@ impl Lang {
 }
 
 /// The `language` config value that means "follow the OS display language".
-pub const SYSTEM_LANGUAGE: &str = "system";
+pub(crate) const SYSTEM_LANGUAGE: &str = "system";
 
 /// The parsed `language` config value: follow the OS, or one fixed language.
 ///
@@ -127,7 +127,7 @@ impl LanguageSetting {
     /// unshipped tag included, is `None`, so the config loader reports it
     /// like any other unparseable field.
     #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
         if value.eq_ignore_ascii_case(SYSTEM_LANGUAGE) {
             return Some(Self::System);
         }
@@ -137,7 +137,7 @@ impl LanguageSetting {
     /// The value written to the config file: [`SYSTEM_LANGUAGE`] or the
     /// language's tag. A value read as `de-AT` is written back as `de`.
     #[must_use]
-    pub fn wire(self) -> &'static str {
+    pub(crate) fn wire(self) -> &'static str {
         match self {
             Self::System => SYSTEM_LANGUAGE,
             Self::Fixed(lang) => lang.tag(),
@@ -736,6 +736,21 @@ pub fn strings(lang: Lang) -> &'static Strings {
 #[cfg(test)]
 mod tests {
     use super::{ENGLISH, Lang, LanguageSetting, SYSTEM_LANGUAGE, Strings, TextKey, strings};
+
+    /// `Lang::index` panics on a variant missing from [`Lang::ALL`], and it
+    /// runs on the tray and settings language-push paths, so the list has to
+    /// stay complete. The `match` names every variant with no wildcard arm, so
+    /// a new one fails to compile here until it is added to both.
+    #[test]
+    fn every_language_variant_appears_in_all() {
+        for lang in [Lang::English, Lang::German] {
+            let listed = match lang {
+                Lang::English => Lang::ALL.contains(&Lang::English),
+                Lang::German => Lang::ALL.contains(&Lang::German),
+            };
+            assert!(listed, "{lang:?} is missing from Lang::ALL");
+        }
+    }
 
     #[test]
     fn every_language_tag_is_unique_and_lowercase() {

@@ -906,8 +906,8 @@ retrievable artifact for field reports. Mechanics:
   loader does not log what it finds: `Config::load_or_recover` returns the
   recovery outcome and a list of `ConfigNotice`s (unknown keys, repaired
   values, version mismatch, a failed backup refresh) as data, and `main`
-  logs them — together with a fail-open single-instance guard failure —
-  right after the attach. The file therefore starts with a version-stamped
+  logs them — together with a fail-open single-instance guard failure and the
+  resolved UI language — right after the attach. The file therefore starts with a version-stamped
   "File logging enabled" line followed by the config outcome and any
   repairs; only the startup banner and the debug-level path lines are
   console-only. This is the same "log at the point of handling" rule the
@@ -915,7 +915,9 @@ retrievable artifact for field reports. Mechanics:
   after the sink exists. The one thing that precedes even the single-instance guard is the
   read of the OS's UI-language list (`GetUserPreferredUILanguages`), a kernel32 query with no
   side effects, so that the "already running" box a second instance shows has a language
-  without reading the config file.
+  without reading the config file. A failure of that read is the one startup line the file
+  cannot carry: the error is only in hand at the call itself, well before the config that
+  decides whether a file sink exists at all.
 - **Access:** the tray menu's "Open Log Folder" entry opens the directory in
   Explorer.
 - **Attach failure:** if the sink cannot be built (no `APPDATA`, an unwritable

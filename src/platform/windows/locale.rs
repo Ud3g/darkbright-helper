@@ -36,10 +36,16 @@ impl LanguageSource for WindowsLanguageSource {
 fn read_preferred_ui_languages() -> windows::core::Result<Vec<String>> {
     let mut count: u32 = 0;
     let mut size: u32 = 0;
+    // SAFETY: the sizing call writes only through the two `u32` out-pointers,
+    // both of which point at live locals; passing `None` for the buffer is
+    // what selects that mode, so nothing is written through a string pointer.
     unsafe {
         GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &raw mut count, None, &raw mut size)?;
     }
-    let mut buf = vec![0u16; usize::try_from(size).unwrap_or(0)];
+    let Ok(len) = usize::try_from(size) else {
+        return Ok(Vec::new());
+    };
+    let mut buf = vec![0u16; len];
     // SAFETY: `buf` is exactly `size` units long, the size the first call
     // asked for, and `size` is passed back alongside it so the call cannot
     // write past the end; `PWSTR` points into `buf`, which outlives the call.

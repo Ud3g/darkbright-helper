@@ -583,7 +583,6 @@ fn main() {
 
     let lang = config.language_setting().resolve(&os_languages);
     let s = strings(lang);
-    log::info!(lang = lang.tag(), setting = config.language.as_str(); "UI language resolved");
 
     // Attach the opt-in rolling file log now that the config is known. The
     // outcome outlives this block: a failure can only be reported once the
@@ -607,6 +606,7 @@ fn main() {
     if let Some(e) = &guard_failure {
         log::error!(error:% = e; "Single-instance check failed; continuing without guard");
     }
+    log::info!(lang = lang.tag(), setting = config.language.as_str(); "UI language resolved");
     report_config_load(&source, &notices);
 
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
@@ -650,7 +650,7 @@ fn main() {
 
     let mut controller = Controller::new(
         config.clone(),
-        os_languages.clone(),
+        os_languages,
         osd,
         OverlayManager::default(),
         supervisor,
@@ -799,15 +799,18 @@ fn main() {
             }
         }
 
-        // No catch-up on handle arrival: the tray is spawned with the startup
-        // language, and the only thing that can change it is the settings
-        // window, which opens from the tray menu.
+        // The change is only recorded once it has actually been pushed, so a
+        // language set while the tray handle is still missing is delivered
+        // when the handle arrives. That cannot happen today — the tray is
+        // spawned with the startup language and only the settings window,
+        // which opens from the tray menu, can change it — but nothing here
+        // depends on that ordering holding.
         let current_lang = controller.lang();
-        if current_lang != last_lang {
+        if current_lang != last_lang
+            && let Some(handle) = tray_status
+        {
             last_lang = current_lang;
-            if let Some(handle) = tray_status {
-                handle.set_language(current_lang);
-            }
+            handle.set_language(current_lang);
         }
 
         // Bounded wait: this thread must service both the MPSC channel and

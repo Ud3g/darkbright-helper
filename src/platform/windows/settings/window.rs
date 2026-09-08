@@ -953,6 +953,9 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
             }
         }
         let title = wide(s.window_title);
+        // SAFETY: `SetWindowTextW` copies the NUL-terminated string `PCWSTR`
+        // points at before it returns, and `title` still owns that buffer for
+        // the whole call.
         unsafe {
             let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));
         }
