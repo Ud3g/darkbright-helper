@@ -511,13 +511,15 @@ impl OsdWindow {
     ///
     /// * `opacity` - Window opacity from 0.0 to 1.0.
     /// * `timeout_ms` - Auto-hide timeout in milliseconds.
+    /// * `lang` - Language the error row is rendered in until `set_language` changes it.
     ///
     /// # Errors
     ///
     /// Returns an error if window creation or opacity setting fails.
-    pub fn new(opacity: f32, timeout_ms: u32) -> Result<Self> {
+    pub fn new(opacity: f32, timeout_ms: u32, lang: Lang) -> Result<Self> {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
+        OSD_STATE.with(|s| s.borrow_mut().lang = lang);
 
         Ok(Self { hwnd, timeout_ms })
     }

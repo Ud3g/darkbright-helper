@@ -620,7 +620,7 @@ fn main() {
 
     // The OSD is built here so its failure can abort startup; the controller
     // only receives it.
-    let osd = match OsdWindow::new(config.osd.opacity, config.osd.timeout_ms) {
+    let osd = match OsdWindow::new(config.osd.opacity, config.osd.timeout_ms, Lang::default()) {
         Ok(osd) => osd,
         Err(e) => {
             log::error!(error:% = e; "Failed to create OSD window");
