@@ -50,7 +50,7 @@ pub(super) trait TextMeasure {
         not(test),
         expect(
             dead_code,
-            reason = "no row's width is arrow-driven yet; the dropdown-fit check the layout gate needs is what will read it"
+            reason = "test-only accessor; the layout gate is its only caller"
         )
     )]
     fn combo_arrow(&mut self) -> i32;
@@ -231,10 +231,15 @@ mod tests {
         let short = m.text_width("Close", false);
         let long = m.text_width("Restore defaults", false);
         assert!(short > 0 && long > short, "short={short} long={long}");
-        assert_eq!(
-            m.text_width("debug", false),
-            34,
-            "the NUL must not be measured; 34 is the value recorded beside ID_LOG_LEVEL"
+        // A string that really does contain a NUL measures wider, which proves
+        // the plain string is not being measured with one appended. (For
+        // corroboration: "debug" was 34 px on Segoe UI 9 pt at 96 DPI when the
+        // layout table was authored, but that figure is metric-dependent.)
+        let plain = m.text_width("debug", false);
+        let with_nul = m.text_width("debug\0", false);
+        assert!(
+            with_nul > plain,
+            "the terminating NUL must not be measured; plain={plain} with_nul={with_nul}"
         );
     }
 

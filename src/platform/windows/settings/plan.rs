@@ -99,7 +99,7 @@ impl Plan {
         not(test),
         expect(
             dead_code,
-            reason = "no non-test caller until the settings window wires the planner in"
+            reason = "test-only accessor; the layout gate is its only caller"
         )
     )]
     pub(super) fn get(&self, id: u16) -> Option<&Placed> {
@@ -338,6 +338,7 @@ fn control_run(col: Col, dpi: u32) -> i32 {
 }
 
 /// Computes the whole layout for `lang` at `dpi`.
+#[must_use]
 pub(super) fn plan_layout(
     lang: Lang,
     dpi: u32,

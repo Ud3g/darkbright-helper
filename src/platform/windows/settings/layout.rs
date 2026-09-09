@@ -248,8 +248,10 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     },
     // 120 wide, unlike the log-level combo's 76: the English entry "System
     // default" plus the 17px dropdown arrow does not fit 76 at this font.
-    // The two combos in this column therefore end at different x positions;
-    // aligning the column properly is layout work for the next cycle.
+    // Each combo is sized to its own content by design — the log-level combo's
+    // 76 makes it end at 326, flush with the spinner rows' right edge, and
+    // there is no third edge the two could share without breaking either that
+    // alignment or this combo's fit.
     ControlSpec {
         id: ID_LANGUAGE,
         class: "COMBOBOX",

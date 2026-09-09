@@ -1745,8 +1745,9 @@ because the footer's total requirement is one of the inputs to the window's
 own width, a long development build string widens the window instead of
 being clipped. Re-measured NUL-free at 96 DPI in the dialog font: `v0.10.0`
 is 36px, `Close` 35px, `Restore defaults` 84px, and its German translation
-`Auf Standard zurücksetzen` 140px. An English release footer needs 320px,
-under the 400px floor, so the floor decides the window's width there; a
+`Auf Standard zurücksetzen` 140px. An English release footer needs 264px and
+its German counterpart 320px, both under the 400px floor, so the floor
+decides the window's width in a released build; a
 development build's longer string (`v0.10.0+64.gc4687e5.dirty (dev)`, 165px)
 needs 393px, still under the floor. In German, the equivalent development
 footer needs 449px, and the window grows to that width — a released build's

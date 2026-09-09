@@ -2030,8 +2030,12 @@ fn create_settings_window(
     let target = target_monitor()?;
     let dpi = target.dpi;
     let Some(mut measure) = GdiMeasure::new(dpi) else {
-        log::warn!(dpi; "No measurement context; the settings window cannot be laid out");
-        return Err(last_error_as_brightness_error("GdiMeasure::new"));
+        // No last-error read: `GdiMeasure::new` logs and frees on its own way
+        // out, so whatever code it left behind is not the one that failed.
+        return Err(BrightnessError::windows_api(
+            "GdiMeasure::new (settings layout measurement)",
+            0,
+        ));
     };
     let plan = plan_layout(lang, dpi, &version_label(), &mut measure);
     drop(measure);

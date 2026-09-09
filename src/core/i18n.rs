@@ -716,7 +716,7 @@ pub(crate) const GERMAN: Strings = Strings {
     msgbox_title_startup_error: "Startfehler",
     msgbox_title_hotkey_error: "Hotkey-Fehler",
     msgbox_title_autostart: "Autostart",
-    msgbox_title_restore_defaults: "Standardwerte wiederherstellen",
+    msgbox_title_restore_defaults: "Auf Standard zurücksetzen",
     msgbox_startup_failed_lead: "darkbright-helper konnte nicht gestartet werden:",
     msgbox_thread_spawn_advice: "Das System hat keinen Thread gestartet, was meist bedeutet, dass die Ressourcen knapp sind. Einige Anwendungen schließen oder den Computer neu starten und es erneut versuchen.",
     msgbox_hotkey_failed_lead: "Hotkeys konnten nicht registriert werden:",
