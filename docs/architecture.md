@@ -1784,7 +1784,10 @@ error and a failed restore together takes its connective wording from
 `hotkey_status_restore_also_failed_fmt`, and only the two embedded details stay English. The
 canonical hotkey format (§3) and the log-level tokens (§8), because both round-trip through
 `config.json` — the picker's entries and `ParsedHotkey::display_text` are display-only, and the
-stored value is resolved from the combo's selected index, never from its text. Config field names,
+stored value is resolved from the combo's selected index, never from its text. The rule would
+permit a translation in parentheses alongside the token, but the picker shows the bare token in
+every language instead: the longest gloss needs roughly twice the combo's width, and widening the
+combo would cost the window more room than a diagnostic picker is worth. Config field names,
 the product name, and the EDID fallback model name (`"Generic Monitor"`), which is part of a
 monitor's identity rather than a caption.
 
