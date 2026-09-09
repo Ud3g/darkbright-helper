@@ -30,7 +30,7 @@ use super::window::build_font;
     not(test),
     expect(
         dead_code,
-        reason = "no non-test caller until the layout planner lands"
+        reason = "no non-test caller until the settings window wires the measurer in"
     )
 )]
 const CHECKBOX_INDICATOR_FALLBACK: i32 = 13;
@@ -73,7 +73,7 @@ pub(super) trait TextMeasure {
     not(test),
     expect(
         dead_code,
-        reason = "no non-test caller until the layout planner lands"
+        reason = "no non-test caller until the settings window wires the measurer in"
     )
 )]
 pub(super) struct GdiMeasure {
@@ -91,7 +91,7 @@ pub(super) struct GdiMeasure {
     not(test),
     expect(
         dead_code,
-        reason = "no non-test caller until the layout planner lands"
+        reason = "no non-test caller until the settings window wires the measurer in"
     )
 )]
 impl GdiMeasure {

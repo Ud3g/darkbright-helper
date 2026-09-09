@@ -14,7 +14,8 @@
 use crate::core::i18n::{Lang, strings};
 
 use super::layout::{
-    BASE_WINDOW_HEIGHT, BASE_WINDOW_WIDTH, CONTROLS, ID_VERSION, is_section_header, scale_dimension,
+    BASE_WINDOW_HEIGHT, BASE_WINDOW_WIDTH, CONTROLS, ControlSpec, ID_VERSION, is_section_header,
+    scale_dimension,
 };
 use super::measure::TextMeasure;
 
@@ -73,6 +74,7 @@ pub(super) struct Plan {
 
 impl Plan {
     /// The placement of `id`, or `None` if the table has no such control.
+    #[must_use]
     #[cfg_attr(
         not(test),
         expect(
@@ -95,7 +97,7 @@ impl Plan {
         reason = "no non-test caller until the settings window wires the planner in"
     )
 )]
-fn caption<'a>(spec: &super::layout::ControlSpec, lang: Lang, version_text: &'a str) -> &'a str {
+fn caption<'a>(spec: &ControlSpec, lang: Lang, version_text: &'a str) -> &'a str {
     if spec.id == ID_VERSION {
         return version_text;
     }
@@ -118,6 +120,8 @@ pub(super) fn plan_layout(
 ) -> Plan {
     // Every row is Fixed for now, so none of these are needed yet — the
     // anchors that read a caption or a measurement to move a control follow.
+    // `caption` is listed here too: its own `expect(dead_code)` only covers
+    // non-test builds, and nothing calls it from the test module either.
     let _ = (
         &lang,
         version_text,
