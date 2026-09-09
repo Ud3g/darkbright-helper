@@ -20,7 +20,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::core::i18n::TextKey;
 use crate::error::{BrightnessError, Result};
 
-use super::plan::Anchor;
+use super::plan::{Anchor, Col};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Control IDs
@@ -66,7 +66,7 @@ pub(super) const ID_VERSION: u16 = 144;
 const ID_HEADER_GENERAL: u16 = 200;
 const ID_SEP_GENERAL: u16 = 201;
 const ID_LABEL_STEP: u16 = 202;
-const ID_LABEL_STEP_UNIT: u16 = 203;
+pub(super) const ID_LABEL_STEP_UNIT: u16 = 203;
 const ID_HEADER_HOTKEYS: u16 = 204;
 const ID_SEP_HOTKEYS: u16 = 205;
 const ID_LABEL_HK_UP: u16 = 206;
@@ -81,7 +81,7 @@ const ID_HEADER_ADVANCED: u16 = 214;
 const ID_SEP_ADVANCED: u16 = 215;
 const ID_LABEL_RESYNC_UNIT: u16 = 216;
 const ID_LABEL_INACT_UNIT: u16 = 217;
-const ID_LABEL_LOG_LEVEL: u16 = 218;
+pub(super) const ID_LABEL_LOG_LEVEL: u16 = 218;
 const ID_LABEL_LANGUAGE: u16 = 219;
 
 /// Whether `id` is one of the four bold section-header labels, which need
@@ -212,7 +212,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::LabelLanguage),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Label(Col::B),
     },
     // 120 wide, unlike the log-level combo's 76: the English entry "System
     // default" plus the 17px dropdown arrow does not fit 76 at this font.
@@ -227,7 +227,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 120,
         h: 120,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_AUTOSTART,
@@ -249,7 +249,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::LabelStep),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Label(Col::B),
     },
     ControlSpec {
         id: ID_STEP_EDIT,
@@ -260,7 +260,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_STEP_UPDOWN,
@@ -271,7 +271,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_STEP_UNIT,
@@ -282,7 +282,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentStep),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     // ── Hotkeys ─────────────────────────────────────────────────────────
     ControlSpec {
@@ -316,7 +316,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyUp),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Label(Col::A),
     },
     ControlSpec {
         id: ID_HK_UP,
@@ -327,7 +327,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 218,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::ControlStretch(Col::A),
     },
     ControlSpec {
         id: ID_LABEL_HK_DOWN,
@@ -338,7 +338,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyDown),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Label(Col::A),
     },
     ControlSpec {
         id: ID_HK_DOWN,
@@ -349,7 +349,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 218,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::ControlStretch(Col::A),
     },
     ControlSpec {
         id: ID_INTERCEPT,
@@ -420,7 +420,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelTimeout),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Label(Col::B),
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_EDIT,
@@ -431,7 +431,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_UPDOWN,
@@ -442,7 +442,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT_UNIT,
@@ -453,7 +453,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 30,
         h: 20,
         text: Some(TextKey::UnitMilliseconds),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_OPACITY,
@@ -464,7 +464,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelOpacity),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Label(Col::B),
     },
     ControlSpec {
         id: ID_OSD_OPACITY_EDIT,
@@ -475,7 +475,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_OSD_OPACITY_UPDOWN,
@@ -486,7 +486,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_OPACITY_UNIT,
@@ -497,7 +497,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentOpacity),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     // ── Advanced ────────────────────────────────────────────────────────
     ControlSpec {
@@ -531,7 +531,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::ResyncCheck),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Checkbox(Col::B),
     },
     ControlSpec {
         id: ID_RESYNC_EDIT,
@@ -542,7 +542,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_RESYNC_UPDOWN,
@@ -553,7 +553,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_RESYNC_UNIT,
@@ -564,7 +564,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsResync),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_INACT_CHECK,
@@ -575,7 +575,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::InactivityCheck),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Checkbox(Col::B),
     },
     ControlSpec {
         id: ID_INACT_EDIT,
@@ -586,7 +586,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_INACT_UPDOWN,
@@ -597,7 +597,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_INACT_UNIT,
@@ -608,7 +608,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsInactivity),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LOG_CHECK,
@@ -619,7 +619,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LogCheck),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::CheckboxRun,
     },
     // Same y as ID_LOG_CHECK's, not offset for its checkbox's own
     // vertical centering: a BUTTON checkbox centering its label per the
@@ -639,7 +639,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 74,
         h: 20,
         text: Some(TextKey::LabelLogLevel),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::InlineLabel,
     },
     // The combo's `h` is the height of the *dropped-down* list, a Win32
     // quirk: the closed control renders at the font's line height regardless
@@ -658,7 +658,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 76,
         h: 120,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_LOG_HINT,
