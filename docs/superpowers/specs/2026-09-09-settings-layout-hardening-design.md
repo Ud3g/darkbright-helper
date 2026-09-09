@@ -19,16 +19,16 @@ defects, recorded in the manual pass of 2026-09-08:
    everything to its left.
 2. The log-level combo shows `warn (War`. `ID_LOG_LEVEL` is 76 px wide, chosen so its right
    edge aligns with the spinner rows at x=326; the German entries run to 136 px.
-3. `Protokolldatei schreiben` (134 px plus the checkbox indicator) is cut and collides with the
-   `Stufe:` label hard-placed at x=170, with only 146 px in front of it.
+3. `Protokolldatei schreiben` (134 px plus 17 px of checkbox indicator and gap) is cut and
+   collides with the `Stufe:` label hard-placed at x=170, with only 146 px in front of it.
 
-A fourth was found by measurement rather than by eye: the footer `SysLink` needs 278 px against
-its declared 250, while 126 px of the window sit unused to its right.
+A fourth is visible only in measurement: the footer `SysLink` needs 278 px against its declared
+250, while 126 px of the window sit unused to its right.
 
-The diagnostic that was supposed to catch all of this, `report_label_overflow`, caught only the
-first. It never measures combo *entries* — they are not `CONTROLS` rows — and it grants checkbox
-captions the control's full width, ignoring the indicator the caption does not get to use. Until
-it sees what a person saw, it cannot be a gate.
+The diagnostic that was supposed to catch all of this, `report_label_overflow`, caught the first
+and the fourth. It never measures combo *entries* — they are not `CONTROLS` rows — and it grants
+checkbox captions the control's full width, ignoring the indicator the caption does not get to
+use. Until it sees what a person saw, it cannot be a gate.
 
 This cycle turns `layout()` from a table of chosen numbers into measure-then-place, fixes the
 four defects, and arms the repaired diagnostic in CI. After it, a third language is a
@@ -53,27 +53,44 @@ translation, not a layout project.
 
 **Out of scope:**
 
-- Full vertical flow (`y` computed cumulatively, `BASE_WINDOW_HEIGHT` derived). Rows keep their
-  authored `y`; only the two wrapping hints move anything.
+- Full vertical flow (`y` computed cumulatively for every row, `BASE_WINDOW_HEIGHT` derived).
+  Rows keep their authored `y`; only the two wrapping hints can move anything.
 - A third language, pseudo-localisation, right-to-left, CJK font selection.
 - The OSD's unmeasured `draw_error_message` (§6) and the tray menu's column widths. Both are
   named in the 2026-09-07 review; neither is a defect today.
 - Re-theming the open window on a system light/dark change, and `MessageBoxW`'s
   Windows-supplied button captions. Both were examined in the manual pass and accepted.
+- The window's height against a 1080p work area at 150% scaling. It already does not fit, and
+  did not before this cycle — see §7.
+
+## Units
+
+**The planner works in physical pixels at the DPI it is planning for.** Every authored constant
+from `CONTROLS` enters through `scale_dimension(value, dpi)`, every measurement is taken with
+`build_font(dpi, weight)`, and every system or theme query takes an explicit DPI argument.
+
+This is stated first because getting it wrong is invisible: at 96 DPI logical and physical
+pixels coincide, so a formula that mixes the two is correct at 96 and silently wrong everywhere
+else — and a gate built on the same mixed arithmetic would check it against itself and pass.
+Scaling a 96-DPI measurement is not a substitute for measuring at the target DPI. The checkbox
+indicator makes the point without ambiguity: `OpenThemeDataForDpi` reports 13 / 16 / 16 / 16 px
+at 96 / 120 / 144 / 192, which is neither constant nor proportional.
+
+Every number quoted in this document is at 96 DPI, where the two units coincide.
 
 ## Measurements
 
-All at 96 DPI, Segoe UI 9 pt, through `DrawTextW`/`DT_CALCRECT` with the window's own fonts —
-the same mechanism this design puts into production.
+At 96 DPI, Segoe UI 9 pt, through `DrawTextW`/`DT_CALCRECT` with the window's own fonts — the
+same mechanism this design puts into production.
 
 | Quantity | English | German | Available today |
 |---|---:|---:|---|
 | Widest label, hotkey column (x=24) | 94 | 113 | 140 |
 | Widest label, spinner column (x=24) | 154 | 181 | 220 |
 | `ID_RESTORE` | 90 | 171 | 110 |
-| `ID_LOG_CHECK` caption + 13 px indicator | 90 | 151 | 146 |
+| `ID_LOG_CHECK` caption + 17 (13 indicator + 4 gap) | 90 | 151 | 146 |
 | `ID_LINK_CONFIG`, `<a>` markup stripped | 183 | 278 | 250 |
-| Widest log-level entry | 40 | 136 | 76 |
+| Widest log-level entry (`debug` / `trace (…)`) | 40 | 136 | 76 |
 | `Strg+Umschalt+Nach-Oben` | 80 | 155 | 218 |
 | Tooltip, all four warnings (UTF-16 units) | 99 | 113 | 127 |
 
@@ -85,9 +102,15 @@ of room. The derived width earns its keep at language three: Russian scales
 `Brightness step per keypress` to roughly 293 px (2026-09-07 review §4.1), which does break the
 column.
 
-**The checkbox indicator is measurable.** `GetThemePartSize(BUTTON, BP_CHECKBOX, TS_TRUE)`
-returns 13×13 here. The repaired diagnostic asks Windows rather than carrying the 17 px rule of
-thumb from the manual pass.
+**The checkbox indicator is measurable, and dark mode is the binding case.**
+`OpenThemeDataForDpi(None, "BUTTON", dpi)` plus `GetThemePartSize(BP_CHECKBOX, TS_TRUE)` gives
+the indicator; `dark.rs:596` already defines `CHECKBOX_TEXT_GAP = 4` and `dark.rs:649,680` is
+the code that actually decides where a caption starts in this app — it measures the glyph per
+paint and draws at `glyph_rect.right + CHECKBOX_TEXT_GAP`. A system-drawn light-mode checkbox
+consumes less (`BCM_GETIDEALSIZE` returns caption + 12), so sizing for the dark-mode painter
+covers both. The planner therefore shares `CHECKBOX_TEXT_GAP` with `dark.rs` rather than
+inventing a second constant, and falls back to 13 px if the theme query fails, exactly as
+`dark.rs` already does.
 
 ## Design
 
@@ -97,43 +120,56 @@ thumb from the manual pass.
 
 | Part | Location | Character |
 |---|---|---|
-| `TextMeasure` trait + `GdiMeasure` | new `settings/measure.rs` | All the `unsafe`. Builds the two dialog fonts and a memory DC, selects the right font, calls `DrawTextW`, queries the themed indicator size. `Drop` frees fonts and DC. |
+| `TextMeasure` trait + `GdiMeasure` | new `settings/measure.rs` | All the `unsafe`. Builds the two dialog fonts and a memory DC, selects the right font, calls `DrawTextW`, queries the themed indicator size and the DPI-scaled system metrics. `Drop` restores the DC's original font, then frees both fonts and the DC. |
 | `plan_layout(lang, dpi, version_text, &mut impl TextMeasure) -> Plan` | new `settings/plan.rs` | Pure arithmetic over `CONTROLS` plus measurements. No `HWND`. |
-| `apply(hwnd, &Plan)` | `layout.rs` | `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos`, then the frame resize. |
+| `apply(hwnd, &Plan)` | `layout.rs` | `BeginDeferWindowPos`/`DeferWindowPos`/`EndDeferWindowPos`, with a fallback. |
 
-`layout(hwnd, dpi)` becomes the three-line orchestrator of those.
+`layout(hwnd, dpi)` becomes the thin orchestrator of those.
 
 The port is what makes the CI gate trustworthy rather than flaky: the gate measures through the
 same `GdiMeasure` the window uses, so it compares a measured text against a slot computed from
 that same measurement. Nothing is asserted against a frozen pixel count, and a CI runner whose
 font metrics differ slightly from a developer's machine stays green for the right reason.
 
+**That argument covers text, and only text.** The test process is DPI-*unaware*:
+`SetProcessDpiAwarenessContext` is called in `main.rs:546`, in the binary, which no test links.
+Every DPI-sensitive system or theme query is therefore virtualised to 96 in a test unless it
+takes an explicit DPI argument. Text measurement is unaffected, because the font's `lfHeight`
+comes from the `dpi` parameter rather than from the device. The rule that follows is absolute:
+**only explicit-DPI APIs may enter the measurement port** — `GetSystemMetricsForDpi`,
+`OpenThemeDataForDpi`. A plain `GetSystemMetrics` would return 17 for the scrollbar width at
+every DPI (verified) and quietly make the gate's 120/144/192 rows check nothing.
+
 A `GdiMeasure` needs no window: it builds its fonts from `build_font(dpi, weight)` — the same
-call `window.rs` makes — and draws into a `CreateCompatibleDC(None)` memory DC. That is why the
-planner is testable and why `plan_layout` can run before any control exists.
+call `window.rs` makes — and draws into a `CreateCompatibleDC(None)` memory DC. Measured widths
+from that memory DC are identical to a screen DC's for every sample string at 96 and 144 DPI.
+That is why the planner is testable, and why the plan can be computed before any window exists.
 
 `layout.rs` gives work away rather than taking it on; it keeps `CONTROLS`, the ids, the styles,
-`scale_dimension`, `RANGE_SPECS`, the combo-height logic and `compute_placement`.
+`scale_dimension`, `RANGE_SPECS`, the combo-height logic and the placement code.
 
 ### 2. Horizontal: one new field, no new coordinate system
 
 `x`, `y`, `w` and `h` stay in `CONTROLS` as the authored 96-DPI baseline. `ControlSpec` gains
 one field saying how the control responds when text grows:
 
-| Anchor | Meaning |
-|---|---|
-| `Fixed` | `x`, `w` as authored. |
-| `LabelA` / `LabelB` | Label column A (hotkey rows) or B (spinner and log rows). Width measured; the column's width is the maximum over its rows. |
-| `CheckboxA` / `CheckboxB` | As above plus the indicator width and its text gap. |
-| `InlineLabel` | Right-aligned immediately before the control column (`Stufe:`). Width measured. |
-| `ControlColumn` | `x` = the column's computed left edge; `w` as authored. |
-| `AfterControl` | `x` = column left edge + the authored offset (spinner buttons, unit suffixes). |
-| `Stretch` | Keeps the authored right margin: `w = win_w - x - (400 - x - w_authored)`. |
-| `FooterButton` | Part of the right-aligned footer chain; width measured plus padding, floored. |
-| `FooterFill` | The version line; takes what the buttons leave. |
+| Anchor | Applies to | Meaning |
+|---|---|---|
+| `Fixed` | default | `x`, `w` as authored. |
+| `Label(col)` | row captions | Width measured; the column's width is the maximum over its rows. |
+| `Checkbox(col)` | checkboxes paired with a control | As `Label`, plus indicator and gap. |
+| `CheckboxRun` | `ID_LOG_CHECK` | First member of the composite log row: width is its own requirement, not the column's. |
+| `InlineLabel` | `ID_LABEL_LOG_LEVEL` | Right-aligned immediately before the control column. Width measured. |
+| `ControlColumn` | edits, combos, capture fields | `x` = the column's computed left edge; `w` as authored. |
+| `AfterControl` | spinner buttons, unit suffixes | `x` = column left edge + the authored offset. |
+| `Stretch` | headers, separators, hints, full-width checkboxes, the `SysLink` | Keeps the authored right margin: `w = win_w − x − (400 − x − w_authored)`. |
+| `FooterButton` | `ID_RESTORE`, `ID_CLOSE` | Right-aligned chain; width measured plus padding, floored. |
+| `FooterFill` | `ID_VERSION` | Takes what the buttons leave. |
 
-`Stretch` needs no new constant: the right margin a control should keep is already implicit in
-today's table, and is simply preserved.
+`col` is `A` (hotkey rows) or `B` (spinner and log rows). `Stretch` needs no new constant: the
+right margin a control should keep is already implicit in today's table, and is preserved.
+`ID_AUTOSTART` and `ID_INTERCEPT` are full-width checkboxes belonging to no column, so they take
+`Stretch` for their width; the gate still checks their caption against the drawable part.
 
 **Two label columns, not one.** The table already has two: hotkey rows end at 170, spinner and
 log rows at 250. Each is measured separately and **floored at today's value**. English therefore
@@ -146,8 +182,9 @@ both the `w:140` and the `w:220` labels leave before their control.
 one caption but the whole run before the control column:
 
 ```
-indicator(13) + text_gap(4) + "Protokolldatei schreiben"(134) + INLINE_GAP(8) + "Stufe:"(36) = 195
-column B available at its floor: 250 - 24 - 6 = 220
+indicator(13) + CHECKBOX_TEXT_GAP(4) + "Protokolldatei schreiben"(134)
+              + INLINE_GAP(8) + "Stufe:"(36)                            = 195
+column B available at its floor: 250 − 24 − COL_GAP(6)                  = 220
 ```
 
 That run enters column B's maximum as a single number. It fits in German with 25 px to spare,
@@ -160,27 +197,37 @@ collision, because nothing in the row is placed by hand any more.
 ```
 win_w = max( 400,
              24 + colA + COL_GAP + capture_w + 12,
-             24 + colB + COL_GAP + ctrl_w + suffix_w + 12,
-             12 + version_w + FOOTER_GAP + restore_w + FOOTER_GAP + close_w + 12 )
+             24 + colB + COL_GAP + widest_control_run + 12,
+             12 + version_w + FOOTER_GAP_VERSION + restore_w
+                            + FOOTER_GAP_BUTTONS + close_w + 12 )
 ```
 
+`widest_control_run` is the maximum, over the control column's rows, of that row's own extent:
+a spinner row is `edit(60) + updown(16) + SUFFIX_GAP(6) + suffix_w(≤30)` = 112, the language
+combo alone is 120. Writing it as a per-row run rather than a single control width matters
+precisely in the language-three case the formula exists for — a bare `ctrl_w + suffix_w` would
+drop the 6 px between the spinner and its unit.
+
+The two footer gaps are read off the current table and differ: 6 px between the version line's
+right edge (184) and `ID_RESTORE` (190), 8 px between `ID_RESTORE`'s right edge (300) and
+`ID_CLOSE` (308). Button widths are `max(BUTTON_MIN_W, measured + BUTTON_TEXT_PAD)`, both
+constants likewise read off the table (`Close` at 35 px in an 80 px button gives the floor;
+`Restore defaults` at 90 px in 110 gives the padding).
+
 The 400 floor is what keeps today's appearance exactly as it is; every other term is measured.
-Button widths are `max(BUTTON_MIN_W, measured + BUTTON_TEXT_PAD)`, both constants read off the
-current table (`Close` at 35 px in an 80 px button gives the floor; `Restore defaults` at 90 px
-in 110 gives the padding).
+The footer participating in the width is what resolves the `ID_RESTORE` conflict without a
+compromise in either direction:
 
-The footer therefore participates in the width, which resolves the `ID_RESTORE` conflict without
-a compromise in either direction:
-
-- **Release build.** `version_string()` is `0.10.0`, about 40 px. The footer needs 326 px, the
-  400 floor binds, and the shipped German window is identical to today's — with 114 px of room
-  for a 40 px string.
+- **Release build.** `version_string()` is `0.10.0`; §14 records that a released build needs
+  30 px of the version line. The footer then needs 314 px, the 400 floor binds, and the shipped
+  German window is identical to today's — with 116 px of room for a 30 px string.
 - **Development build.** The worst realistic string, `0.10.0+64.g0e4d436.dirty (dev)`, measures
-  165 px (§14 already records this as 165 against 172 px of room, a 7 px margin). The footer then
-  needs 451 px and the window grows to it. Nothing is truncated.
+  165 px (§14 records this as 165 against 172 px of room, a 7 px margin). The footer then needs
+  449 px and the window grows to it. Nothing is truncated.
 
 That is the intended behaviour, not a side effect: the version line is the one control whose
-caption is a runtime value, so the window that must display it is a runtime question.
+caption is a runtime value, so the window that must display it is a runtime question. It does
+mean the manually tested window is not the shipped window — §Testing carries the consequence.
 
 ### 4. Vertical: only what can grow
 
@@ -189,89 +236,134 @@ wrapping hint statics, and they are measured with `DT_CALCRECT | DT_WORDBREAK` a
 computed width:
 
 ```
-delta  = max(0, measured_h - authored_h)
+delta  = max(0, measured_h − authored_h)
 y_off += delta            // applies to every later control
 win_h  = 654 + total_y_off
 ```
 
-Growth only, never shrinkage. A wider window makes hints wrap onto fewer lines, and a window
-that got *shorter* because a translation was terse would be more surprise than gain.
+**`y_off` is recomputed from scratch on every plan, never latched.** A plan for English and a
+plan for German are independent; switching back from a language that grew the window returns it
+to the shorter geometry. The `max(0, …)` clamps a single hint against its own authored height,
+nothing more.
 
-Keeping `y` authored also preserves the one piece of hard-won empirical geometry in the table:
-the comment beside `ID_LABEL_LOG_LEVEL` explaining why `Stufe:` sits at `y:512` rather than the
-`y:515` the textbook vertical-centering model predicts, measured on hardware at 125% DPI. A flow
-layout would have to re-derive that; this design does not disturb it.
+Growth only, never shrinkage below the authored height: a wider window makes hints wrap onto
+fewer lines, and a window that got *shorter* because a translation was terse would be more
+surprise than gain.
+
+Today this machinery moves nothing. No hint overflows its authored height in either language —
+the diagnostic confirms it — so `y_off` is 0 and every row sits where it sits now, including the
+one piece of hard-won empirical geometry in the table: the comment beside `ID_LABEL_LOG_LEVEL`
+explaining why `Stufe:` sits at `y:512` rather than the `y:515` the textbook vertical-centering
+model predicts, measured on hardware at 125% DPI. The rule exists so that the language which
+does wrap a hint onto a third line pushes the rows below it instead of overlapping them, and so
+that CI stays green when it happens rather than requiring a person to re-tune the table.
 
 ### 5. One path for creation, DPI change and language change
 
-The window is created hidden, so the plan can be computed after the controls exist and before
-anything is shown:
+`plan_layout` needs no window, so the plan is computed **before** `CreateWindowExW`, not after:
 
-1. `create_controls` (unchanged).
-2. `layout(hwnd, dpi)` — plan, `apply`, then size the frame with `AdjustWindowRectExForDpi` and
-   `SetWindowPos`, re-clamping the position into the work area.
-3. `configure_updowns`, `configure_combo_height`, `apply_snapshot`, `ShowWindow`.
+1. Resolve the target monitor and its DPI (today's `compute_placement`, split).
+2. Build the fonts; `plan_layout(lang, dpi, version_string(), &mut GdiMeasure)`.
+3. `AdjustWindowRectExForDpi` on the plan's client size, then clamp into the work area.
+4. `CreateWindowExW` at that position and size; `create_controls`; `apply(hwnd, &plan)`.
+5. `configure_updowns`, `configure_combo_height`, `apply_snapshot`, `ShowWindow`.
 
-The work-area clamp is lifted out of `compute_placement` into a shared helper, because it now
-has two callers: initial placement and every later resize.
+This is deliberately not "create, then resize": a window created centred for 400 px and then
+grown to 449 would sit 25 px off-centre. Computing first makes the initial geometry correct in
+one step and deletes the resize path from creation entirely.
 
-`WM_DPICHANGED` already re-runs `layout()`. **`WM_APP_SETTINGS_LANG` does not, and must.** Today
-it relabels in place, which is correct only because every language shares one set of slots. After
-this cycle a relabel changes the measurements, so the handler re-plans and re-applies. Omitting
-this would reintroduce exactly the class of defect the cycle removes.
+`apply` bundles the moves through `BeginDeferWindowPos`. Two constraints on it. `SWP_NOZORDER`
+must be on every `DeferWindowPos` call: z-order is tab order in this window (creation order,
+`layout.rs:145-148`), and reordering it would be a silent regression nothing tests. And a null
+`HDWP` from `BeginDeferWindowPos` or `DeferWindowPos` **discards the whole batch**, which at
+creation — where every control starts at `(0,0,0,0)` — would be a blank window; `apply` falls
+back to the per-control `SetWindowPos` loop in that case, degrading one control at a time as the
+rest of this module does.
+
+**`WM_DPICHANGED`** already applies Windows' suggested rect before calling `layout()`
+(`window.rs:860-873`). The re-plan keeps that suggested *position* and overrides only the
+*size*, and carries a re-entrancy guard: resizing inside `WM_DPICHANGED` can send another
+`WM_DPICHANGED` when the window's majority crosses a monitor boundary.
+
+**`WM_APP_SETTINGS_LANG` does not re-run `layout()` today, and must.** It relabels in place,
+which is correct only while every language shares one set of slots. After this cycle a relabel
+changes the measurements. A language switch **resizes but never moves**: the user may have
+dragged the window, and a caption change is no reason to recentre it.
 
 ### 6. The four defects
 
 | Defect | Treatment | Cost |
 |---|---|---|
 | `ID_RESTORE` | German becomes `Auf Standard zurücksetzen` (146 px); the button sizes itself; the window grows only in a development build | one string |
-| `ID_LOG_LEVEL` | The parenthetical convention is dropped: every language shows `error`/`warn`/`info`/`debug`/`trace` | five strings, one §16 paragraph |
+| `ID_LOG_LEVEL` | The parenthetical convention is dropped: every language shows `error`/`warn`/`info`/`debug`/`trace` | five strings, one `i18n.rs` comment |
 | `ID_LOG_CHECK` | None. The measured composite row resolves it | — |
 | `ID_LINK_CONFIG` | Authored `w` corrected 250 → 376, the full width its row always had; `Stretch` carries that margin forward | one number |
 
-Dropping the parentheses restores §16's own logic rather than contradicting it. §16 lists the
-log-level tokens under what stays untranslated, because they round-trip through `config.json`;
-appending a translation was the exception that undercut the reason. The adjacent
-`Stufe:`/`Level:` label carries the meaning, and the widest entry falls from 136 px to 40, so the
-combo keeps `w:76` and its alignment with the spinner rows at x=326.
+**The log-level change is a width decision, not a consistency one.** §16 explicitly permits a
+gloss — it says the picker's entries are display-only and the stored value comes from the
+combo's selected index, never from its text — so the parenthetical was sanctioned, not an
+oversight. What it costs is room: German's widest entry is 136 px, plus the dropdown arrow (17)
+and the two 4 px text insets `dark.rs:824` applies, is 161 px. At the control column's left edge
+of 250 the combo would end at 411 against a 388 right margin, so keeping the gloss buys a German
+window roughly 23 px wider and gives up the log combo's right-edge alignment with the spinner
+rows at 326. `CB_SETDROPPEDWIDTH` does not help: it widens only the open list, so the closed
+face still reads `warn (War`. The bare token costs nothing and the adjacent `Stufe:`/`Level:`
+label already carries the meaning, so the gloss goes and the combo keeps `w:76`.
 
 `log_level_entries_lead_with_the_stored_token_in_every_language` in `core/i18n.rs` becomes
 vacuous and is replaced by the stronger statement it now can make: the entries *are* the stored
 tokens, identical in every language.
 
+The two combos keep their different widths — `ID_LANGUAGE` at 120 for "System default" plus its
+arrow, `ID_LOG_LEVEL` at 76 to align with the spinner rows. The comment beside `ID_LANGUAGE`
+deferring "aligning the column properly" to a later cycle is rewritten to record that as a
+decision rather than a debt: each combo is sized to its own content, and there is no third edge
+to align them to that would not break one of the two alignments that exist.
+
 ### 7. The gate
 
 The repaired diagnostic loses `#[ignore]` and runs in the existing `cargo test --locked` step on
-`windows-latest`. No workflow change. For every `Lang` × DPI ∈ {96, 120, 144, 192}:
+`windows-latest`. No workflow change: visual styles do apply to the test binary (the manifest
+resource is linked into every binary of the package), and `CreateCompatibleDC`, `GetDC` and
+`GetThemePartSize` all work in that session.
 
-- every slot is at least as wide as its measured text, with the indicator subtracted for
-  checkboxes and `<a>` markup stripped for the `SysLink`;
+For every `Lang` × DPI ∈ {96, 120, 144, 192}, against the plan for that DPI:
+
+- every slot is at least as wide as its measured text, compared against the **drawable** width,
+  not the raw `w`: a combo loses `GetSystemMetricsForDpi(SM_CXVSCROLL, dpi)` (17/21/26/34) plus
+  two `COMBO_TEXT_INSET`, a capture field two `CAPTURE_TEXT_INSET`, a checkbox its indicator plus
+  `CHECKBOX_TEXT_GAP`, and the `SysLink` its `<a>` markup. Comparing against raw widths would let
+  the gate pass on text that visibly clips;
 - each hint's assigned height is at least its wrapped measured height;
-- **every combo entry** fits its combo's width less the dropdown arrow (`SM_CXVSCROLL`) — the
-  hole defect 2 fell through;
+- **every combo entry** fits, which is the hole defect 2 fell through;
 - the capture fields fit the widest hotkey text `ParsedHotkey::display_text` can produce in that
-  language (all modifiers plus the longest named key), which is the seam the tray usage rows
-  share;
+  language (all modifiers plus the longest named key), the seam the tray usage rows share;
 - no two controls overlap, carrying over the existing exemption for a combo's dropped-list `h`;
-- the version line fits the *documented* worst case of 165 px, not the runner's incidental build
+- the version line fits the documented worst case of 165 px, not the runner's incidental build
   string;
-- `win_w ≤ 560` and `win_h ≤ 690`.
+- `win_w ≤ 560` and `win_h ≤ 700` logical.
 
-The height ceiling is derived, not picked: at 150% scaling 690 logical px is 1035 physical
-against roughly 1040 usable on a 1080p work area. Today's window is 654. The width ceiling is
-the looser "still reads as a dialog" bound.
+**What the height ceiling is and is not.** It is not proof the window fits a screen. Measured:
+the outer rect for a 654-logical client at 144 DPI is 1037 px, and a 1080p work area at 150%
+scaling is about 1008 px once the 48-logical-pixel taskbar is taken off. **Today's window
+already exceeds it by roughly 29 px**, which `compute_placement`'s clamp comment
+(`layout.rs:1017-1022`) states outright and mitigates by pinning the top-left corner inside the
+work area. The ceiling is therefore a do-not-get-worse bound — 700 logical is 7% above today's
+654 — and the earlier framing of it as a fits-on-screen proof compared a client height against a
+work area and was wrong twice over. The real limitation is pre-existing, out of scope here, and
+now recorded in §14 rather than implied.
 
 On failure the test prints the same table `report_label_overflow` printed, so the diagnostic's
 only real value survives inside the gate; the ignored test itself is removed.
 
 ### 8. Tooltip
 
-`szTip` holds 127 UTF-16 units and truncates silently past that (`tray.rs`). The tooltip has no
-runtime content — its text is a function of `HealthWarnings` and the language — so the space of
-possible strings is finite and a test over all of it is a proof, not a sample. German's worst
+`szTip` holds 127 UTF-16 units and truncates silently past that (`tray.rs:716`). The tooltip has
+no runtime content — its text is a function of `HealthWarnings` and the language — so the space
+of possible strings is finite and a test over all of it is a proof, not a sample. German's worst
 case is 113 units against 127, English's 99. The test asserts the bound over every combination ×
 every language; §13 records the measured budget. No truncation path is added: there is no case
-the test does not already exclude.
+the test does not already exclude. It needs no Windows APIs and runs on any host.
 
 ### 9. Carried follow-ups
 
@@ -282,39 +374,47 @@ From the language-selection follow-up list, the items that live in the files thi
 - `fill_combo(combo: HWND)` takes `(hwnd, id)` like `set_combo_index` and `combo_selected_index`,
   removing three `GetDlgItem` lookups per combo from the relabel path.
 - The old diagnostic built both fonts before asserting its DC was valid, leaking them on a
-  failing assert. It dissolves with the test, and `GdiMeasure` frees its fonts and DC through
-  `Drop` on every exit path including a panic — RAII, as `docs/code-conventions.md` requires of
-  handles.
+  failing assert. It dissolves with the test, and `GdiMeasure` releases its handles through
+  `Drop` on every exit path including a panic — restoring the DC's original font first, since a
+  font still selected into a DC cannot be deleted. RAII, as `docs/code-conventions.md` requires.
 
 ## Testing
 
 **Host-testable, no display needed.** `plan_layout` against a fake `TextMeasure` returning
 proportional widths: column maxima, the composite log row, the footer chain, `Stretch` margin
-preservation, the width floor, hint-driven `y` offsets.
+preservation, the width floor, hint-driven `y` offsets, and that a re-plan in a narrower language
+returns the earlier geometry (the not-latched property of §4). The tooltip bound of §8.
 
 **Windows, in CI.** The gate of §7, plus the existing `layout.rs` tests reworked to assert
 against the plan rather than the raw table where they overlap with it
 (`no_two_controls_overlap`, `every_tabstop_control_fits_inside_the_client_rect`).
 
-**Host-testable.** The tooltip bound of §8.
-
 **Manual, on hardware.** German at 100%, 150% and 200% DPI, following the recipe in the
 maintenance notes for swapping the installed instance. Beyond the standard pass: the version line
 uncut in a development build, a live `de` ↔ `en` switch resizing the window with no repaint
-residue, `Auf Standard zurücksetzen` fully legible, and the log row uncollided at every one of
-the three scalings. The procedure is updated in `docs/architecture.md` in this cycle, as the
-"Integration Testing" rule requires.
+residue and without moving it, `Auf Standard zurücksetzen` fully legible, and the log row
+uncollided at every one of the three scalings.
+
+Because the footer participates in the width, a development build is 449 px wide and a release
+build 400 — so the pass would otherwise validate a geometry no user receives. `plan_layout` takes
+`version_text` as a parameter for exactly this reason: the pass includes one run with a
+release-shaped version string, which is the shipped geometry. The procedure is updated in
+`docs/architecture.md` in this cycle, as the "Integration Testing" rule requires.
 
 No release tag until that pass is clean.
 
 ## Risks
 
-- **Runner font metrics differ from a developer's machine.** Contained by construction: both
-  sides of every comparison are measured through the same port. Only 560, 690 and 165 are
+- **Runner font metrics differ from a developer's machine.** Contained by construction for text:
+  both sides of every comparison are measured through the same port. Only 560, 700 and 165 are
   absolute, and each has room.
-- **`CreateCompatibleDC` in a headless CI session.** It works on `windows-latest`. If it ever
-  does not, the gate must fail loudly rather than skip itself — a test that silently opts out is
-  worse than no test, because it reads as green.
+- **A DPI-sensitive query sneaks into the port without a DPI argument.** This is the sharpest
+  edge in the design, because it fails silently and in the direction of a green gate. §1 states
+  the rule; the review of this cycle should check every call in `measure.rs` against it.
+- **A theme query fails on a runner.** `OpenThemeDataForDpi` returning nothing must fall back to
+  13 px as `dark.rs` already does, not redden CI for an environment reason. The "fail loudly
+  rather than skip" posture applies to the device context, whose failure means the gate measured
+  nothing at all.
 - **The window resizes during a live language switch.** Only when a language genuinely needs more
   room, which in a development build is today's `de` ↔ `en` — so the manual pass sees it rather
   than a user meeting it first.
@@ -325,9 +425,12 @@ No release tag until that pass is clean.
 ## Documentation
 
 - §14: measured layout replaces the hand-measured table; the version-line budget restated as a
-  constraint on width rather than a fixed 172 px; the `ID_LANGUAGE` comment deferring column
-  alignment "to the next cycle" is discharged.
-- §16: the parenthetical log-level convention removed.
+  constraint on width rather than a fixed 172 px; the window's height against a 1080p work area
+  at 150% recorded as a known, pre-existing limitation with the work-area clamp as its
+  mitigation.
+- §16: a sentence recording that the log-level picker shows the bare token — permitted, not
+  required, by the surrounding rule — because glossing it costs window width.
 - §13: the tooltip's measured budget.
-- The testing section: the new gate, and the manual German-at-three-scalings procedure.
+- The testing section: the new gate, and the manual German-at-three-scalings procedure including
+  the release-shaped version string.
 - `CLAUDE.md`: `measure.rs` and `plan.rs` in the module map.
