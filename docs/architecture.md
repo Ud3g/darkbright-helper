@@ -1415,7 +1415,12 @@ Three conditions are visible in the tray: the two supervision give-up states
   do its job, and a missing diagnostic log does not stop a single adjustment,
   so letting it light the badge would weaken the signal for the conditions that
   do. A failed file log therefore shows in the menu and the tooltip, never on
-  the icon.
+  the icon. The tooltip's `NOTIFYICONDATAW.szTip` field holds 128 UTF-16 units
+  and only 127 are copied in; against that bound the worst case measures 99
+  units in English and 113 in German (all four warnings active at once), and a
+  test walks every warning combination in every shipped language so a
+  translation that grows past the limit fails the build instead of silently
+  truncating on a user's screen.
 
 Recovery follows §12 and differs per cause: a dead worker's warning clears on
 user activity or resume, an unresponsive worker's clears when the worker answers

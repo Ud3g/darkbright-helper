@@ -1424,6 +1424,38 @@ mod tests {
     use super::*;
     use crate::core::i18n::ENGLISH;
 
+    /// `szTip` is 128 UTF-16 units and `create_notify_icon_data` copies at
+    /// most 127 of them, silently dropping the rest. The tooltip has no
+    /// runtime content — it is a function of the warnings and the language —
+    /// so walking every combination is a proof, not a sample.
+    #[test]
+    fn every_tooltip_fits_the_notify_icon_field_in_every_language() {
+        const LIMIT: usize = 127;
+        for &lang in Lang::ALL {
+            for ddc in [DdcHealth::Ok, DdcHealth::WorkerDead, DdcHealth::WorkerHung] {
+                for hotkeys_lost in [false, true] {
+                    for hotkeys_degraded in [false, true] {
+                        for file_log_failed in [false, true] {
+                            let warnings = HealthWarnings {
+                                ddc,
+                                hotkeys_lost,
+                                hotkeys_degraded,
+                                file_log_failed,
+                            };
+                            let tip = compose_tooltip(strings(lang), warnings);
+                            let units = tip.encode_utf16().count();
+                            assert!(
+                                units <= LIMIT,
+                                "{} tooltip is {units} units, over {LIMIT}: {tip}",
+                                lang.tag()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn tooltip_plain_when_healthy() {
         assert_eq!(
