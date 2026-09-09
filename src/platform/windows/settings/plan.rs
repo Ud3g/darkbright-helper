@@ -751,6 +751,25 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────
     // Layout gate: the real fonts, every language, four scalings
     // ─────────────────────────────────────────────────────────────────────
+    //
+    // What the gate can and cannot catch, because the planner derives most
+    // widths from the very text the gate then measures:
+    //
+    // Exact fits by construction — a `Label`/`Checkbox` row (its slot is the
+    // column maximum), `InlineLabel`, `CheckboxRun`, `FooterButton`,
+    // `FooterFill` and with it `ID_VERSION`. Their slot is sized from their
+    // own measured caption, so no translation can overflow one. Checking
+    // them is still worth the cycles: it is a consistency check that the
+    // planner's chrome budget (a checkbox's indicator, a button's padding)
+    // and the gate's `drawable` still agree, and it fails the moment one of
+    // them changes without the other.
+    //
+    // Rows a longer translation really can break — `Stretch` rows, whose
+    // width is the window's less an authored margin rather than their own
+    // text; `AfterControl` unit labels, which keep an authored width beside
+    // a control; combo entries, which are not `CONTROLS` rows at all and so
+    // feed into no column; and the capture fields, whose contents come from
+    // the hotkey string table rather than from any caption.
 
     /// Logical-pixel bounds the derived layout must stay inside.
     ///
@@ -841,9 +860,6 @@ mod tests {
         match spec.class {
             "COMBOBOX" => placed.w - m.combo_arrow() - 2 * scale_dimension(COMBO_TEXT_INSET, dpi),
             "HOTKEY_CAPTURE" => placed.w - 2 * scale_dimension(CAPTURE_TEXT_INSET, dpi),
-            // Pushbuttons and checkboxes share the BUTTON class, so the style
-            // bit is what tells them apart; only a checkbox spends width on an
-            // indicator its caption cannot use.
             "BUTTON" if is_checkbox(spec.style) => placed.w - checkbox_overhead(dpi, m),
             _ => placed.w,
         }
@@ -863,6 +879,10 @@ mod tests {
                         continue;
                     }
                     if wraps(spec.id) {
+                        // Re-measures what the planner already grew this row
+                        // by, so no translation can fail it: what it guards
+                        // is a planner change that stops growing hints, not
+                        // a hint whose text got longer.
                         let needed = m.wrapped_height(&text, false, placed.w);
                         if needed > placed.h {
                             failures.push(format!(
@@ -882,6 +902,47 @@ mod tests {
                             lang.tag(),
                             spec.id,
                             needed - available
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn every_planned_control_stays_inside_the_client_rect_in_any_language_at_any_dpi() {
+        // Containment, not fit: a caption may be short and still sit in a
+        // slot that hangs off the window, which is what happens when a row
+        // keeps an authored width or offset while the columns around it move.
+        let mut failures: Vec<String> = Vec::new();
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                for placed in &plan.controls {
+                    if placed.x + placed.w > plan.client_w {
+                        failures.push(format!(
+                            "| {} | {dpi} | {} | right {} | client_w {} |",
+                            lang.tag(),
+                            placed.id,
+                            placed.x + placed.w,
+                            plan.client_w
+                        ));
+                    }
+                    // A combo's `h` is its dropped-down list's, so its
+                    // declared bottom legitimately falls outside the client
+                    // rect — the same quirk the overlap check exempts.
+                    if overlap_exempt(spec_of(placed.id).class) {
+                        continue;
+                    }
+                    if placed.y + placed.h > plan.client_h {
+                        failures.push(format!(
+                            "| {} | {dpi} | {} | bottom {} | client_h {} |",
+                            lang.tag(),
+                            placed.id,
+                            placed.y + placed.h,
+                            plan.client_h
                         ));
                     }
                 }
