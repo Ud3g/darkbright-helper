@@ -45,7 +45,7 @@ const CHECKBOX_INDICATOR_FALLBACK: i32 = 13;
     not(test),
     expect(
         dead_code,
-        reason = "no non-test caller until the layout planner lands"
+        reason = "the planner that takes this bound has no non-test caller until the settings window wires it in"
     )
 )]
 pub(super) trait TextMeasure {

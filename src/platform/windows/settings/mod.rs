@@ -33,6 +33,7 @@ mod capture;
 mod dark;
 mod layout;
 mod measure;
+mod plan;
 mod window;
 
 pub use window::SettingsSinkImpl;

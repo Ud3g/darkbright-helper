@@ -20,6 +20,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use crate::core::i18n::TextKey;
 use crate::error::{BrightnessError, Result};
 
+use super::plan::Anchor;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Control IDs
 // ─────────────────────────────────────────────────────────────────────────────
@@ -151,18 +153,28 @@ pub(super) struct ControlSpec {
     pub(super) id: u16,
     pub(super) class: &'static str,
     pub(super) style: u32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) w: i32,
+    pub(super) h: i32,
     /// The label to show, or `None` for controls whose text is set at runtime
     /// (edit fields, spinners, the version line) or that have none (separators).
     pub(super) text: Option<TextKey>,
+    /// How this control's position and width respond when a translation makes
+    /// the text around it wider; see `plan`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the planner, which has no non-test caller until the settings window wires it in"
+        )
+    )]
+    pub(super) anchor: Anchor,
 }
 
 /// Base window client size at 96 DPI (100% scaling); see [`scale_dimension`].
-const BASE_WINDOW_WIDTH: i32 = 400;
-const BASE_WINDOW_HEIGHT: i32 = 654;
+pub(super) const BASE_WINDOW_WIDTH: i32 = 400;
+pub(super) const BASE_WINDOW_HEIGHT: i32 = 654;
 
 /// Every control in the settings window, at 96-DPI-baseline coordinates, in
 /// visual and creation order. See the module doc comment for why group
@@ -178,6 +190,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderGeneral),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_SEP_GENERAL,
@@ -188,6 +201,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_LANGUAGE,
@@ -198,6 +212,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::LabelLanguage),
+        anchor: Anchor::Fixed,
     },
     // 120 wide, unlike the log-level combo's 76: the English entry "System
     // default" plus the 17px dropdown arrow does not fit 76 at this font.
@@ -212,6 +227,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 120,
         h: 120,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_AUTOSTART,
@@ -222,6 +238,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 300,
         h: 20,
         text: Some(TextKey::Autostart),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_STEP,
@@ -232,6 +249,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::LabelStep),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_STEP_EDIT,
@@ -242,6 +260,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_STEP_UPDOWN,
@@ -252,6 +271,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_STEP_UNIT,
@@ -262,6 +282,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentStep),
+        anchor: Anchor::Fixed,
     },
     // ── Hotkeys ─────────────────────────────────────────────────────────
     ControlSpec {
@@ -273,6 +294,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderHotkeys),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_SEP_HOTKEYS,
@@ -283,6 +305,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_HK_UP,
@@ -293,6 +316,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyUp),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_HK_UP,
@@ -303,6 +327,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 218,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_HK_DOWN,
@@ -313,6 +338,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyDown),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_HK_DOWN,
@@ -323,6 +349,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 218,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_INTERCEPT,
@@ -333,6 +360,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 20,
         text: Some(TextKey::Intercept),
+        anchor: Anchor::Fixed,
     },
     // Muted explainer text under the intercept checkbox.
     ControlSpec {
@@ -344,6 +372,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 328,
         h: 34,
         text: Some(TextKey::HintIntercept),
+        anchor: Anchor::Fixed,
     },
     // Inline hotkey status line, empty until handle_hotkey_message_text sets
     // it; whether it renders as an error (red) or a notice (muted) is a
@@ -357,6 +386,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 16,
         text: None,
+        anchor: Anchor::Fixed,
     },
     // ── On-screen display ───────────────────────────────────────────────
     ControlSpec {
@@ -368,6 +398,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderOsd),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_SEP_OSD,
@@ -378,6 +409,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT,
@@ -388,6 +420,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelTimeout),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_EDIT,
@@ -398,6 +431,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_UPDOWN,
@@ -408,6 +442,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT_UNIT,
@@ -418,6 +453,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 30,
         h: 20,
         text: Some(TextKey::UnitMilliseconds),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_OPACITY,
@@ -428,6 +464,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelOpacity),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_OSD_OPACITY_EDIT,
@@ -438,6 +475,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_OSD_OPACITY_UPDOWN,
@@ -448,6 +486,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_OPACITY_UNIT,
@@ -458,6 +497,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentOpacity),
+        anchor: Anchor::Fixed,
     },
     // ── Advanced ────────────────────────────────────────────────────────
     ControlSpec {
@@ -469,6 +509,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderAdvanced),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_SEP_ADVANCED,
@@ -479,6 +520,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_RESYNC_CHECK,
@@ -489,6 +531,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::ResyncCheck),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_RESYNC_EDIT,
@@ -499,6 +542,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_RESYNC_UPDOWN,
@@ -509,6 +553,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_RESYNC_UNIT,
@@ -519,6 +564,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsResync),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_INACT_CHECK,
@@ -529,6 +575,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::InactivityCheck),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_INACT_EDIT,
@@ -539,6 +586,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_INACT_UPDOWN,
@@ -549,6 +597,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LABEL_INACT_UNIT,
@@ -559,6 +608,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsInactivity),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LOG_CHECK,
@@ -569,6 +619,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LogCheck),
+        anchor: Anchor::Fixed,
     },
     // Same y as ID_LOG_CHECK's, not offset for its checkbox's own
     // vertical centering: a BUTTON checkbox centering its label per the
@@ -588,6 +639,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 74,
         h: 20,
         text: Some(TextKey::LabelLogLevel),
+        anchor: Anchor::Fixed,
     },
     // The combo's `h` is the height of the *dropped-down* list, a Win32
     // quirk: the closed control renders at the font's line height regardless
@@ -606,6 +658,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 76,
         h: 120,
         text: None,
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_LOG_HINT,
@@ -616,6 +669,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 32,
         text: Some(TextKey::HintLogging),
+        anchor: Anchor::Fixed,
     },
     // ── Footer ──────────────────────────────────────────────────────────
     // One SysLink carries both links as flowing text, `iLink` (0 = config
@@ -633,6 +687,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 250,
         h: 20,
         text: Some(TextKey::FooterLinks),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_RESTORE,
@@ -643,6 +698,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 110,
         h: 26,
         text: Some(TextKey::ButtonRestoreDefaults),
+        anchor: Anchor::Fixed,
     },
     ControlSpec {
         id: ID_CLOSE,
@@ -653,6 +709,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 80,
         h: 26,
         text: Some(TextKey::ButtonClose),
+        anchor: Anchor::Fixed,
     },
     // Which build is running, in the free space left of the buttons and
     // vertically centred against them. `text` is `None` because the string is
@@ -671,6 +728,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 172,
         h: 18,
         text: None,
+        anchor: Anchor::Fixed,
     },
 ];
 
@@ -680,7 +738,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
 /// whole [`CONTROLS`] table through it — is unit-testable without a live
 /// display.
 #[must_use]
-fn scale_dimension(px: i32, dpi: u32) -> i32 {
+pub(super) fn scale_dimension(px: i32, dpi: u32) -> i32 {
     let scaled = i64::from(px) * i64::from(dpi) / 96;
     i32::try_from(scaled).unwrap_or(px)
 }
