@@ -92,8 +92,9 @@ measured as a character and inflates *every* width by a constant 6 px at this fo
 all along, from a measurement taken by other means. Every figure below is NUL-free, and so is
 every figure elsewhere in this document — which means they are 6 px lower than the ones the
 2026-09-08 overflow record carries. `docs/architecture.md` §14's version-line figure of 165 px
-comes from the same inflated source and is re-measured under this convention during
-implementation.
+comes from the same inflated source; re-measured NUL-free it is 165 px again — the earlier
+figure was for the bare version, while the control actually displays `"v"` + the version, and
+the two errors happen to cancel.
 
 | Quantity | English | German | Available today |
 |---|---:|---:|---|
@@ -122,10 +123,38 @@ caption at `glyph_rect.right + CHECKBOX_TEXT_GAP`. But indicator + gap is demons
 whole budget: under the corrected convention the German log caption is 128 px, which with an
 overhead of 17 would come to 145 against 146 px of room — it would fit, and on hardware it
 visibly did not. `BCM_GETIDEALSIZE` on a real control wants caption + 18, which lands exactly on
-146 and matches what was seen. The overhead is therefore **measured from a live control during
-implementation** and recorded with its value, rather than derived from the indicator size; the
-dark-mode painter and the system-drawn control are both checked, and the larger wins, since the
-window renders in either theme.
+146 — no slack at all — and matches what was seen.
+
+The overhead was therefore measured from live controls rather than derived from the indicator
+size, at all four DPI values, and both the system-drawn control and the dark-mode painter were
+checked, because the window renders in either theme and the tighter of the two binds:
+
+| DPI | System control (`BCM_GETIDEALSIZE` − caption) | Dark painter (`TS_DRAW` glyph + gap) | `CHECKBOX_OVERHEAD` (the larger) |
+|---:|---:|---:|---:|
+| 96 | 18 | 13 + 4 = 17 | **18** |
+| 120 | 19 | 16 + 4 = 20 | **20** |
+| 144 | 20 | 16 + 4 = 20 | **20** |
+| 192 | 21 | 26 + 4 = 30 | **30** |
+
+The system figure is a *constant per DPI*: identical for all four sample captions, English and
+German, short and long. It does not scale proportionally with DPI — proportional scaling of the
+96-DPI value would give 18 / 22 / 27 / 36, and the measured series is 18 / 19 / 20 / 21, barely
+moving at all. The dark painter's budget is the opposite shape: it tracks the themed glyph, which
+is flat at 13 / 16 / 16 / 16 under `TS_TRUE` but jumps to 26 at 192 DPI under `TS_DRAW` — and
+`TS_DRAW` is what `dark.rs` asks for, so that is the number that binds there. Which theme wins
+therefore changes with DPI: the system control is tighter at 96, the dark painter at 120 and 192,
+and they tie at 144. Neither may be assumed from the other, and neither may be scaled from 96 —
+the planner queries at the DPI it is planning for, exactly as §Units requires.
+
+**A pushbutton's padding is a flat 8 px.** `BCM_GETIDEALSIZE` − caption is 8 for every button
+caption at every one of the four DPI values, English and German, so `BUTTON_TEXT_PAD` is 8 and is
+*not* DPI-scaled. That is much less than the 26 px the current table implies (`Restore defaults`
+at 84 px NUL-free in a 110 px button) — the authored table simply has slack, which is what
+`BUTTON_MIN_W` (80, from `Close`'s authored width) preserves.
+
+**Version-line widths**, measured on the string the control actually shows, `"v"` + the version:
+`v0.10.0` is 36 px at 96 DPI (45 / 57 / 74 at 120 / 144 / 192), and the worst realistic
+development string `v0.10.0+64.gc4687e5.dirty (dev)` is 165 px at 96 DPI (209 / 255 / 337).
 
 ## Design
 
@@ -198,7 +227,7 @@ both the `w:140` and the `w:220` labels leave before their control.
 one caption but the whole run before the control column:
 
 ```
-checkbox_overhead(18, calibrated) + "Protokolldatei schreiben"(128)
+checkbox_overhead(18 at 96 DPI) + "Protokolldatei schreiben"(128)
               + INLINE_GAP(6) + inline_label(max(authored 74, "Stufe:" 30) = 74)   = 226
 English, for comparison:  18 + 67 + 6 + 74                                        = 165
 column B floor: 250 − 24 − COL_GAP(6)                                             = 220
@@ -237,21 +266,23 @@ drop the 6 px between the spinner and its unit.
 
 The two footer gaps are read off the current table and differ: 6 px between the version line's
 right edge (184) and `ID_RESTORE` (190), 8 px between `ID_RESTORE`'s right edge (300) and
-`ID_CLOSE` (308). Button widths are `max(BUTTON_MIN_W, measured + BUTTON_TEXT_PAD)`, both
-constants likewise read off the table (`Close` at 35 px in an 80 px button gives the floor;
-`Restore defaults` at 90 px in 110 gives the padding).
+`ID_CLOSE` (308). Button widths are `max(BUTTON_MIN_W, measured + BUTTON_TEXT_PAD)`, where
+`BUTTON_MIN_W` is 80 — `ID_CLOSE`'s authored width, which the floor exists to preserve — and
+`BUTTON_TEXT_PAD` is the measured 8 px of §Measurements, not a figure read off the table. The
+table's own implied padding is 26 px, and using it would inflate every button; the floor already
+does the job of keeping short captions from producing a cramped button.
 
 The 400 floor is what keeps today's appearance exactly as it is; every other term is measured.
 The footer participating in the width is what resolves the `ID_RESTORE` conflict without a
 compromise in either direction:
 
-- **Release build.** `version_string()` is `0.10.0`, about 24 px NUL-free. The footer then
-  needs 302 px, the 400 floor binds, and the shipped German window is identical to today's —
-  with 122 px of room.
-- **Development build.** The worst realistic string, `0.10.0+64.g0e4d436.dirty (dev)`, measures
-  159 px NUL-free (§14 records 165 from the inflated source, against 172 px of room). With
-  `Auf Standard zurücksetzen` at 140 px the restore button becomes 160, the footer needs 437 px,
-  and the window grows to it. Nothing is truncated.
+- **Release build.** The version line reads `v0.10.0`, 36 px. With `Auf Standard zurücksetzen`
+  at 140 px the restore button becomes 148 and `Schließen` leaves `ID_CLOSE` on its 80 px floor,
+  so the footer needs `12 + 36 + 6 + 148 + 8 + 80 + 12 = 302` px. The 400 floor binds, and the
+  shipped German window is identical to today's, with 98 px to spare. English is 246.
+- **Development build.** The worst realistic string, `v0.10.0+64.gc4687e5.dirty (dev)`, measures
+  165 px. The footer then needs `12 + 165 + 6 + 148 + 8 + 80 + 12 = 431` px and the window grows
+  to it. Nothing is truncated.
 
 That is the intended behaviour, not a side effect: the version line is the one control whose
 caption is a runtime value, so the window that must display it is a runtime question. It does
@@ -297,7 +328,7 @@ that CI stays green when it happens rather than requiring a person to re-tune th
 5. `configure_updowns`, `configure_combo_height`, `apply_snapshot`, `ShowWindow`.
 
 This is deliberately not "create, then resize": a window created centred for 400 px and then
-grown to 437 would sit 19 px off-centre. Computing first makes the initial geometry correct in
+grown to 431 would sit 16 px off-centre. Computing first makes the initial geometry correct in
 one step and deletes the resize path from creation entirely.
 
 `apply` bundles the moves through `BeginDeferWindowPos`. Two constraints on it. `SWP_NOZORDER`
@@ -423,7 +454,7 @@ uncut in a development build, a live `de` ↔ `en` switch resizing the window wi
 residue and without moving it, `Auf Standard zurücksetzen` fully legible, and the log row
 uncollided at every one of the three scalings.
 
-Because the footer participates in the width, a development build is 437 px wide and a release
+Because the footer participates in the width, a development build is 431 px wide and a release
 build 400 — so the pass would otherwise validate a geometry no user receives. `plan_layout` takes
 `version_text` as a parameter for exactly this reason: the pass includes one run with a
 release-shaped version string, which is the shipped geometry. The procedure is updated in
