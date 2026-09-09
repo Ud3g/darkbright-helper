@@ -275,7 +275,7 @@ fn log_level_display(s: &Strings, index: usize) -> &'static str {
 
 /// The language picker's entries: "System default" in the current language,
 /// then every language in its own name, in `Lang::ALL` order.
-fn language_combo_entries(s: &Strings) -> Vec<&'static str> {
+pub(super) fn language_combo_entries(s: &Strings) -> Vec<&'static str> {
     std::iter::once(s.language_system_default)
         .chain(Lang::ALL.iter().map(|lang| lang.native_name()))
         .collect()
@@ -299,7 +299,7 @@ fn language_setting_from_index(index: usize) -> Option<LanguageSetting> {
 }
 
 /// The log-level picker's entries, in `LOG_LEVELS` order.
-fn log_level_combo_entries(s: &Strings) -> Vec<&'static str> {
+pub(super) fn log_level_combo_entries(s: &Strings) -> Vec<&'static str> {
     (0..LOG_LEVELS.len())
         .map(|index| log_level_display(s, index))
         .collect()

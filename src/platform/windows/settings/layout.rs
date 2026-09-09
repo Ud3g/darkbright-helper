@@ -113,6 +113,25 @@ pub(super) fn wraps(id: u16) -> bool {
     matches!(id, ID_HK_HINT | ID_LOG_HINT)
 }
 
+/// Whether `style` is a checkbox's. Checkboxes and pushbuttons share the
+/// `BUTTON` class, and only a checkbox spends width on an indicator its
+/// caption cannot use, so the style bits are the only way to tell them
+/// apart. The button type lives in the low four bits — `BS_PUSHBUTTON` is
+/// zero, so the test has to be for the checkbox value being present, not for
+/// the pushbutton value being absent.
+#[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the layout gate is the only caller; the painters learn a control's kind from its window handle instead"
+    )
+)]
+pub(super) fn is_checkbox(style: u32) -> bool {
+    const BS_TYPEMASK: u32 = 0xF;
+    style & BS_TYPEMASK == BS_AUTOCHECKBOX
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Control-Specific Style Bits
 // ─────────────────────────────────────────────────────────────────────────────
@@ -655,7 +674,8 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     },
     // The combo's `h` is the height of the *dropped-down* list, a Win32
     // quirk: the closed control renders at the font's line height regardless
-    // of this value. See `no_two_controls_overlap`'s combo exemption below.
+    // of this value, which is why the planner's overlap check exempts the
+    // class.
     // `w: 76` matches the numeric edit+updown pair's combined width (60 +
     // 16) so the combo's right edge lands exactly where the spinner rows'
     // updown buttons end (250 + 76 = 326, same as 250 + 60 + 16 on those
@@ -1349,67 +1369,6 @@ mod tests {
         assert_eq!(dpi_from_wparam(144), 144);
     }
 
-    /// Whether `class` is exempt from the overlap check: a combo box's `h`
-    /// is the height of its *dropped-down* list (a documented Win32 quirk —
-    /// see the `ID_LOG_LEVEL` comment in `CONTROLS`), not the closed
-    /// control's footprint, so its declared rect legitimately extends over
-    /// controls below it without a real visual collision.
-    fn overlap_exempt(class: &str) -> bool {
-        class == "COMBOBOX"
-    }
-
-    fn rects_overlap(a: &ControlSpec, b: &ControlSpec) -> bool {
-        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-    }
-
-    /// `spec` scaled to `dpi` — same fields, just run through
-    /// `scale_dimension` — so overlap checks can reuse [`rects_overlap`] on
-    /// the geometry `layout()` would actually produce at that DPI, not only
-    /// on the 96-DPI baseline table.
-    fn scaled(spec: &ControlSpec, dpi: u32) -> ControlSpec {
-        ControlSpec {
-            x: scale_dimension(spec.x, dpi),
-            y: scale_dimension(spec.y, dpi),
-            w: scale_dimension(spec.w, dpi),
-            h: scale_dimension(spec.h, dpi),
-            ..*spec
-        }
-    }
-
-    fn assert_no_overlap_at(dpi: u32) {
-        let scaled: Vec<ControlSpec> = CONTROLS.iter().map(|c| scaled(c, dpi)).collect();
-        for (i, a) in scaled.iter().enumerate() {
-            for b in &scaled[i + 1..] {
-                if overlap_exempt(a.class) || overlap_exempt(b.class) {
-                    continue;
-                }
-                assert!(
-                    !rects_overlap(a, b),
-                    "controls {} and {} overlap at {dpi} dpi: {:?} vs {:?}",
-                    a.id,
-                    b.id,
-                    a,
-                    b
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn no_two_controls_overlap() {
-        assert_no_overlap_at(96);
-    }
-
-    #[test]
-    fn no_two_controls_overlap_at_125_percent() {
-        assert_no_overlap_at(120);
-    }
-
-    #[test]
-    fn no_two_controls_overlap_at_150_percent() {
-        assert_no_overlap_at(144);
-    }
-
     #[test]
     fn the_work_area_clamp_keeps_a_window_inside_it() {
         // Work area 0..1000 x 0..800, window larger than it on both axes:
@@ -1473,25 +1432,6 @@ mod tests {
     }
 
     #[test]
-    fn every_tabstop_control_fits_inside_the_client_rect() {
-        // A bounds check, not a membership check — despite the name (kept
-        // for continuity with the invariant it was written to guard), every
-        // entry is checked, not just WS_TABSTOP ones: a decorative label
-        // that overflows the window clips just as visibly as a control
-        // someone could tab to.
-        for spec in CONTROLS {
-            assert!(
-                spec.x >= 0 && spec.x + spec.w <= BASE_WINDOW_WIDTH,
-                "{spec:?} exceeds window width"
-            );
-            assert!(
-                spec.y >= 0 && spec.y + spec.h <= BASE_WINDOW_HEIGHT,
-                "{spec:?} exceeds window height"
-            );
-        }
-    }
-
-    #[test]
     fn the_language_row_leads_the_general_section_and_shifts_the_rest_by_one_row() {
         let spec = |id: u16| {
             CONTROLS
@@ -1512,99 +1452,6 @@ mod tests {
         assert_eq!(spec(ID_LOG_LEVEL).y, 510);
         assert_eq!(spec(ID_CLOSE).y, 616);
         assert_eq!(BASE_WINDOW_HEIGHT, 654);
-    }
-
-    /// Strips `SysLink`'s `<a>`/`</a>` anchor markup: it is the control's own
-    /// hyperlink syntax, never text the control draws, so measuring it as
-    /// visible width would overstate what the user actually sees.
-    fn strip_syslink_markup(text: &str) -> String {
-        text.replace("<a>", "").replace("</a>", "")
-    }
-
-    /// Prints every label whose text, measured at 96 DPI in the window's
-    /// own fonts, is wider than its control. Ignored because German is
-    /// known to overflow today; the hardening cycle turns this into a gate.
-    /// Run: `cargo test --locked report_label_overflow -- --ignored --nocapture`
-    #[test]
-    #[ignore = "diagnostic: prints the overflow record for the layout-hardening cycle"]
-    fn report_label_overflow() {
-        use super::super::window::{build_font, wide};
-        use crate::core::i18n::{Lang, strings};
-        use windows::Win32::Graphics::Gdi::{
-            DT_CALCRECT, DT_SINGLELINE, DT_WORDBREAK, DeleteObject, DrawTextW, GetDC, ReleaseDC,
-            SelectObject,
-        };
-        use windows::Win32::Graphics::Gdi::{FW_BOLD, FW_NORMAL};
-
-        let dpi = 96;
-        let regular = build_font(dpi, FW_NORMAL);
-        let bold = build_font(dpi, FW_BOLD);
-        let hdc = unsafe { GetDC(None) };
-        assert!(!hdc.is_invalid(), "no screen DC");
-
-        let hints = [ID_HK_HINT, ID_LOG_HINT];
-        println!("| lang | id | text | available | measured | overflow |");
-        println!("|---|---|---|---|---|---|");
-        for &lang in Lang::ALL {
-            let s = strings(lang);
-            for spec in CONTROLS {
-                let Some(key) = spec.text else { continue };
-                let raw_text = s.get(key);
-                let text = if spec.class == "SysLink" {
-                    strip_syslink_markup(raw_text)
-                } else {
-                    raw_text.to_string()
-                };
-                let font = if is_section_header(spec.id) {
-                    bold
-                } else {
-                    regular
-                };
-                let mut buf = wide(&text);
-                let is_hint = hints.contains(&spec.id);
-                let mut rect = RECT {
-                    left: 0,
-                    top: 0,
-                    right: if is_hint { spec.w } else { 0 },
-                    bottom: 0,
-                };
-                let flags = if is_hint {
-                    DT_CALCRECT | DT_WORDBREAK
-                } else {
-                    DT_CALCRECT | DT_SINGLELINE
-                };
-                // SAFETY: `hdc` is a valid screen DC obtained above and released
-                // below; `font` is one of the two GDI fonts built above and
-                // still owned at this point; `buf` outlives the call and
-                // DrawTextW only reads the number of code units its own length
-                // reports.
-                unsafe {
-                    let old = SelectObject(hdc, font.into());
-                    DrawTextW(hdc, &mut buf, &raw mut rect, flags);
-                    SelectObject(hdc, old);
-                }
-                let (available, measured) = if is_hint {
-                    (spec.h, rect.bottom - rect.top)
-                } else {
-                    (spec.w, rect.right - rect.left)
-                };
-                if measured > available {
-                    println!(
-                        "| {} | {} | {text} | {available} | {measured} | +{} |",
-                        lang.tag(),
-                        spec.id,
-                        measured - available
-                    );
-                }
-            }
-        }
-        // SAFETY: releases the DC obtained via GetDC above and frees the two
-        // fonts built above; each is dropped exactly once, after its last use.
-        unsafe {
-            ReleaseDC(None, hdc);
-            let _ = DeleteObject(regular.into());
-            let _ = DeleteObject(bold.into());
-        }
     }
 
     #[test]

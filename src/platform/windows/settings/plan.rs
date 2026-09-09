@@ -460,13 +460,20 @@ pub(super) fn plan_layout(
 
 #[cfg(test)]
 mod tests {
-    use super::super::layout::{
-        ID_CLOSE, ID_HK_UP, ID_LABEL_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT, ID_LANGUAGE,
-        ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE, ID_SEP_GENERAL, ID_STEP_EDIT,
-        ID_STEP_UPDOWN,
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, VIRTUAL_KEY,
     };
+
+    use super::super::super::hotkey::{ParsedHotkey, key_name};
+    use super::super::layout::{
+        ID_CLOSE, ID_HK_DOWN, ID_HK_UP, ID_LABEL_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT,
+        ID_LANGUAGE, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE, ID_SEP_GENERAL,
+        ID_STEP_EDIT, ID_STEP_UPDOWN, is_checkbox,
+    };
+    use super::super::measure::GdiMeasure;
+    use super::super::window::{language_combo_entries, log_level_combo_entries};
     use super::*;
-    use crate::core::i18n::Lang;
+    use crate::core::i18n::{Lang, strings};
 
     /// Measures a fixed width per character, so an assertion can be read
     /// without knowing any font's metrics.
@@ -739,5 +746,254 @@ mod tests {
         let back = plan_layout(Lang::English, 96, "v0.10.0", &mut narrow).client_h;
         assert!(grown > back, "grown={grown} back={back}");
         assert_eq!(back, 654, "a later plan must not inherit an earlier growth");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Layout gate: the real fonts, every language, four scalings
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Logical-pixel bounds the derived layout must stay inside.
+    ///
+    /// Not a proof the window fits a screen: the outer rect for today's 654
+    /// logical client is 1037 px at 144 DPI, against roughly 1008 usable on a
+    /// 1080p work area at 150% scaling, so it already does not — the
+    /// work-area clamp is what mitigates that, and it predates this layout.
+    /// These are do-not-get-worse bounds.
+    const MAX_CLIENT_W: i32 = 560;
+    const MAX_CLIENT_H: i32 = 700;
+
+    /// The widest realistic version string, which is what the footer must
+    /// hold — not whatever `git describe` happens to produce on the machine
+    /// running the test.
+    const WORST_CASE_VERSION: &str = "v0.10.0+999.gc4687e5.dirty (dev)";
+
+    /// The scalings the gate plans at: 100%, 125%, 150% and 200%.
+    const GATE_DPIS: [u32; 4] = [96, 120, 144, 192];
+
+    /// The table row `id` came from.
+    fn spec_of(id: u16) -> &'static ControlSpec {
+        CONTROLS
+            .iter()
+            .find(|spec| spec.id == id)
+            .expect("every planned id comes from the table")
+    }
+
+    /// Whether `class` is exempt from the overlap check: a combo box's `h`
+    /// is the height of its *dropped-down* list (a documented Win32 quirk —
+    /// see the `ID_LOG_LEVEL` comment in `CONTROLS`), not the closed
+    /// control's footprint, so its declared rect legitimately extends over
+    /// controls below it without a real visual collision.
+    fn overlap_exempt(class: &str) -> bool {
+        class == "COMBOBOX"
+    }
+
+    /// The text a control actually draws in `lang`, with the worst-case
+    /// version string standing in for the build's own and `SysLink`'s
+    /// `<a>`/`</a>` anchor markup removed — that markup is the control's
+    /// hyperlink syntax, never glyphs on screen.
+    fn caption_for_gate(spec: &ControlSpec, lang: Lang) -> String {
+        let text = caption(spec, lang, WORST_CASE_VERSION);
+        if spec.class == "SysLink" {
+            text.replace("<a>", "").replace("</a>", "")
+        } else {
+            text.to_string()
+        }
+    }
+
+    /// Both pickers' entry lists in `lang`, from the same functions that fill
+    /// the live combos, so an entry the window shows cannot escape the gate.
+    fn combo_entries_for_gate(lang: Lang) -> [(u16, Vec<&'static str>); 2] {
+        let s = strings(lang);
+        [
+            (ID_LOG_LEVEL, log_level_combo_entries(s)),
+            (ID_LANGUAGE, language_combo_entries(s)),
+        ]
+    }
+
+    /// The widest string a capture field can be asked to show in `lang`:
+    /// every modifier plus whichever named key renders widest. Which key
+    /// that is depends on the font and on the translation, so every named
+    /// key is rendered and measured rather than guessed at.
+    fn longest_hotkey_display_text(lang: Lang, m: &mut impl TextMeasure) -> String {
+        let s = strings(lang);
+        let modifiers = MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN;
+        (0..=u16::from(u8::MAX))
+            .map(VIRTUAL_KEY)
+            .filter(|vk| key_name(*vk).is_some())
+            .map(|vk| ParsedHotkey::new(modifiers, vk).display_text(s))
+            .max_by_key(|text| m.text_width(text, false))
+            .expect("the key-name table is never empty")
+    }
+
+    /// A measurer for `dpi`, or a panic: a gate that silently measured
+    /// nothing would pass however badly the layout overflowed.
+    fn gate_measure(dpi: u32) -> GdiMeasure {
+        GdiMeasure::new(dpi).unwrap_or_else(|| {
+            panic!("no measurement context at {dpi} dpi — the gate measured nothing")
+        })
+    }
+
+    /// Drawable width of a control's slot: what the painter actually has for
+    /// text, after the chrome that class puts around it.
+    fn drawable(spec: &ControlSpec, placed: &Placed, dpi: u32, m: &mut impl TextMeasure) -> i32 {
+        use super::super::capture::CAPTURE_TEXT_INSET;
+        use super::super::dark::COMBO_TEXT_INSET;
+        match spec.class {
+            "COMBOBOX" => placed.w - m.combo_arrow() - 2 * scale_dimension(COMBO_TEXT_INSET, dpi),
+            "HOTKEY_CAPTURE" => placed.w - 2 * scale_dimension(CAPTURE_TEXT_INSET, dpi),
+            // Pushbuttons and checkboxes share the BUTTON class, so the style
+            // bit is what tells them apart; only a checkbox spends width on an
+            // indicator its caption cannot use.
+            "BUTTON" if is_checkbox(spec.style) => placed.w - checkbox_overhead(dpi, m),
+            _ => placed.w,
+        }
+    }
+
+    #[test]
+    fn no_caption_overflows_its_slot_in_any_language_at_any_dpi() {
+        let mut failures: Vec<String> = Vec::new();
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                for spec in CONTROLS {
+                    let placed = *plan.get(spec.id).expect("planned");
+                    let text = caption_for_gate(spec, lang);
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if wraps(spec.id) {
+                        let needed = m.wrapped_height(&text, false, placed.w);
+                        if needed > placed.h {
+                            failures.push(format!(
+                                "| {} | {dpi} | {} | {text} | h {} | needs {needed} |",
+                                lang.tag(),
+                                spec.id,
+                                placed.h
+                            ));
+                        }
+                        continue;
+                    }
+                    let available = drawable(spec, &placed, dpi, &mut m);
+                    let needed = m.text_width(&text, is_section_header(spec.id));
+                    if needed > available {
+                        failures.push(format!(
+                            "| {} | {dpi} | {} | {text} | {available} | {needed} | +{} |",
+                            lang.tag(),
+                            spec.id,
+                            needed - available
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn no_combo_entry_overflows_its_combo_in_any_language_at_any_dpi() {
+        // Combo entries are not CONTROLS rows, which is exactly why the
+        // previous diagnostic never saw the log-level picker clip.
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                for (id, entries) in combo_entries_for_gate(lang) {
+                    let placed = *plan.get(id).expect("planned");
+                    let available = drawable(spec_of(id), &placed, dpi, &mut m);
+                    for entry in entries {
+                        let needed = m.text_width(entry, false);
+                        assert!(
+                            needed <= available,
+                            "{} combo {id} entry {entry:?} needs {needed} of {available} at {dpi} dpi",
+                            lang.tag()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn no_two_planned_controls_overlap_in_any_language_at_any_dpi() {
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                for (i, a) in plan.controls.iter().enumerate() {
+                    for b in &plan.controls[i + 1..] {
+                        if overlap_exempt(spec_of(a.id).class)
+                            || overlap_exempt(spec_of(b.id).class)
+                        {
+                            continue;
+                        }
+                        let overlaps = a.x < b.x + b.w
+                            && b.x < a.x + a.w
+                            && a.y < b.y + b.h
+                            && b.y < a.y + a.h;
+                        assert!(
+                            !overlaps,
+                            "{} at {dpi} dpi: {} ({},{},{},{}) overlaps {} ({},{},{},{})",
+                            lang.tag(),
+                            a.id,
+                            a.x,
+                            a.y,
+                            a.w,
+                            a.h,
+                            b.id,
+                            b.x,
+                            b.y,
+                            b.w,
+                            b.h
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_planned_window_stays_within_its_bounds_in_any_language() {
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                assert!(
+                    plan.client_w <= scale_dimension(MAX_CLIENT_W, dpi),
+                    "{} at {dpi} dpi: client_w {} exceeds the bound",
+                    lang.tag(),
+                    plan.client_w
+                );
+                assert!(
+                    plan.client_h <= scale_dimension(MAX_CLIENT_H, dpi),
+                    "{} at {dpi} dpi: client_h {} exceeds the bound",
+                    lang.tag(),
+                    plan.client_h
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_capture_field_holds_the_longest_hotkey_text_its_language_can_produce() {
+        // The same seam the tray's usage rows render through, so a modifier
+        // name that outgrows this field outgrows the menu too.
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                let longest = longest_hotkey_display_text(lang, &mut m);
+                for id in [ID_HK_UP, ID_HK_DOWN] {
+                    let placed = *plan.get(id).expect("planned");
+                    let available = drawable(spec_of(id), &placed, dpi, &mut m);
+                    let needed = m.text_width(&longest, false);
+                    assert!(
+                        needed <= available,
+                        "{} at {dpi} dpi: {longest:?} needs {needed} of {available}",
+                        lang.tag()
+                    );
+                }
+            }
+        }
     }
 }
