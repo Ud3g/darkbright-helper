@@ -13,16 +13,16 @@ current DPI. No text is ever measured — there is no `DT_CALCRECT` and no
 That held for exactly one language. German shipped in 0.10.0 and produced three visible
 defects, recorded in the manual pass of 2026-09-08:
 
-1. `Standardwerte wiederherstellen` needs 171 px in a 110 px button. The button is centred, so
+1. `Standardwerte wiederherstellen` needs 165 px in a 110 px button. The button is centred, so
    it is clipped at *both* ends and renders as `ardwerte wiederhers` — corruption, not
    truncation. It cannot simply grow: `ID_CLOSE` starts at 308 and the version line occupies
    everything to its left.
 2. The log-level combo shows `warn (War`. `ID_LOG_LEVEL` is 76 px wide, chosen so its right
-   edge aligns with the spinner rows at x=326; the German entries run to 136 px.
-3. `Protokolldatei schreiben` (134 px plus 17 px of checkbox indicator and gap) is cut and
+   edge aligns with the spinner rows at x=326; the German entries run to 130 px.
+3. `Protokolldatei schreiben` (a 128 px caption plus the checkbox's overhead) is cut and
    collides with the `Stufe:` label hard-placed at x=170, with only 146 px in front of it.
 
-A fourth is visible only in measurement: the footer `SysLink` needs 278 px against its declared
+A fourth is visible only in measurement: the footer `SysLink` needs 272 px against its declared
 250, while 126 px of the window sit unused to its right.
 
 The diagnostic that was supposed to catch all of this, `report_label_overflow`, caught the first
@@ -83,34 +83,49 @@ Every number quoted in this document is at 96 DPI, where the two units coincide.
 At 96 DPI, Segoe UI 9 pt, through `DrawTextW`/`DT_CALCRECT` with the window's own fonts — the
 same mechanism this design puts into production.
 
+**Measurement convention: the string is passed without its terminating NUL.** The existing
+diagnostic passes `wide()`'s output, which is NUL-terminated, and the `windows` crate's
+`DrawTextW` binding sends the slice's whole length as the character count — so the NUL is
+measured as a character and inflates *every* width by a constant 6 px at this font and DPI
+(verified). Independent confirmation that the NUL-free value is the true one: `debug` measures
+34 px without it, and "~34px" is what the comment beside `ID_LOG_LEVEL` in `CONTROLS` has said
+all along, from a measurement taken by other means. Every figure below is NUL-free, and so is
+every figure elsewhere in this document — which means they are 6 px lower than the ones the
+2026-09-08 overflow record carries. `docs/architecture.md` §14's version-line figure of 165 px
+comes from the same inflated source and is re-measured under this convention during
+implementation.
+
 | Quantity | English | German | Available today |
 |---|---:|---:|---|
-| Widest label, hotkey column (x=24) | 94 | 113 | 140 |
-| Widest label, spinner column (x=24) | 154 | 181 | 220 |
-| `ID_RESTORE` | 90 | 171 | 110 |
-| `ID_LOG_CHECK` caption + 17 (13 indicator + 4 gap) | 90 | 151 | 146 |
-| `ID_LINK_CONFIG`, `<a>` markup stripped | 183 | 278 | 250 |
-| Widest log-level entry (`debug` / `trace (…)`) | 40 | 136 | 76 |
-| `Strg+Umschalt+Nach-Oben` | 80 | 155 | 218 |
+| Widest label, hotkey column (x=24) | 88 | 107 | 140 |
+| Widest label, spinner column (x=24) | 148 | 175 | 220 |
+| `ID_RESTORE` | 84 | 165 | 110 |
+| `ID_LOG_CHECK` caption alone | 67 | 128 | 146 |
+| `ID_LINK_CONFIG`, `<a>` markup stripped | 177 | 272 | 250 |
+| Widest log-level entry (`debug` / `trace (…)`) | 34 | 130 | 76 |
+| `Strg+Umschalt+Nach-Oben` | 74 | 149 | 218 |
 | Tooltip, all four warnings (UTF-16 units) | 99 | 113 | 127 |
 
-Two facts follow, and they set this design's shape.
+Three facts follow, and they set this design's shape.
 
-**German does not need a wider window.** Its widest label leaves 39 px of slack in the column
+**German does not need a wider window.** Its widest label leaves 45 px of slack in the column
 that binds. All four defects are local errors in hard-wired constants, not a window that ran out
 of room. The derived width earns its keep at language three: Russian scales
 `Brightness step per keypress` to roughly 293 px (2026-09-07 review §4.1), which does break the
 column.
 
-**The checkbox indicator is measurable, and dark mode is the binding case.**
-`OpenThemeDataForDpi(None, "BUTTON", dpi)` plus `GetThemePartSize(BP_CHECKBOX, TS_TRUE)` gives
-the indicator; `dark.rs:596` already defines `CHECKBOX_TEXT_GAP = 4` and `dark.rs:649,680` is
-the code that actually decides where a caption starts in this app — it measures the glyph per
-paint and draws at `glyph_rect.right + CHECKBOX_TEXT_GAP`. A system-drawn light-mode checkbox
-consumes less (`BCM_GETIDEALSIZE` returns caption + 12), so sizing for the dark-mode painter
-covers both. The planner therefore shares `CHECKBOX_TEXT_GAP` with `dark.rs` rather than
-inventing a second constant, and falls back to 13 px if the theme query fails, exactly as
-`dark.rs` already does.
+**The checkbox indicator is measurable, and its total overhead must be calibrated, not
+assumed.** `OpenThemeDataForDpi(None, "BUTTON", dpi)` plus `GetThemePartSize(BP_CHECKBOX,
+TS_TRUE)` gives the indicator itself — 13 / 16 / 16 / 16 px at 96 / 120 / 144 / 192 — and
+`dark.rs:596` already defines `CHECKBOX_TEXT_GAP = 4`, used at `dark.rs:649,680` to place the
+caption at `glyph_rect.right + CHECKBOX_TEXT_GAP`. But indicator + gap is demonstrably *not* the
+whole budget: under the corrected convention the German log caption is 128 px, which with an
+overhead of 17 would come to 145 against 146 px of room — it would fit, and on hardware it
+visibly did not. `BCM_GETIDEALSIZE` on a real control wants caption + 18, which lands exactly on
+146 and matches what was seen. The overhead is therefore **measured from a live control during
+implementation** and recorded with its value, rather than derived from the indicator size; the
+dark-mode painter and the system-drawn control are both checked, and the larger wins, since the
+window renders in either theme.
 
 ## Design
 
@@ -183,9 +198,9 @@ both the `w:140` and the `w:220` labels leave before their control.
 one caption but the whole run before the control column:
 
 ```
-indicator(13) + CHECKBOX_TEXT_GAP(4) + "Protokolldatei schreiben"(134)
-              + INLINE_GAP(6) + inline_label(max(authored 74, "Stufe:" 36) = 74)   = 231
-English, for comparison:  13 + 4 + 73 + 6 + 74                                    = 170
+checkbox_overhead(18, calibrated) + "Protokolldatei schreiben"(128)
+              + INLINE_GAP(6) + inline_label(max(authored 74, "Stufe:" 30) = 74)   = 226
+English, for comparison:  18 + 67 + 6 + 74                                        = 165
 column B floor: 250 − 24 − COL_GAP(6)                                             = 220
 ```
 
@@ -195,10 +210,10 @@ authored width acts as a **minimum**, which is what keeps English identical: `ma
 measurement would right-align it to 208 and shift the English row 38 px — a regression dressed
 as a refinement.
 
-English's run is 170, well under the 220 floor, so column B does not move and the whole window
-is unchanged. German's 231 pushes column B to 231 and its control edge from 250 to 261 — and the
+English's run is 165, well under the 220 floor, so column B does not move and the whole window
+is unchanged. German's 226 pushes column B to 226 and its control edge from 250 to 256 — and the
 window still does not grow, because the widest thing in that column is the 120 px language combo
-and `261 + 120 + 12 = 393` is inside the 400 floor. So the collision is gone with no word
+and `256 + 120 + 12 = 388` is inside the 400 floor. So the collision is gone with no word
 changed and nothing visibly moved but the log row itself. In a language where the run does not
 fit, the control column keeps moving right and the row still reads correctly — which is the
 point: no future language can reproduce this collision, because nothing in the row is placed by
@@ -230,12 +245,13 @@ The 400 floor is what keeps today's appearance exactly as it is; every other ter
 The footer participating in the width is what resolves the `ID_RESTORE` conflict without a
 compromise in either direction:
 
-- **Release build.** `version_string()` is `0.10.0`; §14 records that a released build needs
-  30 px of the version line. The footer then needs 314 px, the 400 floor binds, and the shipped
-  German window is identical to today's — with 116 px of room for a 30 px string.
+- **Release build.** `version_string()` is `0.10.0`, about 24 px NUL-free. The footer then
+  needs 302 px, the 400 floor binds, and the shipped German window is identical to today's —
+  with 122 px of room.
 - **Development build.** The worst realistic string, `0.10.0+64.g0e4d436.dirty (dev)`, measures
-  165 px (§14 records this as 165 against 172 px of room, a 7 px margin). The footer then needs
-  449 px and the window grows to it. Nothing is truncated.
+  159 px NUL-free (§14 records 165 from the inflated source, against 172 px of room). With
+  `Auf Standard zurücksetzen` at 140 px the restore button becomes 160, the footer needs 437 px,
+  and the window grows to it. Nothing is truncated.
 
 That is the intended behaviour, not a side effect: the version line is the one control whose
 caption is a runtime value, so the window that must display it is a runtime question. It does
@@ -281,7 +297,7 @@ that CI stays green when it happens rather than requiring a person to re-tune th
 5. `configure_updowns`, `configure_combo_height`, `apply_snapshot`, `ShowWindow`.
 
 This is deliberately not "create, then resize": a window created centred for 400 px and then
-grown to 449 would sit 25 px off-centre. Computing first makes the initial geometry correct in
+grown to 437 would sit 19 px off-centre. Computing first makes the initial geometry correct in
 one step and deletes the resize path from creation entirely.
 
 `apply` bundles the moves through `BeginDeferWindowPos`. Two constraints on it. `SWP_NOZORDER`
@@ -306,7 +322,7 @@ dragged the window, and a caption change is no reason to recentre it.
 
 | Defect | Treatment | Cost |
 |---|---|---|
-| `ID_RESTORE` | German becomes `Auf Standard zurücksetzen` (146 px); the button sizes itself; the window grows only in a development build | one string |
+| `ID_RESTORE` | German becomes `Auf Standard zurücksetzen` (140 px); the button sizes itself; the window grows only in a development build | one string |
 | `ID_LOG_LEVEL` | The parenthetical convention is dropped: every language shows `error`/`warn`/`info`/`debug`/`trace` | five strings, one `i18n.rs` comment |
 | `ID_LOG_CHECK` | None. The measured composite row resolves it | — |
 | `ID_LINK_CONFIG` | Authored `w` corrected 250 → 376, the full width its row always had; `Stretch` carries that margin forward | one number |
@@ -314,10 +330,10 @@ dragged the window, and a caption change is no reason to recentre it.
 **The log-level change is a width decision, not a consistency one.** §16 explicitly permits a
 gloss — it says the picker's entries are display-only and the stored value comes from the
 combo's selected index, never from its text — so the parenthetical was sanctioned, not an
-oversight. What it costs is room: German's widest entry is 136 px, plus the dropdown arrow (17)
-and the two 4 px text insets `dark.rs:824` applies, is 161 px. At the control column's left edge
-of 250 the combo would end at 411 against a 388 right margin, so keeping the gloss buys a German
-window roughly 23 px wider and gives up the log combo's right-edge alignment with the spinner
+oversight. What it costs is room: German's widest entry is 130 px, plus the dropdown arrow (17)
+and the two 4 px text insets `dark.rs:824` applies, is 155 px. At the control column's left edge
+of 250 the combo would end at 405 against a 388 right margin, so keeping the gloss buys a German
+window roughly 17 px wider and gives up the log combo's right-edge alignment with the spinner
 rows at 326. `CB_SETDROPPEDWIDTH` does not help: it widens only the open list, so the closed
 face still reads `warn (War`. The bare token costs nothing and the adjacent `Stufe:`/`Level:`
 label already carries the meaning, so the gloss goes and the combo keeps `w:76`.
@@ -351,8 +367,8 @@ For every `Lang` × DPI ∈ {96, 120, 144, 192}, against the plan for that DPI:
 - the capture fields fit the widest hotkey text `ParsedHotkey::display_text` can produce in that
   language (all modifiers plus the longest named key), the seam the tray usage rows share;
 - no two controls overlap, carrying over the existing exemption for a combo's dropped-list `h`;
-- the version line fits the documented worst case of 165 px, not the runner's incidental build
-  string;
+- the version line fits the worst-case version string re-measured under the NUL-free
+  convention, not the runner's incidental build string;
 - `win_w ≤ 560` and `win_h ≤ 700` logical.
 
 **What the height ceiling is and is not.** It is not proof the window fits a screen. Measured:
@@ -407,7 +423,7 @@ uncut in a development build, a live `de` ↔ `en` switch resizing the window wi
 residue and without moving it, `Auf Standard zurücksetzen` fully legible, and the log row
 uncollided at every one of the three scalings.
 
-Because the footer participates in the width, a development build is 449 px wide and a release
+Because the footer participates in the width, a development build is 437 px wide and a release
 build 400 — so the pass would otherwise validate a geometry no user receives. `plan_layout` takes
 `version_text` as a parameter for exactly this reason: the pass includes one run with a
 release-shaped version string, which is the shipped geometry. The procedure is updated in
@@ -418,7 +434,7 @@ No release tag until that pass is clean.
 ## Risks
 
 - **Runner font metrics differ from a developer's machine.** Contained by construction for text:
-  both sides of every comparison are measured through the same port. Only 560, 700 and 165 are
+  both sides of every comparison are measured through the same port. Only 560 and 700 are
   absolute, and each has room.
 - **A DPI-sensitive query sneaks into the port without a DPI argument.** This is the sharpest
   edge in the design, because it fails silently and in the direction of a green gate. §1 states
