@@ -64,7 +64,7 @@ pub(super) const ID_CLOSE: u16 = 143;
 pub(super) const ID_VERSION: u16 = 144;
 
 const ID_HEADER_GENERAL: u16 = 200;
-const ID_SEP_GENERAL: u16 = 201;
+pub(super) const ID_SEP_GENERAL: u16 = 201;
 const ID_LABEL_STEP: u16 = 202;
 pub(super) const ID_LABEL_STEP_UNIT: u16 = 203;
 const ID_HEADER_HOTKEYS: u16 = 204;
@@ -190,7 +190,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderGeneral),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_GENERAL,
@@ -201,7 +201,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_LANGUAGE,
@@ -238,7 +238,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 300,
         h: 20,
         text: Some(TextKey::Autostart),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_STEP,
@@ -294,7 +294,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderHotkeys),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_HOTKEYS,
@@ -305,7 +305,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_HK_UP,
@@ -360,7 +360,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 20,
         text: Some(TextKey::Intercept),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     // Muted explainer text under the intercept checkbox.
     ControlSpec {
@@ -372,7 +372,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 328,
         h: 34,
         text: Some(TextKey::HintIntercept),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     // Inline hotkey status line, empty until handle_hotkey_message_text sets
     // it; whether it renders as an error (red) or a notice (muted) is a
@@ -386,7 +386,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 16,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     // ── On-screen display ───────────────────────────────────────────────
     ControlSpec {
@@ -398,7 +398,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderOsd),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_OSD,
@@ -409,7 +409,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT,
@@ -509,7 +509,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderAdvanced),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_ADVANCED,
@@ -520,7 +520,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_RESYNC_CHECK,
@@ -669,7 +669,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 32,
         text: Some(TextKey::HintLogging),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     // ── Footer ──────────────────────────────────────────────────────────
     // One SysLink carries both links as flowing text, `iLink` (0 = config
@@ -678,16 +678,19 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     // separate control. SysLink markup: the visible text is exactly the
     // spec's wording; the `<a>` tags are SysLink's own syntax for "this span
     // is the hyperlink", not additional user-facing text.
+    // The row has always had the full width between the margins to draw in;
+    // the authored 250 was simply too narrow for its own text, which needs 177
+    // in English and 272 in German.
     ControlSpec {
         id: ID_LINK_CONFIG,
         class: "SysLink",
         style: STYLE_LINK_GROUP,
         x: 12,
         y: 584,
-        w: 250,
+        w: 376,
         h: 20,
         text: Some(TextKey::FooterLinks),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_RESTORE,
@@ -698,7 +701,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 110,
         h: 26,
         text: Some(TextKey::ButtonRestoreDefaults),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::FooterButton,
     },
     ControlSpec {
         id: ID_CLOSE,
@@ -709,16 +712,16 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 80,
         h: 26,
         text: Some(TextKey::ButtonClose),
-        anchor: Anchor::Fixed,
+        anchor: Anchor::FooterButton,
     },
     // Which build is running, in the free space left of the buttons and
     // vertically centred against them. `text` is `None` because the string is
     // only known at build time: `window`'s control creation substitutes
     // `core::version` output for this one id.
     //
-    // `w` is what is left before "Restore defaults" starts, and it is the
-    // binding constraint; the width budget is measured in
-    // docs/architecture.md §14, "Version line".
+    // `w` is what is left before "Restore defaults" starts; the planner
+    // recomputes it from the measured version string, and widens the window
+    // when a development build's longer string does not fit.
     ControlSpec {
         id: ID_VERSION,
         class: "STATIC",
@@ -728,7 +731,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 172,
         h: 18,
         text: None,
-        anchor: Anchor::Fixed,
+        anchor: Anchor::FooterFill,
     },
 ];
 

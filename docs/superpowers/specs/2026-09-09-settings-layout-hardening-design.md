@@ -76,7 +76,8 @@ Scaling a 96-DPI measurement is not a substitute for measuring at the target DPI
 indicator makes the point without ambiguity: `OpenThemeDataForDpi` reports 13 / 16 / 16 / 16 px
 at 96 / 120 / 144 / 192, which is neither constant nor proportional.
 
-Every number quoted in this document is at 96 DPI, where the two units coincide.
+Every number quoted in this document is at 96 DPI, where the two units coincide, unless a
+DPI is stated.
 
 ## Measurements
 
@@ -146,11 +147,14 @@ therefore changes with DPI: the system control is tighter at 96, the dark painte
 and they tie at 144. Neither may be assumed from the other, and neither may be scaled from 96 —
 the planner queries at the DPI it is planning for, exactly as §Units requires.
 
-**A pushbutton's padding is a flat 8 px.** `BCM_GETIDEALSIZE` − caption is 8 for every button
-caption at every one of the four DPI values, English and German, so `BUTTON_TEXT_PAD` is 8 and is
-*not* DPI-scaled. That is much less than the 26 px the current table implies (`Restore defaults`
-at 84 px NUL-free in a 110 px button) — the authored table simply has slack, which is what
-`BUTTON_MIN_W` (80, from `Close`'s authored width) preserves.
+**A pushbutton needs 8 px around its caption and the table gives it 26.** `BCM_GETIDEALSIZE` −
+caption is 8 for every button caption at every one of the four DPI values, English and German —
+that is what the control itself asks for. The authored table is more generous: `Restore defaults`
+measures 84 px NUL-free inside a 110 px button, so the table's own padding is 26 px.
+`BUTTON_TEXT_PAD` is that 26, which is what makes the English footer render pixel-for-pixel as it
+does today, and it is comfortably above the 8 px the control needs. `BUTTON_MIN_W` (80, from
+`Close`'s authored width) keeps a short caption from producing a cramped button: `Close` at 35 px
+plus the padding is only 61.
 
 **Version-line widths**, measured on the string the control actually shows, `"v"` + the version:
 `v0.10.0` is 36 px at 96 DPI (45 / 57 / 74 at 120 / 144 / 192), and the worst realistic
@@ -199,7 +203,6 @@ one field saying how the control responds when text grows:
 
 | Anchor | Applies to | Meaning |
 |---|---|---|
-| `Fixed` | default | `x`, `w` as authored. |
 | `Label(col)` | row captions | Width measured; the column's width is the maximum over its rows. |
 | `Checkbox(col)` | checkboxes paired with a control | As `Label`, plus indicator and gap. |
 | `CheckboxRun` | `ID_LOG_CHECK` | First member of the composite log row: width is its own requirement, not the column's. |
@@ -268,20 +271,20 @@ The two footer gaps are read off the current table and differ: 6 px between the 
 right edge (184) and `ID_RESTORE` (190), 8 px between `ID_RESTORE`'s right edge (300) and
 `ID_CLOSE` (308). Button widths are `max(BUTTON_MIN_W, measured + BUTTON_TEXT_PAD)`, where
 `BUTTON_MIN_W` is 80 — `ID_CLOSE`'s authored width, which the floor exists to preserve — and
-`BUTTON_TEXT_PAD` is the measured 8 px of §Measurements, not a figure read off the table. The
-table's own implied padding is 26 px, and using it would inflate every button; the floor already
-does the job of keeping short captions from producing a cramped button.
+`BUTTON_TEXT_PAD` is 26, the padding the authored table itself gives `ID_RESTORE`, so English
+renders exactly as it does today. A live control's own ideal size wants only 8 px (§Measurements),
+so 26 is comfortably more than the button needs rather than a figure it has to live within.
 
 The 400 floor is what keeps today's appearance exactly as it is; every other term is measured.
 The footer participating in the width is what resolves the `ID_RESTORE` conflict without a
 compromise in either direction:
 
 - **Release build.** The version line reads `v0.10.0`, 36 px. With `Auf Standard zurücksetzen`
-  at 140 px the restore button becomes 148 and `Schließen` leaves `ID_CLOSE` on its 80 px floor,
-  so the footer needs `12 + 36 + 6 + 148 + 8 + 80 + 12 = 302` px. The 400 floor binds, and the
-  shipped German window is identical to today's, with 98 px to spare. English is 246.
+  at 140 px the restore button becomes 166 and `Schließen` leaves `ID_CLOSE` on its 80 px floor,
+  so the footer needs `12 + 36 + 6 + 166 + 8 + 80 + 12 = 320` px. The 400 floor binds, and the
+  shipped German window is identical to today's, with 80 px to spare. English is 264.
 - **Development build.** The worst realistic string, `v0.10.0+64.gc4687e5.dirty (dev)`, measures
-  165 px. The footer then needs `12 + 165 + 6 + 148 + 8 + 80 + 12 = 431` px and the window grows
+  165 px. The footer then needs `12 + 165 + 6 + 166 + 8 + 80 + 12 = 449` px and the window grows
   to it. Nothing is truncated.
 
 That is the intended behaviour, not a side effect: the version line is the one control whose
@@ -328,7 +331,7 @@ that CI stays green when it happens rather than requiring a person to re-tune th
 5. `configure_updowns`, `configure_combo_height`, `apply_snapshot`, `ShowWindow`.
 
 This is deliberately not "create, then resize": a window created centred for 400 px and then
-grown to 431 would sit 16 px off-centre. Computing first makes the initial geometry correct in
+grown to 449 would sit 25 px off-centre. Computing first makes the initial geometry correct in
 one step and deletes the resize path from creation entirely.
 
 `apply` bundles the moves through `BeginDeferWindowPos`. Two constraints on it. `SWP_NOZORDER`
@@ -454,8 +457,8 @@ uncut in a development build, a live `de` ↔ `en` switch resizing the window wi
 residue and without moving it, `Auf Standard zurücksetzen` fully legible, and the log row
 uncollided at every one of the three scalings.
 
-Because the footer participates in the width, a development build is 431 px wide and a release
-build 400 — so the pass would otherwise validate a geometry no user receives. `plan_layout` takes
+Because the footer participates in the width, a German development build is 449 px wide and a
+release build 400 — so the pass would otherwise validate a geometry no user receives. `plan_layout` takes
 `version_text` as a parameter for exactly this reason: the pass includes one run with a
 release-shaped version string, which is the shipped geometry. The procedure is updated in
 `docs/architecture.md` in this cycle, as the "Integration Testing" rule requires.
@@ -477,9 +480,11 @@ No release tag until that pass is clean.
 - **The window resizes during a live language switch.** Only when a language genuinely needs more
   room, which in a development build is today's `de` ↔ `en` — so the manual pass sees it rather
   than a user meeting it first.
-- **`ControlSpec` grows a field that must be right for 40-odd rows.** Mitigated by making `Fixed`
-  the do-nothing default and by the gate, which fails on any row whose anchor leaves it too small
-  or overlapping.
+- **`ControlSpec` grows a field that must be right for 40-odd rows.** Mitigated by rolling the
+  anchors out one kind at a time, each against the English plan's authored geometry, and by the
+  gate, which fails on any row whose anchor leaves it too small or overlapping. Every row ends up
+  with an anchor that describes it — there is no do-nothing default left to hide a row that was
+  never considered.
 
 ## Documentation
 

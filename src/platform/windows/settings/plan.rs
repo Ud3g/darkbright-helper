@@ -32,12 +32,10 @@ pub(super) enum Col {
 
 /// How a control responds when a translation makes surrounding text wider.
 ///
-/// Every entry starts `Fixed`, which reproduces the authored table exactly;
-/// a row earns a different anchor only when something about it must move.
+/// The variants together reproduce the authored table exactly for English at
+/// 96 DPI; each one describes what the row does when text around it grows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Anchor {
-    /// Position and width exactly as authored, scaled to the DPI.
-    Fixed,
     /// A row caption: width is the column's, which is the widest measured
     /// caption in it.
     Label(Col),
@@ -61,6 +59,15 @@ pub(super) enum Anchor {
     /// A control that follows another in the same row — a spinner's buttons,
     /// a unit suffix — keeping its authored offset from the column edge.
     AfterControl(Col),
+    /// Keeps the authored right margin as the window widens: headers,
+    /// separators, wrapping hints, full-width checkboxes and the footer link
+    /// row.
+    Stretch,
+    /// One of the two footer buttons, in a chain right-aligned against the
+    /// window's margin.
+    FooterButton,
+    /// The version line, which takes whatever the footer buttons leave.
+    FooterFill,
 }
 
 /// One control's final rectangle, in physical pixels.
@@ -148,6 +155,20 @@ const INDENT: i32 = 24;
 /// single control, and only a wider translation pushes a column out.
 const COL_A_FLOOR: i32 = 140;
 const COL_B_FLOOR: i32 = 220;
+/// Footer spacing, both read off the authored table: 6 px between the
+/// version line and the restore button (190 - 184), 8 px between the two
+/// buttons (308 - 300).
+const FOOTER_GAP_VERSION: i32 = 6;
+const FOOTER_GAP_BUTTONS: i32 = 8;
+/// A pushbutton is never narrower than this, and never tighter around its
+/// caption than this. The floor is "Close"'s authored 80 px, which is what
+/// keeps a short caption from producing a cramped button (35 + 26 = 61 would
+/// otherwise). The padding is the authored table's own: the 110 px restore
+/// button less "Restore defaults" at 84 px is 26, so English renders exactly
+/// as it does today. A live control's ideal size wants only 8 px around its
+/// caption, so 26 is comfortably more than the control itself needs.
+const BUTTON_MIN_W: i32 = 80;
+const BUTTON_TEXT_PAD: i32 = 26;
 /// What a system-drawn checkbox consumes beyond its caption at 96 DPI,
 /// measured from a live control with `BCM_GETIDEALSIZE`; see
 /// [`checkbox_overhead`] for how it is used.
@@ -200,36 +221,32 @@ fn authored_edge(col: Col) -> i32 {
     }
 }
 
-/// Computes the whole layout for `lang` at `dpi`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the settings window wires the planner in"
-    )
-)]
-pub(super) fn plan_layout(
+/// The log row's level label width: its authored width acts as a floor, so a
+/// short caption leaves the English row exactly where it is and a long one
+/// grows the label leftward instead of overrunning the control.
+#[must_use]
+fn inline_label_width(lang: Lang, dpi: u32, version_text: &str, m: &mut impl TextMeasure) -> i32 {
+    CONTROLS
+        .iter()
+        .find(|spec| spec.anchor == Anchor::InlineLabel)
+        .map_or(0, |spec| {
+            let measured = m.text_width(caption(spec, lang, version_text), false);
+            measured.max(scale_dimension(spec.w, dpi))
+        })
+}
+
+/// The two label columns' widths: each is the widest requirement among its
+/// rows, floored at the authored value so no shipped language moves a control.
+#[must_use]
+fn measure_columns(
     lang: Lang,
     dpi: u32,
     version_text: &str,
+    checkbox_overhead: i32,
+    inline_w: i32,
     m: &mut impl TextMeasure,
-) -> Plan {
-    let indent = scale_dimension(INDENT, dpi);
-    let col_gap = scale_dimension(COL_GAP, dpi);
+) -> (i32, i32) {
     let inline_gap = scale_dimension(INLINE_GAP, dpi);
-    // Hoisted out of the per-row loop: the query opens a theme handle.
-    let checkbox_overhead = checkbox_overhead(dpi, m);
-
-    // The log row's level label: authored width is a floor, so a short
-    // caption leaves the English row untouched and a long one grows leftward.
-    let inline_spec = CONTROLS
-        .iter()
-        .find(|spec| spec.anchor == Anchor::InlineLabel);
-    let inline_w = inline_spec.map_or(0, |spec| {
-        let measured = m.text_width(caption(spec, lang, version_text), false);
-        measured.max(scale_dimension(spec.w, dpi))
-    });
-
     let mut col_a = scale_dimension(COL_A_FLOOR, dpi);
     let mut col_b = scale_dimension(COL_B_FLOOR, dpi);
     for spec in CONTROLS {
@@ -254,6 +271,117 @@ pub(super) fn plan_layout(
             None => {}
         }
     }
+    (col_a, col_b)
+}
+
+/// The footer row, measured: how wide each of its buttons must be, and what
+/// the whole row needs between the window's two margins.
+struct Footer {
+    /// Each footer button's id and width, in table order — the order the
+    /// right-aligned chain is packed in.
+    buttons: Vec<(u16, i32)>,
+    need: i32,
+}
+
+/// Measures the footer. Buttons size to their captions; the version line's
+/// requirement is its own measured width, which is why a development build's
+/// longer build string widens the window instead of being cut.
+#[must_use]
+fn plan_footer(lang: Lang, dpi: u32, version_text: &str, m: &mut impl TextMeasure) -> Footer {
+    let mut buttons: Vec<(u16, i32)> = Vec::new();
+    for spec in CONTROLS {
+        if spec.anchor == Anchor::FooterButton {
+            let text = m.text_width(caption(spec, lang, version_text), false);
+            let w = (text + scale_dimension(BUTTON_TEXT_PAD, dpi))
+                .max(scale_dimension(BUTTON_MIN_W, dpi));
+            buttons.push((spec.id, w));
+        }
+    }
+    let version_w = CONTROLS
+        .iter()
+        .find(|spec| spec.anchor == Anchor::FooterFill)
+        .map_or(0, |spec| {
+            m.text_width(caption(spec, lang, version_text), false)
+        });
+
+    let margin = scale_dimension(MARGIN, dpi);
+    let need = margin
+        + version_w
+        + scale_dimension(FOOTER_GAP_VERSION, dpi)
+        + buttons.iter().map(|(_, w)| *w).sum::<i32>()
+        + scale_dimension(FOOTER_GAP_BUTTONS, dpi)
+            * i32::try_from(buttons.len().saturating_sub(1)).unwrap_or(0)
+        + margin;
+    Footer { buttons, need }
+}
+
+/// A footer button's measured width, from the chain [`plan_footer`] sized.
+#[must_use]
+fn button_width(buttons: &[(u16, i32)], id: u16) -> i32 {
+    buttons
+        .iter()
+        .find(|(bid, _)| *bid == id)
+        .map_or(0, |(_, w)| *w)
+}
+
+/// Where a footer button's right edge falls. The chain is packed against
+/// `right_edge` from its last member backwards, so a button's position depends
+/// only on the buttons that follow it.
+#[must_use]
+fn button_right(buttons: &[(u16, i32)], id: u16, right_edge: i32, gap: i32) -> i32 {
+    let mut right = right_edge;
+    for (bid, bw) in buttons.iter().rev() {
+        if *bid == id {
+            break;
+        }
+        right -= bw + gap;
+    }
+    right
+}
+
+/// The widest extent any row in `col` needs to the right of its column edge,
+/// so a language that outgrows a column widens the window rather than pushing
+/// controls off its right edge. A row's extent runs to the end of whatever
+/// trails its control — a spinner's buttons, a unit suffix — not just the
+/// control itself.
+#[must_use]
+fn control_run(col: Col, dpi: u32) -> i32 {
+    CONTROLS
+        .iter()
+        .filter_map(|spec| match spec.anchor {
+            Anchor::Control(c) | Anchor::AfterControl(c) if c == col => {
+                Some(scale_dimension(spec.x - authored_edge(col) + spec.w, dpi))
+            }
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// Computes the whole layout for `lang` at `dpi`.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "no non-test caller until the settings window wires the planner in"
+    )
+)]
+pub(super) fn plan_layout(
+    lang: Lang,
+    dpi: u32,
+    version_text: &str,
+    m: &mut impl TextMeasure,
+) -> Plan {
+    let indent = scale_dimension(INDENT, dpi);
+    let col_gap = scale_dimension(COL_GAP, dpi);
+    let margin = scale_dimension(MARGIN, dpi);
+    let gap_version = scale_dimension(FOOTER_GAP_VERSION, dpi);
+    let gap_buttons = scale_dimension(FOOTER_GAP_BUTTONS, dpi);
+    // Hoisted out of the per-row loop: the query opens a theme handle.
+    let checkbox_overhead = checkbox_overhead(dpi, m);
+
+    let inline_w = inline_label_width(lang, dpi, version_text, m);
+    let (col_a, col_b) = measure_columns(lang, dpi, version_text, checkbox_overhead, inline_w, m);
 
     let edge_a = indent + col_a + col_gap;
     let edge_b = indent + col_b + col_gap;
@@ -261,14 +389,22 @@ pub(super) fn plan_layout(
         Col::A => edge_a,
         Col::B => edge_b,
     };
-    let client_w = scale_dimension(BASE_WINDOW_WIDTH, dpi);
-    let right_margin = scale_dimension(MARGIN, dpi);
+
+    let footer = plan_footer(lang, dpi, version_text, m);
+    let capture_w = CONTROLS
+        .iter()
+        .find(|spec| matches!(spec.anchor, Anchor::ControlStretch(_)))
+        .map_or(0, |spec| scale_dimension(spec.w, dpi));
+
+    let client_w = scale_dimension(BASE_WINDOW_WIDTH, dpi)
+        .max(edge_a + capture_w + margin)
+        .max(edge_b + control_run(Col::B, dpi) + margin)
+        .max(footer.need);
 
     let controls = CONTROLS
         .iter()
         .map(|spec| {
             let (x, w) = match spec.anchor {
-                Anchor::Fixed => (scale_dimension(spec.x, dpi), scale_dimension(spec.w, dpi)),
                 Anchor::Label(col) | Anchor::Checkbox(col) => (
                     indent,
                     match col {
@@ -284,7 +420,7 @@ pub(super) fn plan_layout(
                 Anchor::Control(col) => (edge(col), scale_dimension(spec.w, dpi)),
                 Anchor::ControlStretch(col) => {
                     let x = edge(col);
-                    (x, (client_w - right_margin - x).max(0))
+                    (x, (client_w - margin - x).max(0))
                 }
                 // The authored offset from the column edge, preserved: a
                 // spinner's buttons must stay glued to their edit field.
@@ -292,6 +428,30 @@ pub(super) fn plan_layout(
                     edge(col) + scale_dimension(spec.x - authored_edge(col), dpi),
                     scale_dimension(spec.w, dpi),
                 ),
+                // The right margin the table already implies for this row,
+                // preserved as the window widens.
+                Anchor::Stretch => {
+                    let x = scale_dimension(spec.x, dpi);
+                    let authored_right_margin =
+                        scale_dimension(BASE_WINDOW_WIDTH - spec.x - spec.w, dpi);
+                    (x, (client_w - authored_right_margin - x).max(0))
+                }
+                // Right-aligned chain: the last button sits against the
+                // margin, each earlier one to its left.
+                Anchor::FooterButton => {
+                    let w = button_width(&footer.buttons, spec.id);
+                    let right =
+                        button_right(&footer.buttons, spec.id, client_w - margin, gap_buttons);
+                    (right - w, w)
+                }
+                // Whatever the chain leaves between it and the left margin.
+                Anchor::FooterFill => {
+                    let chain_left = footer.buttons.first().map_or(client_w - margin, |(id, _)| {
+                        button_right(&footer.buttons, *id, client_w - margin, gap_buttons)
+                            - button_width(&footer.buttons, *id)
+                    });
+                    (margin, (chain_left - gap_version - margin).max(0))
+                }
             };
             Placed {
                 id: spec.id,
@@ -314,8 +474,8 @@ pub(super) fn plan_layout(
 #[cfg(test)]
 mod tests {
     use super::super::layout::{
-        ID_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT, ID_LANGUAGE, ID_LOG_CHECK, ID_LOG_LEVEL,
-        ID_STEP_EDIT, ID_STEP_UPDOWN,
+        ID_CLOSE, ID_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT, ID_LANGUAGE, ID_LINK_CONFIG,
+        ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE, ID_SEP_GENERAL, ID_STEP_EDIT, ID_STEP_UPDOWN,
     };
     use super::*;
     use crate::core::i18n::Lang;
@@ -455,11 +615,11 @@ mod tests {
     }
 
     #[test]
-    fn rows_keep_their_authored_vertical_geometry_and_fixed_rows_their_horizontal() {
+    fn rows_keep_their_authored_vertical_geometry_and_english_its_window_size() {
         // Nothing in this planner touches `y` or `h` — only widths and the
         // columns that follow from them — so every row's vertical geometry
-        // must still be the authored value, scaled. A row that was never
-        // given an anchor keeps its `x` and `w` too.
+        // must still be the authored value, scaled. English at the authored
+        // widths must also leave the window at its authored size.
         for dpi in [96u32, 120, 144, 192] {
             let mut m = FakeMeasure::default();
             let plan = plan_layout(Lang::English, dpi, "0.10.0", &mut m);
@@ -467,13 +627,78 @@ mod tests {
                 let placed = plan.get(spec.id).expect("every control is placed");
                 assert_eq!(placed.y, scale_dimension(spec.y, dpi), "y of {}", spec.id);
                 assert_eq!(placed.h, scale_dimension(spec.h, dpi), "h of {}", spec.id);
-                if spec.anchor == Anchor::Fixed {
-                    assert_eq!(placed.x, scale_dimension(spec.x, dpi), "x of {}", spec.id);
-                    assert_eq!(placed.w, scale_dimension(spec.w, dpi), "w of {}", spec.id);
-                }
             }
             assert_eq!(plan.client_w, scale_dimension(BASE_WINDOW_WIDTH, dpi));
             assert_eq!(plan.client_h, scale_dimension(BASE_WINDOW_HEIGHT, dpi));
+        }
+    }
+
+    #[test]
+    fn stretch_keeps_a_controls_authored_right_margin() {
+        let mut m = FakeMeasure::default();
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut m);
+        // Headers and separators sit 12 from each edge and must still do so.
+        let sep = plan.get(ID_SEP_GENERAL).unwrap();
+        assert_eq!(sep.x, 12);
+        assert_eq!(sep.x + sep.w, plan.client_w - 12);
+        // The footer link row now spans the same full width; its authored 250
+        // was simply too small for its own text.
+        let link = plan.get(ID_LINK_CONFIG).unwrap();
+        assert_eq!(link.x + link.w, plan.client_w - 12);
+    }
+
+    #[test]
+    fn footer_buttons_are_right_aligned_and_sized_to_their_captions() {
+        let mut m = FakeMeasure::default();
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut m);
+        let close = plan.get(ID_CLOSE).unwrap();
+        let restore = plan.get(ID_RESTORE).unwrap();
+        let version = plan.get(ID_VERSION).unwrap();
+        assert_eq!(close.x + close.w, plan.client_w - 12);
+        assert_eq!(restore.x + restore.w, close.x - 8);
+        assert_eq!(version.x, 12);
+        assert_eq!(version.x + version.w, restore.x - 6);
+        assert!(version.w > 0, "the version line must not be squeezed away");
+    }
+
+    #[test]
+    fn a_short_version_string_leaves_the_window_at_its_floor() {
+        let mut m = FakeMeasure::default();
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut m);
+        assert_eq!(plan.client_w, 400);
+    }
+
+    #[test]
+    fn a_long_version_string_widens_the_window_instead_of_being_cut() {
+        let mut m = FakeMeasure::default();
+        let long = "v0.10.0+64.gc4687e5.dirty (dev)";
+        let plan = plan_layout(Lang::English, 96, long, &mut m);
+        let version = plan.get(ID_VERSION).unwrap();
+        assert!(plan.client_w > 400, "client_w={}", plan.client_w);
+        assert!(
+            version.w >= m.text_width(long, false),
+            "version slot {} is narrower than its text",
+            version.w
+        );
+    }
+
+    #[test]
+    fn a_wide_label_column_widens_the_window_too() {
+        let mut wide = FakeMeasure {
+            per_char: 20,
+            ..FakeMeasure::default()
+        };
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut wide);
+        assert!(plan.client_w > 400, "client_w={}", plan.client_w);
+        // Nothing may hang past the right margin.
+        for placed in &plan.controls {
+            assert!(
+                placed.x + placed.w <= plan.client_w - 12 || placed.w == 0,
+                "control {} ends at {}, past {}",
+                placed.id,
+                placed.x + placed.w,
+                plan.client_w - 12
+            );
         }
     }
 
