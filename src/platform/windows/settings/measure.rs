@@ -15,33 +15,14 @@ use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, DT_CALCRECT, DT_SINGLELINE, DT_WORDBREAK, DeleteDC, DeleteObject,
     DrawTextW, FW_BOLD, FW_NORMAL, HDC, HFONT, HGDIOBJ, SelectObject,
 };
-use windows::Win32::UI::Controls::{CloseThemeData, GetThemePartSize, TS_DRAW};
+use windows::Win32::UI::Controls::{
+    BP_CHECKBOX, CBS_UNCHECKEDNORMAL, CloseThemeData, GetThemePartSize, TS_DRAW,
+};
 use windows::Win32::UI::HiDpi::{GetSystemMetricsForDpi, OpenThemeDataForDpi};
 use windows::Win32::UI::WindowsAndMessaging::SM_CXVSCROLL;
 use windows::core::w;
 
 use super::window::build_font;
-
-/// `BUTTON` theme part and state for an unchecked checkbox glyph
-/// (`vsstyle.h`: `BP_CHECKBOX`, `CBS_UNCHECKEDNORMAL`). Kept as literals
-/// for the same reason as the style bits in `layout`: they are stable
-/// Win32 numbers and importing them would pull in a feature for two values.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the layout planner lands"
-    )
-)]
-const BP_CHECKBOX: i32 = 3;
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the layout planner lands"
-    )
-)]
-const CBS_UNCHECKEDNORMAL: i32 = 1;
 
 /// Checkbox indicator width to assume when the theme cannot answer, matching
 /// what the dark-mode painter already falls back to.
@@ -127,9 +108,17 @@ impl GdiMeasure {
         let regular = build_font(dpi, FW_NORMAL);
         let bold = build_font(dpi, FW_BOLD);
         if regular.is_invalid() || bold.is_invalid() {
-            // SAFETY: `dc` was just created here and is released once, before
-            // any font was selected into it.
+            // Each `build_font` call makes its own font, so the one that did
+            // succeed has to be freed here or it leaks.
+            // SAFETY: every handle was created just above, none is selected
+            // into any DC, and each is released once.
             unsafe {
+                if !regular.is_invalid() {
+                    let _ = DeleteObject(regular.into());
+                }
+                if !bold.is_invalid() {
+                    let _ = DeleteObject(bold.into());
+                }
                 let _ = DeleteDC(dc);
             }
             return None;
@@ -150,7 +139,9 @@ impl GdiMeasure {
         // SAFETY: `self.dc` and both fonts were created in `new` and live as
         // long as `self`; neither font is selected into any other DC.
         let previous = unsafe { SelectObject(self.dc, font.into()) };
-        if self.restore.is_none() {
+        // An invalid handle is not something `Drop` can put back, and storing
+        // it would make `Drop` believe the stock font was already restored.
+        if self.restore.is_none() && !previous.is_invalid() {
             self.restore = Some(previous);
         }
     }
@@ -212,7 +203,14 @@ impl TextMeasure for GdiMeasure {
         // SAFETY: `theme` was just opened and checked valid; passing no DC
         // and no bounding rect asks the part for its own size.
         let size = unsafe {
-            GetThemePartSize(theme, None, BP_CHECKBOX, CBS_UNCHECKEDNORMAL, None, TS_DRAW)
+            GetThemePartSize(
+                theme,
+                None,
+                BP_CHECKBOX.0,
+                CBS_UNCHECKEDNORMAL.0,
+                None,
+                TS_DRAW,
+            )
         };
         // SAFETY: `theme` is the handle opened above, closed exactly once.
         unsafe {
@@ -248,12 +246,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_memory_dc_measures_the_same_widths_as_a_screen_dc() {
+    fn widths_are_positive_monotonic_and_free_of_the_terminating_nul() {
         let mut m = GdiMeasure::new(96).expect("measure");
-        // Reference values from a screen DC are not available here; instead
-        // assert the properties the planner relies on: measurement is
-        // positive, monotonic in string length, and free of the terminating
-        // NUL's width.
+        // The properties the planner relies on from a memory DC.
         let short = m.text_width("Close", false);
         let long = m.text_width("Restore defaults", false);
         assert!(short > 0 && long > short, "short={short} long={long}");
@@ -294,6 +289,13 @@ mod tests {
             low.combo_arrow(),
             high.combo_arrow()
         );
-        assert!(high.checkbox_indicator() >= low.checkbox_indicator());
+        // Strict, so a theme that never opens — every call answering with
+        // the fallback — cannot pass.
+        assert!(
+            high.checkbox_indicator() > low.checkbox_indicator(),
+            "checkbox 96={} 192={}",
+            low.checkbox_indicator(),
+            high.checkbox_indicator()
+        );
     }
 }

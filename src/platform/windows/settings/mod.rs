@@ -20,7 +20,9 @@
 //! Control wiring is instant-apply (see [`window`]'s "Control Wiring"
 //! section) including hotkey capture (see [`capture`]). Declarative layout
 //! data and geometry (control ids, styles, the [`layout::CONTROLS`] table,
-//! DPI scaling, window placement) lives in [`layout`]; the hotkey capture
+//! DPI scaling, window placement) lives in [`layout`]; every text and
+//! system-metric measurement the layout needs — the only code here that
+//! touches a device context — lives in [`measure`]; the hotkey capture
 //! control is its own self-contained window class in [`capture`]; every
 //! control's dark-mode painting (custom draw, window subclassing, the
 //! `WM_CTLCOLOR*` colour table) lives in [`dark`]; everything else — window
