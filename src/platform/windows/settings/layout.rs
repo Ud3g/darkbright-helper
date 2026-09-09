@@ -69,7 +69,7 @@ const ID_LABEL_STEP: u16 = 202;
 pub(super) const ID_LABEL_STEP_UNIT: u16 = 203;
 const ID_HEADER_HOTKEYS: u16 = 204;
 const ID_SEP_HOTKEYS: u16 = 205;
-const ID_LABEL_HK_UP: u16 = 206;
+pub(super) const ID_LABEL_HK_UP: u16 = 206;
 const ID_LABEL_HK_DOWN: u16 = 207;
 const ID_HEADER_OSD: u16 = 208;
 const ID_SEP_OSD: u16 = 209;
@@ -92,6 +92,14 @@ pub(super) fn is_section_header(id: u16) -> bool {
         id,
         ID_HEADER_GENERAL | ID_HEADER_HOTKEYS | ID_HEADER_OSD | ID_HEADER_ADVANCED
     )
+}
+
+/// Whether `id` is one of the two explanatory statics that wrap onto more
+/// than one line, and so can grow taller when a translation is longer.
+/// Every other caption in the window is single-line at a fixed height.
+#[must_use]
+pub(super) fn wraps(id: u16) -> bool {
+    matches!(id, ID_HK_HINT | ID_LOG_HINT)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

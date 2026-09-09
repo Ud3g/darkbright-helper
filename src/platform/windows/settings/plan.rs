@@ -16,7 +16,7 @@ use crate::core::i18n::{Lang, strings};
 use super::dark::CHECKBOX_TEXT_GAP;
 use super::layout::{
     BASE_WINDOW_HEIGHT, BASE_WINDOW_WIDTH, CONTROLS, ControlSpec, ID_VERSION, is_section_header,
-    scale_dimension,
+    scale_dimension, wraps,
 };
 use super::measure::TextMeasure;
 
@@ -401,6 +401,9 @@ pub(super) fn plan_layout(
         .max(edge_b + control_run(Col::B, dpi) + margin)
         .max(footer.need);
 
+    // A hint that needs more lines than its authored height allows pushes
+    // every later row, and the window's own height, down by what it grew.
+    let mut y_offset = 0;
     let controls = CONTROLS
         .iter()
         .map(|spec| {
@@ -453,12 +456,24 @@ pub(super) fn plan_layout(
                     (margin, (chain_left - gap_version - margin).max(0))
                 }
             };
+            let top = scale_dimension(spec.y, dpi) + y_offset;
+            let mut height = scale_dimension(spec.h, dpi);
+            if wraps(spec.id) {
+                // Measured against the width this row actually got, not the
+                // authored one. Grow only: a wider window wraps a hint onto
+                // fewer lines, and a window that got shorter because a
+                // translation was terse would be more surprise than gain.
+                let needed = m.wrapped_height(caption(spec, lang, version_text), false, w);
+                let delta = (needed - height).max(0);
+                height += delta;
+                y_offset += delta;
+            }
             Placed {
                 id: spec.id,
                 x,
-                y: scale_dimension(spec.y, dpi),
+                y: top,
                 w,
-                h: scale_dimension(spec.h, dpi),
+                h: height,
             }
         })
         .collect();
@@ -466,7 +481,7 @@ pub(super) fn plan_layout(
     Plan {
         controls,
         client_w,
-        client_h: scale_dimension(BASE_WINDOW_HEIGHT, dpi),
+        client_h: scale_dimension(BASE_WINDOW_HEIGHT, dpi) + y_offset,
         dpi,
     }
 }
@@ -474,8 +489,9 @@ pub(super) fn plan_layout(
 #[cfg(test)]
 mod tests {
     use super::super::layout::{
-        ID_CLOSE, ID_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT, ID_LANGUAGE, ID_LINK_CONFIG,
-        ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE, ID_SEP_GENERAL, ID_STEP_EDIT, ID_STEP_UPDOWN,
+        ID_CLOSE, ID_HK_UP, ID_LABEL_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT, ID_LANGUAGE,
+        ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE, ID_SEP_GENERAL, ID_STEP_EDIT,
+        ID_STEP_UPDOWN,
     };
     use super::*;
     use crate::core::i18n::Lang;
@@ -616,10 +632,11 @@ mod tests {
 
     #[test]
     fn rows_keep_their_authored_vertical_geometry_and_english_its_window_size() {
-        // Nothing in this planner touches `y` or `h` — only widths and the
-        // columns that follow from them — so every row's vertical geometry
-        // must still be the authored value, scaled. English at the authored
-        // widths must also leave the window at its authored size.
+        // Only a hint that outgrows its authored height moves anything
+        // vertically, and English fits both of them, so every row's
+        // vertical geometry must still be the authored value, scaled.
+        // English at the authored widths must also leave the window at its
+        // authored size.
         for dpi in [96u32, 120, 144, 192] {
             let mut m = FakeMeasure::default();
             let plan = plan_layout(Lang::English, dpi, "0.10.0", &mut m);
@@ -711,5 +728,44 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), CONTROLS.len());
+    }
+
+    #[test]
+    fn a_hint_that_fits_its_authored_height_moves_nothing() {
+        let mut m = FakeMeasure::default();
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut m);
+        assert_eq!(plan.client_h, 654);
+        assert_eq!(plan.get(ID_CLOSE).unwrap().y, 616);
+    }
+
+    #[test]
+    fn a_hint_that_needs_another_line_pushes_the_rows_below_it_down() {
+        // Triple the per-character width so both hints wrap onto more lines
+        // than their authored height allows.
+        let mut m = FakeMeasure {
+            per_char: 21,
+            ..FakeMeasure::default()
+        };
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut m);
+        assert!(plan.client_h > 654, "client_h={}", plan.client_h);
+        assert!(
+            plan.get(ID_CLOSE).unwrap().y > 616,
+            "the footer must move down with the hint above it"
+        );
+        // A row above the first hint must not move.
+        assert_eq!(plan.get(ID_LABEL_HK_UP).unwrap().y, 170);
+    }
+
+    #[test]
+    fn hint_growth_is_recomputed_per_plan_and_never_latched() {
+        let mut wide = FakeMeasure {
+            per_char: 21,
+            ..FakeMeasure::default()
+        };
+        let grown = plan_layout(Lang::English, 96, "v0.10.0", &mut wide).client_h;
+        let mut narrow = FakeMeasure::default();
+        let back = plan_layout(Lang::English, 96, "v0.10.0", &mut narrow).client_h;
+        assert!(grown > back, "grown={grown} back={back}");
+        assert_eq!(back, 654, "a later plan must not inherit an earlier growth");
     }
 }
