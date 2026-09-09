@@ -182,7 +182,8 @@ const STYLE_DEFPUSHBUTTON: u32 = BS_DEFPUSHBUTTON | WS_TABSTOP.0;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One control's window class, style, 96-DPI-baseline geometry and initial
-/// text. `layout()` and `create_controls()` are the only readers; both walk
+/// text. `create_controls()` and the layout planner (`plan::plan_layout`,
+/// whose output `apply()` then positions) are the only readers; both walk
 /// [`CONTROLS`] in order, which is also creation order and therefore tab
 /// order (every focusable entry carries `WS_TABSTOP`, and `WS_GROUP` marks
 /// the first tab stop of each visual section).

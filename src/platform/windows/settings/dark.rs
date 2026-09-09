@@ -1341,7 +1341,8 @@ fn draw_spin_button(hdc: HDC, rect: RECT, points_up: bool) {
 /// Half-width of the arrow glyph triangle, scaled to whichever half of the
 /// updown control (up or down) is smaller — keeps the glyph proportionate
 /// across DPI without needing its own DPI plumbing, since the button rect
-/// it is drawn into is already DPI-scaled by `layout()`.
+/// it is drawn into is already DPI-scaled by `apply()`, from the layout
+/// planner's output.
 #[must_use]
 fn arrow_half_width(rect: RECT) -> i32 {
     let smaller = (rect.right - rect.left).min(rect.bottom - rect.top);

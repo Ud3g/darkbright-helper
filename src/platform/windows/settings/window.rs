@@ -305,8 +305,11 @@ pub(super) fn log_level_combo_entries(s: &Strings) -> Vec<&'static str> {
         .collect()
 }
 
-/// Empties `combo` and inserts `entries` in order.
-fn fill_combo(combo: HWND, entries: &[&str]) {
+/// Empties the combo `id` and inserts `entries` in order.
+fn fill_combo(hwnd: HWND, id: u16, entries: &[&str]) {
+    let Ok(combo) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
+        return;
+    };
     unsafe {
         SendMessageW(combo, CB_RESETCONTENT, None, None);
     }
@@ -436,8 +439,8 @@ fn create_controls(
         }
 
         match spec.id {
-            ID_LOG_LEVEL => fill_combo(child, &log_level_combo_entries(s)),
-            ID_LANGUAGE => fill_combo(child, &language_combo_entries(s)),
+            ID_LOG_LEVEL => fill_combo(hwnd, spec.id, &log_level_combo_entries(s)),
+            ID_LANGUAGE => fill_combo(hwnd, spec.id, &language_combo_entries(s)),
             _ => {}
         }
 
@@ -1007,9 +1010,7 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
             (ID_LANGUAGE, language_combo_entries(s)),
         ] {
             let selected = combo_selected_index(hwnd, id);
-            if let Ok(child) = unsafe { GetDlgItem(Some(hwnd), i32::from(id)) } {
-                fill_combo(child, &entries);
-            }
+            fill_combo(hwnd, id, &entries);
             if let Some(index) = selected {
                 set_combo_index(hwnd, id, index);
             }
@@ -2121,8 +2122,8 @@ fn create_settings_window(
         // selection on a single arrow key or wheel notch, which here would
         // pin the UI language in the config before the user touched
         // anything. The combo stays one Shift+Tab away.
-        if let Ok(first) = GetDlgItem(Some(hwnd), i32::from(ID_AUTOSTART)) {
-            let _ = SetFocus(Some(first));
+        if let Ok(initial_focus) = GetDlgItem(Some(hwnd), i32::from(ID_AUTOSTART)) {
+            let _ = SetFocus(Some(initial_focus));
         }
     }
 
