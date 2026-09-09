@@ -37,8 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
     WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
     WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
-    WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_TABSTOP,
-    WS_VISIBLE,
+    WM_SETTINGCHANGE, WNDCLASSEXW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
@@ -46,7 +45,6 @@ use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PE
 use crate::core::controller::SettingsSink;
 use crate::core::i18n::{Lang, LanguageSetting, Strings, strings};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
-use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
 use super::super::{autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
@@ -57,9 +55,12 @@ use super::layout::{
     ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LANGUAGE, ID_LINK_CONFIG, ID_LOG_CHECK,
     ID_LOG_LEVEL, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK,
     ID_RESYNC_EDIT, ID_RESYNC_UPDOWN, ID_STEP_EDIT, ID_VERSION, RANGE_SPECS, RangeSpec,
-    compute_placement, configure_combo_height, configure_updowns, dpi_from_wparam,
-    font_height_for_dpi, is_section_header, layout,
+    SETTINGS_EX_STYLE, SETTINGS_STYLE, apply, compute_placement, configure_combo_height,
+    configure_updowns, dpi_from_wparam, font_height_for_dpi, is_section_header, relayout,
+    target_monitor, version_label,
 };
+use super::measure::GdiMeasure;
+use super::plan::plan_layout;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Posted Messages
@@ -351,7 +352,7 @@ pub(super) fn wide(s: &str) -> Vec<u16> {
 }
 
 /// Creates every control in [`CONTROLS`] as a child of `hwnd`, at a
-/// placeholder position — `layout()` positions them all afterward — and
+/// placeholder position — the layout plan positions them all afterward — and
 /// applies the matching font. Best-effort per control: a single failed
 /// `CreateWindowExW` is logged and skipped rather than aborting the whole
 /// window, matching how the rest of this crate degrades a UI by one element
@@ -388,7 +389,7 @@ fn create_controls(
         // Every control's caption is a constant in the layout table except
         // the version line, whose text only exists once the build has run.
         let text = if spec.id == ID_VERSION {
-            wide(&format!("v{}", version_string()))
+            wide(&version_label())
         } else {
             let label = spec
                 .text
@@ -848,9 +849,19 @@ fn handle_activate(state: &WindowState, wparam: WPARAM) {
 /// handles are freed only after that loop finishes: GDI requires a font stay
 /// alive as long as any control still has it selected, and by that point
 /// nothing does — every reader has already moved on to the new handle.
-/// Finally, [`layout`] repositions every control at the new DPI from the
-/// same baseline table `create_settings_window` used.
+/// Finally, [`relayout`] re-measures every caption in the rebuilt fonts and
+/// repositions every control at the new DPI.
 fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    // Resizing below can move the window's majority across a monitor
+    // boundary, which sends another WM_DPICHANGED before this one returns.
+    // One level is enough: the nested pass would plan against a size that is
+    // about to change anyway, and the outer pass finishes with the DPI that
+    // actually arrived last.
+    if IN_DPI_CHANGE.with(Cell::get) {
+        return;
+    }
+    let _guard = DpiChangeGuard::enter();
+
     let dpi = dpi_from_wparam(wparam.0);
 
     let suggested_ptr: *const RECT = std::ptr::with_exposed_provenance(lparam.0.cast_unsigned());
@@ -871,8 +882,10 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
         }
     }
 
+    let mut lang = Lang::default();
     with_window_state(|state| {
         state.dpi.set(dpi);
+        lang = state.lang.get();
 
         let new_regular = build_font(dpi, FW_NORMAL);
         let new_bold = build_font(dpi, FW_BOLD);
@@ -908,12 +921,36 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
         }
     });
 
-    layout(hwnd, dpi);
+    relayout(hwnd, dpi, lang);
     // Re-measure and re-apply after the font rebuild above and the reflow
     // just below it: the combo's system-default item height is font-driven,
     // so a DPI change (new font, new edit rects) invalidates whatever was
     // set at creation or the last DPI change.
     configure_combo_height(hwnd);
+}
+
+thread_local! {
+    /// Whether a `WM_DPICHANGED` is already being handled on this thread;
+    /// see [`handle_dpichanged`] for why one level is the limit.
+    static IN_DPI_CHANGE: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Holds [`IN_DPI_CHANGE`] for as long as it is alive. A guard rather than a
+/// set/reset pair because the handler has early returns, and a flag left set
+/// would suppress every later DPI change for the window's whole lifetime.
+struct DpiChangeGuard;
+
+impl DpiChangeGuard {
+    fn enter() -> Self {
+        IN_DPI_CHANGE.with(|flag| flag.set(true));
+        Self
+    }
+}
+
+impl Drop for DpiChangeGuard {
+    fn drop(&mut self) {
+        IN_DPI_CHANGE.with(|flag| flag.set(false));
+    }
 }
 
 /// Reclaims ownership of `lparam`'s `Box<SettingsSnapshot>` and applies it.
@@ -935,16 +972,20 @@ fn handle_refresh_message(lparam: LPARAM) {
 /// with a `TextKey`, the title, both pickers (re-filled under the
 /// notification guard so the re-fill is never taken for a selection), and
 /// the two capture fields, which repaint their wire text through
-/// `display_text`. Positions are untouched: the layout table does not
-/// depend on text. A hotkey status line already on screen keeps its text
-/// until the next hotkey event replaces it.
+/// `display_text`. Every caption having changed, the window then
+/// re-measures and resizes to fit the new one — keeping its position, since
+/// the user may have dragged it and a caption change is no reason to move
+/// it. A hotkey status line already on screen keeps its text until the next
+/// hotkey event replaces it.
 fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
     let Some(lang) = Lang::from_index(wparam.0) else {
         log::warn!(index = wparam.0; "Ignoring settings language update with an unknown index");
         return;
     };
+    let mut dpi = 96;
     with_window_state(|state| {
         state.lang.set(lang);
+        dpi = state.dpi.get();
         let s = strings(lang);
 
         for spec in CONTROLS {
@@ -983,6 +1024,9 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
             }
         }
     });
+    // Outside the borrow above: resizing re-enters this window's message
+    // handling, and those handlers read the same window state.
+    relayout(hwnd, dpi, lang);
 }
 
 /// Reclaims ownership of `lparam`'s `Box<String>` and shows it on the
@@ -1967,8 +2011,8 @@ unsafe extern "system" fn settings_wnd_proc(
 ///
 /// # Errors
 ///
-/// Returns `BrightnessError::WindowsApi` if class registration, placement,
-/// or `CreateWindowExW` fails. A failure here means no window and no thread
+/// Returns `BrightnessError::WindowsApi` if class registration, text
+/// measurement, placement, or `CreateWindowExW` fails. A failure here means no window and no thread
 /// state was left behind — nothing to unwind.
 fn create_settings_window(
     tx: &Sender<BrightnessMessage>,
@@ -1976,7 +2020,21 @@ fn create_settings_window(
     snapshot: &SettingsSnapshot,
 ) -> Result<HWND> {
     let class_name = ensure_settings_class_registered()?;
-    let placement = compute_placement()?;
+    let lang = snapshot.lang;
+
+    // Measure and plan before the window exists, so it opens at its final
+    // size instead of being resized into it in front of the user. Without a
+    // measurement context there is no plan and no fallback measurer, so
+    // creation fails here rather than opening a window of unknown size.
+    let target = target_monitor()?;
+    let dpi = target.dpi;
+    let Some(mut measure) = GdiMeasure::new(dpi) else {
+        log::warn!(dpi; "No measurement context; the settings window cannot be laid out");
+        return Err(last_error_as_brightness_error("GdiMeasure::new"));
+    };
+    let plan = plan_layout(lang, dpi, &version_label(), &mut measure);
+    drop(measure);
+    let placement = compute_placement(&target, plan.client_w, plan.client_h)?;
 
     let hinstance = unsafe { GetModuleHandleW(None) }.map_err(|e| {
         BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
@@ -1985,17 +2043,16 @@ fn create_settings_window(
     // No WS_VISIBLE here: control creation, layout and snapshot population
     // all happen before the window is ever shown, so the open does not
     // visibly assemble itself on screen.
-    let lang = snapshot.lang;
     let title = wide(strings(lang).window_title);
     // SAFETY: `CreateWindowExW` copies the NUL-terminated title `PCWSTR` points
     // at while it builds the window, and `title` still owns that buffer for the
     // whole call.
     let hwnd = unsafe {
         CreateWindowExW(
-            WS_EX_TOPMOST,
+            SETTINGS_EX_STYLE,
             class_name,
             PCWSTR(title.as_ptr()),
-            WS_CAPTION | WS_SYSMENU,
+            SETTINGS_STYLE,
             placement.x,
             placement.y,
             placement.w,
@@ -2008,8 +2065,8 @@ fn create_settings_window(
     }
     .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
-    let font_regular = build_font(placement.dpi, FW_NORMAL);
-    let font_bold = build_font(placement.dpi, FW_BOLD);
+    let font_regular = build_font(dpi, FW_NORMAL);
+    let font_bold = build_font(dpi, FW_BOLD);
 
     let state = WindowState {
         hwnd,
@@ -2018,7 +2075,7 @@ fn create_settings_window(
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular: Cell::new(font_regular),
         font_bold: Cell::new(font_bold),
-        dpi: Cell::new(placement.dpi),
+        dpi: Cell::new(dpi),
         dark: Cell::new(dark::initial_dark_flag()),
         palette: dark::Palette::new(),
         // No control has ever had focus yet, so there is nothing to
@@ -2043,7 +2100,7 @@ fn create_settings_window(
         font_bold,
         state.lang.get(),
     );
-    layout(hwnd, placement.dpi);
+    apply(hwnd, &plan);
     configure_updowns(hwnd);
     configure_combo_height(hwnd);
     apply_snapshot(&state, snapshot);

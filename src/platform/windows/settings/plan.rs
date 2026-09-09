@@ -72,13 +72,6 @@ pub(super) enum Anchor {
 
 /// One control's final rectangle, in physical pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "produced by the planner, which has no non-test caller until the settings window wires it in"
-    )
-)]
 pub(super) struct Placed {
     pub(super) id: u16,
     pub(super) x: i32,
@@ -90,26 +83,12 @@ pub(super) struct Placed {
 /// A complete layout: where every control goes, and how big the client area
 /// must be to hold them.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "produced by the planner, which has no non-test caller until the settings window wires it in"
-    )
-)]
 pub(super) struct Plan {
     pub(super) controls: Vec<Placed>,
     pub(super) client_w: i32,
     pub(super) client_h: i32,
-    // Constructed by the tests below (so the outer struct-level `expect`
-    // does not cover this field there), but nothing yet reads it back.
-    #[cfg_attr(
-        test,
-        expect(
-            dead_code,
-            reason = "read once the settings window wires the planner in"
-        )
-    )]
+    /// The DPI every number above is in, carried so a consumer resizing a
+    /// window from this plan cannot pair it with a different one.
     pub(super) dpi: u32,
 }
 
@@ -359,13 +338,6 @@ fn control_run(col: Col, dpi: u32) -> i32 {
 }
 
 /// Computes the whole layout for `lang` at `dpi`.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the settings window wires the planner in"
-    )
-)]
 pub(super) fn plan_layout(
     lang: Lang,
     dpi: u32,

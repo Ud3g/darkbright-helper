@@ -26,13 +26,6 @@ use super::window::build_font;
 
 /// Checkbox indicator width to assume when the theme cannot answer, matching
 /// what the dark-mode painter already falls back to.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the settings window wires the measurer in"
-    )
-)]
 const CHECKBOX_INDICATOR_FALLBACK: i32 = 13;
 
 /// What the layout planner needs to know about text and system metrics.
@@ -41,13 +34,6 @@ const CHECKBOX_INDICATOR_FALLBACK: i32 = 13;
 /// any host with a fake whose numbers are chosen to make an assertion
 /// legible, instead of only against whatever font the machine happens to
 /// have.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the planner that takes this bound has no non-test caller until the settings window wires it in"
-    )
-)]
 pub(super) trait TextMeasure {
     /// Width of `text` drawn on one line, in physical pixels.
     fn text_width(&mut self, text: &str, bold: bool) -> i32;
@@ -60,6 +46,13 @@ pub(super) trait TextMeasure {
     fn checkbox_indicator(&mut self) -> i32;
 
     /// Width of a combo box's dropdown arrow at this DPI.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "no row's width is arrow-driven yet; the dropdown-fit check the layout gate needs is what will read it"
+        )
+    )]
     fn combo_arrow(&mut self) -> i32;
 }
 
@@ -69,13 +62,6 @@ pub(super) trait TextMeasure {
 /// needs no window: a plan can therefore be computed before the settings
 /// window is created, and the CI gate can run without one at all. Measured
 /// widths from a memory DC match a screen DC's.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the settings window wires the measurer in"
-    )
-)]
 pub(super) struct GdiMeasure {
     dc: HDC,
     regular: HFONT,
@@ -87,13 +73,6 @@ pub(super) struct GdiMeasure {
     dpi: u32,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "no non-test caller until the settings window wires the measurer in"
-    )
-)]
 impl GdiMeasure {
     /// Builds a measurer for `dpi`, or `None` if the device context or
     /// either font could not be created.

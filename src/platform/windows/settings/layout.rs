@@ -12,15 +12,26 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Controls::{UDACCEL, UDM_SETACCEL, UDM_SETRANGE32};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_GETITEMHEIGHT, CB_SETITEMHEIGHT, GetCursorPos, GetDlgItem, GetWindowRect, SWP_NOACTIVATE,
-    SWP_NOZORDER, SendMessageW, SetWindowPos, WS_BORDER, WS_CAPTION, WS_EX_TOPMOST, WS_GROUP,
-    WS_SYSMENU, WS_TABSTOP,
+    BeginDeferWindowPos, CB_GETITEMHEIGHT, CB_SETITEMHEIGHT, DeferWindowPos, EndDeferWindowPos,
+    GetCursorPos, GetDlgItem, GetWindowRect, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+    SendMessageW, SetWindowPos, WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER, WS_CAPTION,
+    WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP,
 };
 
-use crate::core::i18n::TextKey;
+use crate::core::i18n::{Lang, TextKey};
+use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
-use super::plan::{Anchor, Col};
+use super::measure::GdiMeasure;
+use super::plan::{Anchor, Col, Plan, plan_layout};
+
+/// The style and extended style the settings window is created with. Named
+/// here because the frame arithmetic (`AdjustWindowRectExForDpi`, in both
+/// the initial placement and every later resize) has to be told exactly the
+/// pair `CreateWindowExW` was given: a mismatch sizes the client area
+/// against the wrong non-client border, silently.
+pub(super) const SETTINGS_STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_CAPTION.0 | WS_SYSMENU.0);
+pub(super) const SETTINGS_EX_STYLE: WINDOW_EX_STYLE = WS_EX_TOPMOST;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Control IDs
@@ -28,7 +39,7 @@ use super::plan::{Anchor, Col};
 // 100s = General, 110s = Hotkeys, 120s = On-screen display, 130s = Advanced,
 // 140s = footer. 200+ are decorative (section headers, separators, plain
 // text labels) — never addressed individually outside this module, but each
-// still needs a distinct id: `layout()` positions every control by
+// still needs a distinct id: [`apply`] positions every control by
 // `GetDlgItem(hwnd, id)`, which only ever finds the first match, so a shared
 // id would silently move just one control instead of all of them.
 
@@ -170,13 +181,6 @@ pub(super) struct ControlSpec {
     pub(super) text: Option<TextKey>,
     /// How this control's position and width respond when a translation makes
     /// the text around it wider; see `plan`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the planner, which has no non-test caller until the settings window wires it in"
-        )
-    )]
     pub(super) anchor: Anchor,
 }
 
@@ -776,22 +780,146 @@ pub(super) fn dpi_from_wparam(wparam: usize) -> u32 {
     u32::try_from(wparam & 0xFFFF).expect("value masked to 0xFFFF always fits in u32")
 }
 
-/// Positions every control in [`CONTROLS`] from its 96-DPI-baseline geometry
-/// scaled to `dpi`. Creation calls this once after all controls exist;
-/// `WM_DPICHANGED`'s handler calls it again, with the new DPI, for live
-/// relayout.
-pub(super) fn layout(hwnd: HWND, dpi: u32) {
-    for spec in CONTROLS {
-        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(spec.id)) }) else {
+/// The version line's caption, in the form the window actually shows it.
+///
+/// The label's text and the width the planner reserves for it both come
+/// from this one string, so the two cannot drift into a build whose version
+/// renders wider than its slot.
+#[must_use]
+pub(super) fn version_label() -> String {
+    format!("v{}", version_string())
+}
+
+/// Positions every control from `plan`, in one batch.
+///
+/// `SWP_NOZORDER` on every call is load-bearing rather than a default:
+/// z-order is tab order in this window (creation order, see [`CONTROLS`]),
+/// so a reordering here would silently change which control Tab reaches
+/// next, with nothing to catch it.
+///
+/// A lost `HDWP` from either `BeginDeferWindowPos` or `DeferWindowPos`
+/// discards the whole batch, and at creation — where every control is still
+/// at (0,0,0,0) — that would be a blank window. The per-control fallback
+/// degrades one control at a time instead, matching how the rest of this
+/// module fails.
+pub(super) fn apply(hwnd: HWND, plan: &Plan) {
+    if !apply_batched(hwnd, plan) {
+        apply_individually(hwnd, plan);
+    }
+}
+
+/// Queues every move into one `HDWP`. Returns `false` if the batch was lost
+/// at any point, in which case nothing has moved and the caller falls back.
+fn apply_batched(hwnd: HWND, plan: &Plan) -> bool {
+    let count = i32::try_from(plan.controls.len()).unwrap_or(0);
+    let Ok(mut hdwp) = (unsafe { BeginDeferWindowPos(count) }) else {
+        log::warn!("BeginDeferWindowPos failed; positioning settings controls individually");
+        return false;
+    };
+    for placed in &plan.controls {
+        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(placed.id)) }) else {
             continue;
         };
-        let x = scale_dimension(spec.x, dpi);
-        let y = scale_dimension(spec.y, dpi);
-        let w = scale_dimension(spec.w, dpi);
-        let h = scale_dimension(spec.h, dpi);
-        unsafe {
-            let _ = SetWindowPos(child, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        match unsafe {
+            DeferWindowPos(
+                hdwp,
+                child,
+                None,
+                placed.x,
+                placed.y,
+                placed.w,
+                placed.h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        } {
+            Ok(next) => hdwp = next,
+            Err(e) => {
+                log::warn!(error:% = e; "DeferWindowPos failed; positioning settings controls individually");
+                return false;
+            }
         }
+    }
+    if let Err(e) = unsafe { EndDeferWindowPos(hdwp) } {
+        log::warn!(error:% = e; "EndDeferWindowPos failed; positioning settings controls individually");
+        return false;
+    }
+    true
+}
+
+/// One `SetWindowPos` per control, for when the batched pass lost its
+/// `HDWP`.
+fn apply_individually(hwnd: HWND, plan: &Plan) {
+    for placed in &plan.controls {
+        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(placed.id)) }) else {
+            continue;
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                child,
+                None,
+                placed.x,
+                placed.y,
+                placed.w,
+                placed.h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+/// Measures `lang`'s captions, plans the layout for `dpi`, applies it, and
+/// resizes the window's client area to match.
+///
+/// Creation does not call this — it plans before `CreateWindowExW` so the
+/// window is never the wrong size, not even for a frame. `WM_DPICHANGED`
+/// and a language change do, because both invalidate every measurement.
+pub(super) fn relayout(hwnd: HWND, dpi: u32, lang: Lang) {
+    let Some(mut measure) = GdiMeasure::new(dpi) else {
+        log::warn!(dpi; "No measurement context; leaving the settings layout as it is");
+        return;
+    };
+    let plan = plan_layout(lang, dpi, &version_label(), &mut measure);
+    apply(hwnd, &plan);
+    resize_client(hwnd, &plan);
+}
+
+/// Grows or shrinks the window's frame to hold `plan`'s client area, without
+/// moving it.
+///
+/// Never moving is deliberate and covers both callers: a DPI change arrives
+/// with a position Windows suggested and the handler has already applied,
+/// and a language change must leave a window the user dragged exactly where
+/// they put it. The one place that chooses a position is the initial
+/// placement, which runs before the window exists.
+fn resize_client(hwnd: HWND, plan: &Plan) {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: plan.client_w,
+        bottom: plan.client_h,
+    };
+    if let Err(e) = unsafe {
+        AdjustWindowRectExForDpi(
+            &raw mut rect,
+            SETTINGS_STYLE,
+            false,
+            SETTINGS_EX_STYLE,
+            plan.dpi,
+        )
+    } {
+        log::warn!(error:% = e; "AdjustWindowRectExForDpi failed; leaving the settings frame size alone");
+        return;
+    }
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 }
 
@@ -1011,27 +1139,39 @@ pub(super) fn configure_combo_height(hwnd: HWND) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The settings window's outer rect (position + size, in screen
-/// coordinates) plus the DPI it was computed for. A named struct rather
-/// than a same-typed tuple: `x`/`y`/`w`/`h`/`dpi` all being `i32`/`u32`
-/// makes a positional tuple a transposition hazard worth avoiding even
-/// though [`compute_placement`] is currently its only call site.
+/// coordinates). A named struct rather than a same-typed tuple: `x`/`y`/
+/// `w`/`h` all being `i32` makes a positional tuple a transposition hazard
+/// worth avoiding even though [`compute_placement`] is currently its only
+/// call site.
 pub(super) struct Placement {
     pub(super) x: i32,
     pub(super) y: i32,
     pub(super) w: i32,
     pub(super) h: i32,
-    pub(super) dpi: u32,
 }
 
-/// Computes [`Placement`]: centered on the *work area* (`rcWork`, which
-/// excludes the taskbar — the same area shell dialogs center on) of the
-/// monitor under the cursor, clamped so the window's top-left corner is
-/// always inside that work area even when the work area is smaller than the
-/// window itself. Geometry is computed before `CreateWindowExW` — new
-/// sequencing versus `osd.rs`, which creates once with `CW_USEDEFAULT` and
-/// positions per show; this window instead needs its final DPI known before
-/// creation so `layout()` only ever runs once at the right scale.
-pub(super) fn compute_placement() -> Result<Placement> {
+/// The monitor the settings window will open on: the work area to centre
+/// on and the DPI to plan and measure for.
+///
+/// Resolved once and then passed around, because the layout has to be
+/// planned at the target DPI *before* a placement can be computed from its
+/// size — resolving the monitor twice would risk answering for two
+/// different ones if the cursor moved in between.
+pub(super) struct TargetMonitor {
+    pub(super) dpi: u32,
+    /// `rcWork`, which excludes the taskbar — the same area shell dialogs
+    /// centre on.
+    work: RECT,
+}
+
+/// Resolves the monitor under the cursor.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if the cursor position cannot be
+/// read. A monitor that reports neither its DPI nor its work area is not
+/// fatal: 96 DPI and an empty work area still place a usable window.
+pub(super) fn target_monitor() -> Result<TargetMonitor> {
     let mut cursor = POINT::default();
     unsafe { GetCursorPos(&raw mut cursor) }
         .map_err(|e| BrightnessError::windows_api("GetCursorPos", e.code().0.cast_unsigned()))?;
@@ -1045,7 +1185,6 @@ pub(super) fn compute_placement() -> Result<Placement> {
     {
         log::warn!(error:% = e; "GetDpiForMonitor failed, assuming 96 DPI");
     }
-    let dpi = dpi_x;
 
     let mut mi = MONITORINFO {
         cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
@@ -1055,9 +1194,46 @@ pub(super) fn compute_placement() -> Result<Placement> {
         log::warn!(error_code = super::super::get_last_error_code(); "GetMonitorInfoW failed; placement may be off-screen");
     }
 
-    let client_w = scale_dimension(BASE_WINDOW_WIDTH, dpi);
-    let client_h = scale_dimension(BASE_WINDOW_HEIGHT, dpi);
+    Ok(TargetMonitor {
+        dpi: dpi_x,
+        work: mi.rcWork,
+    })
+}
 
+/// Top-left corner for a window of `outer_w` × `outer_h` centred on `work`,
+/// clamped so the corner stays inside even when the window is larger than
+/// the work area — this window is unusually tall, and at high DPI on a
+/// short work area (150% on 1920x1080, say) that upper bound is what
+/// actually binds.
+#[must_use]
+fn clamp_into(work: RECT, outer_w: i32, outer_h: i32) -> (i32, i32) {
+    let x_centered = work.left + ((work.right - work.left) - outer_w) / 2;
+    let y_centered = work.top + ((work.bottom - work.top) - outer_h) / 2;
+    (
+        x_centered.clamp(work.left, (work.right - outer_w).max(work.left)),
+        y_centered.clamp(work.top, (work.bottom - outer_h).max(work.top)),
+    )
+}
+
+/// Computes [`Placement`] for a client area of `client_w` × `client_h` on
+/// `target`: the frame that holds it, centred on the monitor's work area
+/// and clamped into it by [`clamp_into`].
+///
+/// The client size is the planner's, not a constant, and the whole geometry
+/// is computed before `CreateWindowExW` — new sequencing versus `osd.rs`,
+/// which creates once with `CW_USEDEFAULT` and positions per show; this
+/// window instead opens at its final measured size rather than being
+/// resized into it afterwards.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if the frame size cannot be
+/// derived from the client size.
+pub(super) fn compute_placement(
+    target: &TargetMonitor,
+    client_w: i32,
+    client_h: i32,
+) -> Result<Placement> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -1067,10 +1243,10 @@ pub(super) fn compute_placement() -> Result<Placement> {
     unsafe {
         AdjustWindowRectExForDpi(
             &raw mut rect,
-            WS_CAPTION | WS_SYSMENU,
+            SETTINGS_STYLE,
             false,
-            WS_EX_TOPMOST,
-            dpi,
+            SETTINGS_EX_STYLE,
+            target.dpi,
         )
     }
     .map_err(|e| {
@@ -1079,25 +1255,13 @@ pub(super) fn compute_placement() -> Result<Placement> {
 
     let outer_w = rect.right - rect.left;
     let outer_h = rect.bottom - rect.top;
-
-    let work = mi.rcWork;
-    let x_centered = work.left + ((work.right - work.left) - outer_w) / 2;
-    let y_centered = work.top + ((work.bottom - work.top) - outer_h) / 2;
-    // Clamp to [work.left, work.right - outer_w] (and the same on the y
-    // axis): the upper bound is floored at work.left via `.max` so a window
-    // taller/wider than the work area still starts at the work area's
-    // top-left corner instead of being pushed above/left of it — this
-    // window is unusually tall, so at high DPI on a short work area (e.g.
-    // 150% on 1920x1080) that upper bound is what actually binds.
-    let x = x_centered.clamp(work.left, (work.right - outer_w).max(work.left));
-    let y = y_centered.clamp(work.top, (work.bottom - outer_h).max(work.top));
+    let (x, y) = clamp_into(target.work, outer_w, outer_h);
 
     Ok(Placement {
         x,
         y,
         w: outer_w,
         h: outer_h,
-        dpi,
     })
 }
 
@@ -1244,6 +1408,21 @@ mod tests {
     #[test]
     fn no_two_controls_overlap_at_150_percent() {
         assert_no_overlap_at(144);
+    }
+
+    #[test]
+    fn the_work_area_clamp_keeps_a_window_inside_it() {
+        // Work area 0..1000 x 0..800, window larger than it on both axes:
+        // the top-left corner must stay inside rather than being pushed
+        // above and left of it.
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 800,
+        };
+        assert_eq!(clamp_into(work, 400, 654), (300, 73));
+        assert_eq!(clamp_into(work, 1200, 900), (0, 0));
     }
 
     #[test]
