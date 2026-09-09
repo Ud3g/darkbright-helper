@@ -159,9 +159,10 @@ one field saying how the control responds when text grows:
 | `Label(col)` | row captions | Width measured; the column's width is the maximum over its rows. |
 | `Checkbox(col)` | checkboxes paired with a control | As `Label`, plus indicator and gap. |
 | `CheckboxRun` | `ID_LOG_CHECK` | First member of the composite log row: width is its own requirement, not the column's. |
-| `InlineLabel` | `ID_LABEL_LOG_LEVEL` | Right-aligned immediately before the control column. Width measured. |
-| `ControlColumn` | edits, combos, capture fields | `x` = the column's computed left edge; `w` as authored. |
-| `AfterControl` | spinner buttons, unit suffixes | `x` = column left edge + the authored offset. |
+| `InlineLabel` | `ID_LABEL_LOG_LEVEL` | Right-aligned immediately before the control column; `w = max(authored, measured)`. |
+| `Control(col)` | edits, combos | `x` = the column's computed left edge; `w` as authored. |
+| `ControlStretch(col)` | the two capture fields | `x` = the column's left edge; `w` runs to the right margin. |
+| `AfterControl(col)` | spinner buttons, unit suffixes | `x` = column left edge + the authored offset. |
 | `Stretch` | headers, separators, hints, full-width checkboxes, the `SysLink` | Keeps the authored right margin: `w = win_w − x − (400 − x − w_authored)`. |
 | `FooterButton` | `ID_RESTORE`, `ID_CLOSE` | Right-aligned chain; width measured plus padding, floored. |
 | `FooterFill` | `ID_VERSION` | Takes what the buttons leave. |
@@ -183,14 +184,25 @@ one caption but the whole run before the control column:
 
 ```
 indicator(13) + CHECKBOX_TEXT_GAP(4) + "Protokolldatei schreiben"(134)
-              + INLINE_GAP(8) + "Stufe:"(36)                            = 195
-column B available at its floor: 250 − 24 − COL_GAP(6)                  = 220
+              + INLINE_GAP(6) + inline_label(max(authored 74, "Stufe:" 36) = 74)   = 231
+English, for comparison:  13 + 4 + 73 + 6 + 74                                    = 170
+column B floor: 250 − 24 − COL_GAP(6)                                             = 220
 ```
 
-That run enters column B's maximum as a single number. It fits in German with 25 px to spare,
-with no word changed. In a language where it does not fit, the control column moves right and
-the row still reads correctly — which is the point: no future language can reproduce this
-collision, because nothing in the row is placed by hand any more.
+`INLINE_GAP` is 6, read off the table like `COL_GAP` (170 − 24 − 140). The inline label's
+authored width acts as a **minimum**, which is what keeps English identical: `max(74, 36)` is
+74, so it lands at `250 − 6 − 74 = 170`, exactly where it sits today. Sizing it purely by
+measurement would right-align it to 208 and shift the English row 38 px — a regression dressed
+as a refinement.
+
+English's run is 170, well under the 220 floor, so column B does not move and the whole window
+is unchanged. German's 231 pushes column B to 231 and its control edge from 250 to 261 — and the
+window still does not grow, because the widest thing in that column is the 120 px language combo
+and `261 + 120 + 12 = 393` is inside the 400 floor. So the collision is gone with no word
+changed and nothing visibly moved but the log row itself. In a language where the run does not
+fit, the control column keeps moving right and the row still reads correctly — which is the
+point: no future language can reproduce this collision, because nothing in the row is placed by
+hand any more.
 
 ### 3. Window width
 
@@ -204,7 +216,7 @@ win_w = max( 400,
 
 `widest_control_run` is the maximum, over the control column's rows, of that row's own extent:
 a spinner row is `edit(60) + updown(16) + SUFFIX_GAP(6) + suffix_w(≤30)` = 112, the language
-combo alone is 120. Writing it as a per-row run rather than a single control width matters
+combo alone is 120. `SUFFIX_GAP` is 6 (332 − 326), read off the table like the other gaps. Writing it as a per-row run rather than a single control width matters
 precisely in the language-three case the formula exists for — a bare `ctrl_w + suffix_w` would
 drop the 6 px between the spinner and its unit.
 
