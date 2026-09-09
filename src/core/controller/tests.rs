@@ -4,6 +4,7 @@ use crate::core::config::{
     DEFAULT_OSD_TIMEOUT_MS, DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS,
     DEFAULT_STEP_PERCENT,
 };
+use crate::core::i18n::{Lang, LanguageSetting};
 use std::sync::mpsc;
 
 // ── Fakes ────────────────────────────────────────────────────────────
@@ -15,6 +16,7 @@ struct FakeOsd {
     updates: Vec<u8>,
     error_updates: Vec<u8>,
     appearance_calls: Vec<(f32, u32)>,
+    languages: Vec<Lang>,
     fail: bool,
 }
 
@@ -43,6 +45,9 @@ impl OsdSink for FakeOsd {
     }
     fn set_appearance(&mut self, opacity: f32, timeout_ms: u32) {
         self.appearance_calls.push((opacity, timeout_ms));
+    }
+    fn set_language(&mut self, lang: Lang) {
+        self.languages.push(lang);
     }
 }
 
@@ -130,6 +135,7 @@ struct FakeSettings {
     errors: Vec<String>,
     notices: Vec<String>,
     topmost_asserts: u32,
+    languages: Vec<Lang>,
 }
 
 impl SettingsSink for FakeSettings {
@@ -147,6 +153,9 @@ impl SettingsSink for FakeSettings {
     }
     fn assert_topmost(&mut self) {
         self.topmost_asserts += 1;
+    }
+    fn set_language(&mut self, lang: Lang) {
+        self.languages.push(lang);
     }
 }
 
@@ -218,8 +227,17 @@ fn other_id() -> MonitorId {
 }
 
 fn test_controller(base: Instant) -> TestController {
+    test_controller_with(Config::default(), Vec::new(), base)
+}
+
+fn test_controller_with(
+    config: Config,
+    os_languages: Vec<String>,
+    base: Instant,
+) -> TestController {
     Controller::new(
-        Config::default(),
+        config,
+        os_languages,
         FakeOsd::default(),
         FakeOverlay::default(),
         FakeDdc::default(),
@@ -232,6 +250,10 @@ fn test_controller(base: Instant) -> TestController {
         FakeStore::default(),
         base,
     )
+}
+
+fn german_os() -> Vec<String> {
+    vec!["de-DE".to_string(), "en-US".to_string()]
 }
 
 /// Seeds a monitor state and returns its id.
@@ -1334,6 +1356,7 @@ fn tray_menu_data_carries_the_live_hotkey_bindings() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base,
     )
@@ -1605,6 +1628,7 @@ fn restore_defaults_resets_all_fields_and_schedules_a_save() {
             intercept: true,
             log_enabled: true,
             log_level: true,
+            language: true,
         },
         "every field is marked dirty"
     );
@@ -1816,6 +1840,7 @@ fn sync_post_failure_does_not_drop_an_earlier_still_dirty_change() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base + Duration::from_millis(50),
     )
@@ -1861,6 +1886,7 @@ fn hotkey_rebind_result_with_no_pending_op_is_ignored() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base,
     )
@@ -1890,6 +1916,7 @@ fn hotkey_rebind_result_for_a_different_op_than_pending_is_ignored() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base,
     )
@@ -1933,6 +1960,7 @@ fn a_late_ack_after_the_watchdog_already_reverted_is_ignored() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         past_deadline + Duration::from_millis(100),
     )
@@ -1975,6 +2003,7 @@ fn a_late_failure_ack_after_the_watchdog_already_reverted_is_ignored() {
             success: false,
             fallback_active: false,
             error: Some("device busy".to_string()),
+            restore_error: None,
         },
         past_deadline + Duration::from_millis(200),
     )
@@ -2008,6 +2037,7 @@ fn a_resume_ack_does_not_clear_an_in_flight_rebinds_revert_stash() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base + Duration::from_millis(10),
     )
@@ -2038,6 +2068,7 @@ fn hotkey_rebind_result_success_clears_pending_and_prev_hotkeys() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base + Duration::from_millis(50),
     )
@@ -2065,6 +2096,7 @@ fn hotkey_rebind_result_fallback_active_shows_a_notice() {
             success: true,
             fallback_active: true,
             error: None,
+            restore_error: None,
         },
         base + Duration::from_millis(50),
     )
@@ -2103,6 +2135,7 @@ fn hotkey_rebind_result_failure_reverts_and_reschedules_the_save() {
             success: false,
             fallback_active: false,
             error: Some("device busy".to_string()),
+            restore_error: None,
         },
         nak_time,
     )
@@ -2145,6 +2178,7 @@ fn hotkey_rebind_failure_reverts_the_binding_the_tray_menu_reports() {
             success: false,
             fallback_active: false,
             error: Some("device busy".to_string()),
+            restore_error: None,
         },
         base,
     )
@@ -2230,6 +2264,7 @@ fn hotkeys_degraded_clears_on_a_later_successful_rebind() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         t2 + Duration::from_millis(50),
     )
@@ -2639,6 +2674,7 @@ fn suspend_ack_success_clears_pending_op() {
             success: true,
             fallback_active: false,
             error: None,
+            restore_error: None,
         },
         base + Duration::from_millis(20),
     )
@@ -2669,6 +2705,7 @@ fn suspend_ack_failure_marks_degraded_without_reverting_config() {
             success: false,
             fallback_active: false,
             error: Some("device busy".to_string()),
+            restore_error: None,
         },
         base + Duration::from_millis(20),
     )
@@ -2794,4 +2831,174 @@ fn overlay_update_does_not_touch_settings_when_it_is_closed() {
     c.handle_adjust(None, -10, base).unwrap();
 
     assert_eq!(c.settings.topmost_asserts, 0);
+}
+
+// ── Language ─────────────────────────────────────────────────────────
+
+#[test]
+fn language_resolves_from_config_and_os_at_construction() {
+    let base = Instant::now();
+    let c = test_controller_with(Config::default(), german_os(), base);
+    assert_eq!(c.lang(), Lang::German);
+
+    let fixed = Config {
+        language: "en".to_string(),
+        ..Config::default()
+    };
+    let c = test_controller_with(fixed, german_os(), base);
+    assert_eq!(c.lang(), Lang::English);
+
+    let c = test_controller_with(Config::default(), Vec::new(), base);
+    assert_eq!(c.lang(), Lang::English);
+}
+
+#[test]
+fn snapshot_carries_the_setting_and_the_resolved_language() {
+    let base = Instant::now();
+    let c = test_controller_with(Config::default(), german_os(), base);
+    let snap = c.settings_snapshot();
+    assert_eq!(snap.language, LanguageSetting::System);
+    assert_eq!(snap.lang, Lang::German);
+}
+
+#[test]
+fn a_language_change_that_alters_the_result_pushes_once_and_dirties() {
+    let base = Instant::now();
+    let mut c = test_controller_with(Config::default(), Vec::new(), base);
+    let change = SettingChange::Language(LanguageSetting::Fixed(Lang::German));
+    c.handle_message(BrightnessMessage::SettingChanged(change), base)
+        .unwrap();
+
+    assert_eq!(c.lang(), Lang::German);
+    assert_eq!(c.config.language, "de");
+    assert!(c.dirty.language);
+    assert_eq!(c.pending_save_since, Some(base));
+    assert_eq!(c.osd.languages, vec![Lang::German]);
+    assert_eq!(c.settings.languages, vec![Lang::German]);
+}
+
+#[test]
+fn a_language_change_with_the_same_result_dirties_but_pushes_nothing() {
+    // "System default" on a German OS to "Deutsch": the stored choice changes,
+    // the displayed language does not, so nothing is relabelled.
+    let base = Instant::now();
+    let mut c = test_controller_with(Config::default(), german_os(), base);
+    let change = SettingChange::Language(LanguageSetting::Fixed(Lang::German));
+    c.handle_message(BrightnessMessage::SettingChanged(change), base)
+        .unwrap();
+
+    assert_eq!(c.config.language, "de");
+    assert!(c.dirty.language);
+    assert!(c.osd.languages.is_empty());
+    assert!(c.settings.languages.is_empty());
+}
+
+#[test]
+fn a_language_only_session_saves_on_close() {
+    let base = Instant::now();
+    let mut c = test_controller_with(Config::default(), Vec::new(), base);
+    let change = SettingChange::Language(LanguageSetting::Fixed(Lang::German));
+    c.handle_message(BrightnessMessage::SettingChanged(change), base)
+        .unwrap();
+    c.handle_message(BrightnessMessage::SettingsClosed, base)
+        .unwrap();
+
+    assert_eq!(c.store.saves.len(), 1);
+    let (saved, dirty, force) = &c.store.saves[0];
+    assert_eq!(saved.language, "de");
+    assert!(dirty.language);
+    assert!(force);
+}
+
+#[test]
+fn restore_defaults_pushes_the_os_language_after_the_refresh() {
+    let base = Instant::now();
+    let fixed = Config {
+        language: "en".to_string(),
+        ..Config::default()
+    };
+    let mut c = test_controller_with(fixed, german_os(), base);
+    assert_eq!(c.lang(), Lang::English);
+
+    c.handle_message(
+        BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+        base,
+    )
+    .unwrap();
+
+    assert_eq!(c.lang(), Lang::German);
+    assert_eq!(c.config.language, "system");
+    assert!(c.dirty.language);
+    assert_eq!(c.settings.refreshed.len(), 1);
+    assert_eq!(
+        c.settings.refreshed[0].lang,
+        Lang::English,
+        "refresh carries the pre-push snapshot"
+    );
+    assert_eq!(c.settings.languages, vec![Lang::German]);
+    assert_eq!(c.osd.languages, vec![Lang::German]);
+}
+
+#[test]
+fn restore_defaults_without_a_language_change_pushes_nothing() {
+    let base = Instant::now();
+    let mut c = test_controller_with(Config::default(), german_os(), base);
+    c.handle_message(
+        BrightnessMessage::SettingChanged(SettingChange::RestoreDefaults),
+        base,
+    )
+    .unwrap();
+    assert!(c.settings.languages.is_empty());
+    assert!(c.osd.languages.is_empty());
+}
+
+#[test]
+fn hotkey_status_text_is_composed_in_the_controllers_language() {
+    let base = Instant::now();
+    let mut c = test_controller_with(Config::default(), german_os(), base);
+    c.handle_message(
+        BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+F1".to_string())),
+        base,
+    )
+    .unwrap();
+    c.handle_message(
+        BrightnessMessage::HotkeyRebindResult {
+            op: HotkeyOp::Rebind,
+            success: false,
+            fallback_active: false,
+            error: Some("boom".to_string()),
+            restore_error: Some("worse".to_string()),
+        },
+        base,
+    )
+    .unwrap();
+
+    let expected = strings(Lang::German)
+        .hotkey_status_restore_also_failed_fmt
+        .replace("{error}", "boom")
+        .replace("{restore_error}", "worse");
+    assert_eq!(c.settings.errors, vec![expected]);
+}
+
+#[test]
+fn a_failed_rebind_without_a_restore_error_shows_the_error_alone() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    c.handle_message(
+        BrightnessMessage::SettingChanged(SettingChange::HotkeyUp("Alt+F1".to_string())),
+        base,
+    )
+    .unwrap();
+    c.handle_message(
+        BrightnessMessage::HotkeyRebindResult {
+            op: HotkeyOp::Rebind,
+            success: false,
+            fallback_active: false,
+            error: Some("boom".to_string()),
+            restore_error: None,
+        },
+        base,
+    )
+    .unwrap();
+    assert_eq!(c.settings.errors, vec!["boom".to_string()]);
 }

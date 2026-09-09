@@ -11,7 +11,7 @@ use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM}
 use windows::Win32::Graphics::Gdi::{
     CLIP_DEFAULT_PRECIS, COLOR_BTNFACE, COLOR_WINDOW, CreateFontIndirectW, DEFAULT_CHARSET,
     DEFAULT_QUALITY, DeleteObject, FF_SWISS, FONT_WEIGHT, FW_BOLD, FW_NORMAL, GetSysColorBrush,
-    HFONT, LOGFONTW, OUT_DEFAULT_PRECIS, VARIABLE_PITCH,
+    HFONT, InvalidateRect, LOGFONTW, OUT_DEFAULT_PRECIS, VARIABLE_PITCH,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Controls::{
@@ -25,25 +25,26 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_SETCURSEL, CBN_SELCHANGE,
-    CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID, DLGC_WANTCHARS, DLGC_WANTMESSAGE,
-    DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow, DispatchMessageW, EN_KILLFOCUS,
-    GWL_STYLE, GetDlgItem, GetMessageW, GetNextDlgTabItem, GetWindowLongPtrW, GetWindowTextLengthW,
-    GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW,
-    MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW,
-    PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
-    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
-    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
-    WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT, WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION,
-    WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_TABSTOP, WS_VISIBLE,
+    BM_GETCHECK, BM_SETCHECK, BN_CLICKED, CB_ADDSTRING, CB_GETCURSEL, CB_RESETCONTENT,
+    CB_SETCURSEL, CBN_SELCHANGE, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID,
+    DLGC_WANTCHARS, DLGC_WANTMESSAGE, DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, EN_KILLFOCUS, GWL_STYLE, GetDlgItem, GetMessageW, GetNextDlgTabItem,
+    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK,
+    IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG,
+    MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE,
+    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
+    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
+    WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
+    WM_SETTINGCHANGE, WNDCLASSEXW, WS_CAPTION, WS_CHILD, WS_EX_TOPMOST, WS_SYSMENU, WS_TABSTOP,
+    WS_VISIBLE,
 };
 use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
-use crate::core::i18n::{Lang, Strings, strings};
+use crate::core::i18n::{Lang, LanguageSetting, Strings, strings};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
@@ -53,11 +54,11 @@ use super::capture::capture_wnd_proc;
 use super::dark;
 use super::layout::{
     CONTROLS, ID_AUTOSTART, ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_INACT_CHECK,
-    ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL,
-    ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK, ID_RESYNC_EDIT,
-    ID_RESYNC_UPDOWN, ID_STEP_EDIT, ID_VERSION, RANGE_SPECS, RangeSpec, compute_placement,
-    configure_combo_height, configure_updowns, dpi_from_wparam, font_height_for_dpi,
-    is_section_header, layout,
+    ID_INACT_EDIT, ID_INACT_UPDOWN, ID_INTERCEPT, ID_LANGUAGE, ID_LINK_CONFIG, ID_LOG_CHECK,
+    ID_LOG_LEVEL, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESTORE, ID_RESYNC_CHECK,
+    ID_RESYNC_EDIT, ID_RESYNC_UPDOWN, ID_STEP_EDIT, ID_VERSION, RANGE_SPECS, RangeSpec,
+    compute_placement, configure_combo_height, configure_updowns, dpi_from_wparam,
+    font_height_for_dpi, is_section_header, layout,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -77,18 +78,22 @@ pub(super) const WM_APP_SETTINGS_HK_ERROR: u32 = WM_APP + 3;
 pub(super) const WM_APP_SETTINGS_HK_NOTICE: u32 = WM_APP + 4;
 /// Re-assert `HWND_TOPMOST`; no payload.
 pub(super) const WM_APP_SETTINGS_TOPMOST: u32 = WM_APP + 5;
+/// UI language changed: relabel every control. `wparam` is the language's
+/// index in `Lang::ALL`; no heap payload.
+pub(super) const WM_APP_SETTINGS_LANG: u32 = WM_APP + 6;
 
-// These five must stay one contiguous, ordered range with REFRESH lowest and
-// TOPMOST highest: `drain_pending_payload_messages` reclaims the leaked
+// These six must stay one contiguous, ordered range with REFRESH lowest and
+// LANG highest: `drain_pending_payload_messages` reclaims the leaked
 // `Box` payloads by filtering `PeekMessageW` on exactly that span, so a
 // constant added outside it would never be drained and its payload would
-// leak. Adding a sixth message means extending the range here, deliberately.
+// leak. Adding a seventh message means extending the range here, deliberately.
 const _: () = {
     assert!(WM_APP_SETTINGS_REFRESH < WM_APP_SETTINGS_FOCUS);
     assert!(WM_APP_SETTINGS_FOCUS < WM_APP_SETTINGS_HK_ERROR);
     assert!(WM_APP_SETTINGS_HK_ERROR < WM_APP_SETTINGS_HK_NOTICE);
     assert!(WM_APP_SETTINGS_HK_NOTICE < WM_APP_SETTINGS_TOPMOST);
-    assert!(WM_APP_SETTINGS_TOPMOST - WM_APP_SETTINGS_REFRESH == 4);
+    assert!(WM_APP_SETTINGS_TOPMOST < WM_APP_SETTINGS_LANG);
+    assert!(WM_APP_SETTINGS_LANG - WM_APP_SETTINGS_REFRESH == 5);
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -220,7 +225,7 @@ const BASE_FONT_POINT_SIZE: i32 = 9;
 /// `WM_SETFONT` with the regular font would render "bold" labels as
 /// ordinary text, defeating the group-box-caption substitute the module doc
 /// comment describes).
-fn build_font(dpi: u32, weight: FONT_WEIGHT) -> HFONT {
+pub(super) fn build_font(dpi: u32, weight: FONT_WEIGHT) -> HFONT {
     let mut face = [0u16; 32];
     let name: Vec<u16> = "Segoe UI".encode_utf16().collect();
     let len = name.len().min(face.len() - 1);
@@ -265,6 +270,78 @@ fn log_level_display(s: &Strings, index: usize) -> &'static str {
         4 => s.log_level_trace,
         _ => s.log_level_error,
     }
+}
+
+/// The language picker's entries: "System default" in the current language,
+/// then every language in its own name, in `Lang::ALL` order.
+fn language_combo_entries(s: &Strings) -> Vec<&'static str> {
+    std::iter::once(s.language_system_default)
+        .chain(Lang::ALL.iter().map(|lang| lang.native_name()))
+        .collect()
+}
+
+/// Combo index of a language choice: 0 is "System default", then
+/// `Lang::ALL` order shifted by one.
+fn language_setting_index(setting: LanguageSetting) -> usize {
+    match setting {
+        LanguageSetting::System => 0,
+        LanguageSetting::Fixed(lang) => lang.index() + 1,
+    }
+}
+
+/// Inverse of [`language_setting_index`]; `None` outside the entries.
+fn language_setting_from_index(index: usize) -> Option<LanguageSetting> {
+    match index {
+        0 => Some(LanguageSetting::System),
+        n => Lang::from_index(n - 1).map(LanguageSetting::Fixed),
+    }
+}
+
+/// The log-level picker's entries, in `LOG_LEVELS` order.
+fn log_level_combo_entries(s: &Strings) -> Vec<&'static str> {
+    (0..LOG_LEVELS.len())
+        .map(|index| log_level_display(s, index))
+        .collect()
+}
+
+/// Empties `combo` and inserts `entries` in order.
+fn fill_combo(combo: HWND, entries: &[&str]) {
+    unsafe {
+        SendMessageW(combo, CB_RESETCONTENT, None, None);
+    }
+    for entry in entries {
+        let wide_entry = wide(entry);
+        // SAFETY: `CB_ADDSTRING` copies the NUL-terminated string `lparam`
+        // points at into the combo's own storage; the message is sent, not
+        // posted, so `wide_entry` still owns that buffer while it happens.
+        unsafe {
+            SendMessageW(
+                combo,
+                CB_ADDSTRING,
+                None,
+                Some(LPARAM(
+                    wide_entry.as_ptr().expose_provenance().cast_signed(),
+                )),
+            );
+        }
+    }
+}
+
+/// Selects entry `index` of the combo `id`.
+fn set_combo_index(hwnd: HWND, id: u16, index: usize) {
+    let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
+        return;
+    };
+    unsafe {
+        SendMessageW(child, CB_SETCURSEL, Some(WPARAM(index)), None);
+    }
+}
+
+/// The combo's selected index, `None` when nothing is selected (`CB_ERR`).
+fn combo_selected_index(hwnd: HWND, id: u16) -> Option<usize> {
+    let child = unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }.ok()?;
+    let index = unsafe { SendMessageW(child, CB_GETCURSEL, None, None) }.0;
+    usize::try_from(index).ok()
 }
 
 /// UTF-16, NUL-terminated encoding of `s` for a `PCWSTR` argument that only
@@ -357,24 +434,10 @@ fn create_controls(
             );
         }
 
-        if spec.id == ID_LOG_LEVEL {
-            for index in 0..LOG_LEVELS.len() {
-                let level_wide = wide(log_level_display(s, index));
-                // SAFETY: `CB_ADDSTRING` copies the NUL-terminated string
-                // `lparam` points at into the combo's own storage. The message
-                // is sent, not posted, so `level_wide` still owns that buffer
-                // while the copy happens.
-                unsafe {
-                    SendMessageW(
-                        child,
-                        CB_ADDSTRING,
-                        None,
-                        Some(LPARAM(
-                            level_wide.as_ptr().expose_provenance().cast_signed(),
-                        )),
-                    );
-                }
-            }
+        match spec.id {
+            ID_LOG_LEVEL => fill_combo(child, &log_level_combo_entries(s)),
+            ID_LANGUAGE => fill_combo(child, &language_combo_entries(s)),
+            _ => {}
         }
 
         // Dark-mode paint subclasses, installed once here regardless of the
@@ -524,6 +587,15 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
     set_combo_selection(state.hwnd, ID_LOG_LEVEL, &snap.file_log_level);
     enable_control(state.hwnd, ID_LOG_LEVEL, snap.file_log_enabled);
 
+    // `snap.lang` is deliberately not applied: the language cell has two
+    // writers, creation and WM_APP_SETTINGS_LANG, so labels and
+    // window_strings() can never disagree. A refresh only re-displays values.
+    set_combo_index(
+        state.hwnd,
+        ID_LANGUAGE,
+        language_setting_index(snap.language),
+    );
+
     set_checked(state.hwnd, ID_AUTOSTART, autostart::is_enabled());
 
     // Re-derive session memory from what was just displayed, so a later
@@ -567,7 +639,7 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// Lives in a thread-local because the window's own dedicated thread is the
 /// only thread that ever touches it, and a plain `extern "system"` wndproc
 /// has no other way to reach it — the same pattern `tray.rs`/`osd.rs` use
-/// for their thread-local render/sender state. Every field except the twelve
+/// for their thread-local render/sender state. Every field except the thirteen
 /// `Cell`s is written once (at construction) and only ever read afterward,
 /// which is what lets every reader below use `RefCell::borrow` (any number
 /// of these can be held at once) instead of `borrow_mut` (which panics if a
@@ -577,9 +649,9 @@ fn apply_snapshot(state: &WindowState, snap: &SettingsSnapshot) {
 /// [`with_window_state`] for the invariant that keeps this sound.
 pub(super) struct WindowState {
     pub(super) hwnd: HWND,
-    /// The language every control label was resolved in at creation time.
-    /// Only English exists today, so this never changes after construction.
-    pub(super) lang: Lang,
+    /// The language every label is currently rendered in. Written at
+    /// creation from the snapshot and by the language message; nothing else.
+    pub(super) lang: Cell<Lang>,
     sender: Sender<BrightnessMessage>,
     /// The slot [`SettingsSinkImpl`] posts through, shared with the
     /// controller's thread. Held here so `WM_DESTROY` can clear it back to
@@ -696,7 +768,7 @@ pub(super) fn with_window_state(f: impl FnOnce(&WindowState)) {
 /// default language when the window state is not reachable.
 pub(super) fn window_strings() -> &'static Strings {
     let mut lang = Lang::default();
-    with_window_state(|state| lang = state.lang);
+    with_window_state(|state| lang = state.lang.get());
     strings(lang)
 }
 
@@ -857,6 +929,60 @@ fn handle_refresh_message(lparam: LPARAM) {
     // therefore never delivered here.
     let snapshot = unsafe { Box::from_raw(ptr) };
     with_window_state(|state| apply_snapshot(state, &snapshot));
+}
+
+/// Relabels the whole window in the language `wparam` names: every control
+/// with a `TextKey`, the title, both pickers (re-filled under the
+/// notification guard so the re-fill is never taken for a selection), and
+/// the two capture fields, which repaint their wire text through
+/// `display_text`. Positions are untouched: the layout table does not
+/// depend on text. A hotkey status line already on screen keeps its text
+/// until the next hotkey event replaces it.
+fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
+    let Some(lang) = Lang::from_index(wparam.0) else {
+        log::warn!(index = wparam.0; "Ignoring settings language update with an unknown index");
+        return;
+    };
+    with_window_state(|state| {
+        state.lang.set(lang);
+        let s = strings(lang);
+
+        for spec in CONTROLS {
+            if let Some(key) = spec.text {
+                set_text(hwnd, spec.id, s.get(key));
+            }
+        }
+        let title = wide(s.window_title);
+        // SAFETY: `SetWindowTextW` copies the NUL-terminated string `PCWSTR`
+        // points at before it returns, and `title` still owns that buffer for
+        // the whole call.
+        unsafe {
+            let _ = SetWindowTextW(hwnd, PCWSTR(title.as_ptr()));
+        }
+
+        SUPPRESS_NOTIFICATIONS.with(|guard| guard.set(true));
+        for (id, entries) in [
+            (ID_LOG_LEVEL, log_level_combo_entries(s)),
+            (ID_LANGUAGE, language_combo_entries(s)),
+        ] {
+            let selected = combo_selected_index(hwnd, id);
+            if let Ok(child) = unsafe { GetDlgItem(Some(hwnd), i32::from(id)) } {
+                fill_combo(child, &entries);
+            }
+            if let Some(index) = selected {
+                set_combo_index(hwnd, id, index);
+            }
+        }
+        SUPPRESS_NOTIFICATIONS.with(|guard| guard.set(false));
+
+        for id in [ID_HK_UP, ID_HK_DOWN] {
+            if let Ok(child) = unsafe { GetDlgItem(Some(hwnd), i32::from(id)) } {
+                unsafe {
+                    let _ = InvalidateRect(Some(child), None, true);
+                }
+            }
+        }
+    });
 }
 
 /// Reclaims ownership of `lparam`'s `Box<String>` and shows it on the
@@ -1064,12 +1190,7 @@ fn enable_control(hwnd: HWND, id: u16, enabled: bool) {
 /// The combo's currently selected log level, if any (`CB_ERR`, when nothing
 /// is selected, fails the `usize` conversion and reads as `None`).
 fn combo_selected_level(hwnd: HWND, id: u16) -> Option<&'static str> {
-    let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(id)) }) else {
-        return None;
-    };
-    let index = unsafe { SendMessageW(child, CB_GETCURSEL, None, None) }.0;
-    usize::try_from(index)
-        .ok()
+    combo_selected_index(hwnd, id)
         .and_then(|i| LOG_LEVELS.get(i))
         .copied()
 }
@@ -1186,6 +1307,17 @@ fn handle_log_check_click(hwnd: HWND) {
     let checked = is_checked(hwnd, ID_LOG_CHECK);
     enable_control(hwnd, ID_LOG_LEVEL, checked);
     with_window_state(|state| post_change(state, SettingChange::FileLogEnabled(checked)));
+}
+
+/// `ID_LANGUAGE` (`CBN_SELCHANGE`): post the chosen language setting,
+/// resolved from the index, never from the entry's text.
+fn handle_language_selection(hwnd: HWND) {
+    let Some(setting) =
+        combo_selected_index(hwnd, ID_LANGUAGE).and_then(language_setting_from_index)
+    else {
+        return;
+    };
+    with_window_state(|state| post_change(state, SettingChange::Language(setting)));
 }
 
 /// `ID_LOG_LEVEL` (`CBN_SELCHANGE`): post the newly selected level string.
@@ -1374,6 +1506,7 @@ fn handle_command(hwnd: HWND, wparam: WPARAM) {
         },
         EN_KILLFOCUS => handle_numeric_commit(hwnd, id),
         CBN_SELCHANGE if id == ID_LOG_LEVEL => handle_log_level_selection(hwnd),
+        CBN_SELCHANGE if id == ID_LANGUAGE => handle_language_selection(hwnd),
         _ => {}
     }
 }
@@ -1792,6 +1925,10 @@ unsafe extern "system" fn settings_wnd_proc(
                 handle_hotkey_message_text(lparam);
                 LRESULT(0)
             }
+            WM_APP_SETTINGS_LANG => {
+                handle_language_message(hwnd, wparam);
+                LRESULT(0)
+            }
             WM_APP_SETTINGS_TOPMOST => {
                 let _ = SetWindowPos(
                     hwnd,
@@ -1848,7 +1985,7 @@ fn create_settings_window(
     // No WS_VISIBLE here: control creation, layout and snapshot population
     // all happen before the window is ever shown, so the open does not
     // visibly assemble itself on screen.
-    let lang = Lang::default();
+    let lang = snapshot.lang;
     let title = wide(strings(lang).window_title);
     // SAFETY: `CreateWindowExW` copies the NUL-terminated title `PCWSTR` points
     // at while it builds the window, and `title` still owns that buffer for the
@@ -1876,7 +2013,7 @@ fn create_settings_window(
 
     let state = WindowState {
         hwnd,
-        lang,
+        lang: Cell::new(lang),
         sender: tx.clone(),
         hwnd_slot: Arc::clone(hwnd_slot),
         font_regular: Cell::new(font_regular),
@@ -1899,7 +2036,13 @@ fn create_settings_window(
         last_posted_inactivity: Cell::new(None),
     };
 
-    create_controls(hwnd, hinstance.into(), font_regular, font_bold, state.lang);
+    create_controls(
+        hwnd,
+        hinstance.into(),
+        font_regular,
+        font_bold,
+        state.lang.get(),
+    );
     layout(hwnd, placement.dpi);
     configure_updowns(hwnd);
     configure_combo_height(hwnd);
@@ -1916,6 +2059,11 @@ fn create_settings_window(
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
+        // Focus lands on the autostart checkbox, not on the language combo
+        // that precedes it in tab order: a drop-down list changes its
+        // selection on a single arrow key or wheel notch, which here would
+        // pin the UI language in the config before the user touched
+        // anything. The combo stays one Shift+Tab away.
         if let Ok(first) = GetDlgItem(Some(hwnd), i32::from(ID_AUTOSTART)) {
             let _ = SetFocus(Some(first));
         }
@@ -1944,7 +2092,7 @@ fn drain_pending_payload_messages(hwnd: HWND) {
             &raw mut msg,
             Some(hwnd),
             WM_APP_SETTINGS_REFRESH,
-            WM_APP_SETTINGS_TOPMOST,
+            WM_APP_SETTINGS_LANG,
             PM_REMOVE,
         )
     }
@@ -1966,8 +2114,8 @@ fn drain_pending_payload_messages(hwnd: HWND) {
                     std::ptr::with_exposed_provenance_mut(msg.lParam.0.cast_unsigned());
                 drop(unsafe { Box::from_raw(ptr) });
             }
-            // WM_APP_SETTINGS_FOCUS / WM_APP_SETTINGS_TOPMOST carry no
-            // payload; PeekMessageW's range just happens to include them.
+            // WM_APP_SETTINGS_FOCUS / _TOPMOST / _LANG carry no payload;
+            // PeekMessageW's range just happens to include them.
             _ => {}
         }
     }
@@ -2072,7 +2220,7 @@ impl SettingsSinkImpl {
 
     /// Posts a payload-free message. Fails harmlessly (logged at debug) once
     /// the window is gone, matching `TrayStatusHandle::notify`.
-    fn post_simple(&self, msg: u32) {
+    fn post_simple(&self, msg: u32, wparam: WPARAM) {
         let Some(hwnd) = self.target_hwnd() else {
             return;
         };
@@ -2083,7 +2231,7 @@ impl SettingsSinkImpl {
         // that window has since been destroyed — which is the whole reason
         // the handle may cross the boundary as a bare `isize` at all.
         unsafe {
-            if let Err(e) = PostMessageW(Some(hwnd), msg, WPARAM(0), LPARAM(0)) {
+            if let Err(e) = PostMessageW(Some(hwnd), msg, wparam, LPARAM(0)) {
                 log::debug!(error:% = e; "Settings window post failed (window gone?)");
             }
         }
@@ -2183,7 +2331,11 @@ impl SettingsSink for SettingsSinkImpl {
     }
 
     fn assert_topmost(&mut self) {
-        self.post_simple(WM_APP_SETTINGS_TOPMOST);
+        self.post_simple(WM_APP_SETTINGS_TOPMOST, WPARAM(0));
+    }
+
+    fn set_language(&mut self, lang: Lang) {
+        self.post_simple(WM_APP_SETTINGS_LANG, WPARAM(lang.index()));
     }
 }
 
@@ -2223,6 +2375,35 @@ mod tests {
     fn an_unknown_index_falls_back_to_the_first_level() {
         use crate::core::i18n::ENGLISH;
         assert_eq!(log_level_display(&ENGLISH, 99), ENGLISH.log_level_error);
+    }
+
+    #[test]
+    fn language_combo_index_maps_system_first_then_every_language() {
+        assert_eq!(language_setting_index(LanguageSetting::System), 0);
+        for &lang in Lang::ALL {
+            let setting = LanguageSetting::Fixed(lang);
+            let index = language_setting_index(setting);
+            assert_eq!(index, lang.index() + 1);
+            assert_eq!(language_setting_from_index(index), Some(setting));
+        }
+        assert_eq!(
+            language_setting_from_index(0),
+            Some(LanguageSetting::System)
+        );
+        assert_eq!(language_setting_from_index(Lang::ALL.len() + 1), None);
+    }
+
+    #[test]
+    fn language_combo_entries_lead_with_system_default_then_native_names() {
+        use crate::core::i18n::GERMAN;
+        let entries = language_combo_entries(&GERMAN);
+        assert_eq!(entries[0], "Systemstandard");
+        assert_eq!(&entries[1..], &["English", "Deutsch"]);
+    }
+
+    #[test]
+    fn the_settings_message_range_is_contiguous_through_the_language_message() {
+        assert_eq!(WM_APP_SETTINGS_LANG, WM_APP_SETTINGS_TOPMOST + 1);
     }
 
     #[test]

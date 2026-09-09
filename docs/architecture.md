@@ -334,9 +334,10 @@ messages, and the values live in three files today:
 
 | Constant | Value | Owning thread | Receiving class | Delivery |
 |---|---|---|---|---|
-| `WM_APP_SETTINGS_REFRESH` … `_TOPMOST` | `WM_APP + 1` … `+ 5` | settings | `DarkBrightSettings` | `PostMessageW` to the window |
+| `WM_APP_SETTINGS_REFRESH` … `_LANG` | `WM_APP + 1` … `+ 6` | settings | `DarkBrightSettings` | `PostMessageW` to the window |
 | `WM_APP_HOTKEY_WAKE` | `WM_APP + 10` | hotkey | none — see below | **`PostThreadMessageW` to the thread** |
 | `WM_TRAY_CALLBACK` / `WM_TRAY_STATUS` | `WM_APP + 100` / `+ 101` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
+| `WM_TRAY_LANG` | `WM_APP + 102` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
 
 For a window-addressed message, `WM_APP + n` only has to be unique among the messages that
 one *class* handles; two classes may reuse a value without interfering, which is why the
@@ -625,12 +626,16 @@ map's contents are exempt (its key format is not yet a contract).
 | `refresh.inactivity_seconds` | 0 - 600 | 30 |
 | `logging.file_enabled` | `true` / `false` | `false` |
 | `logging.file_level` | `error` / `warn` / `info` / `debug` / `trace` (case-insensitive) | `info` |
+| `language` | `system` or a shipped BCP-47 tag (`en`, `de`; a regional tag such as `de-AT` resolves to its language; case-insensitive) | `system` |
 
 These ranges are shared with, but enforced differently by, the settings window (§14): the
 loader above *substitutes the default* for an out-of-range value (a repair policy for
 unattended startup), while the dialog *clamps to the nearest bound* on focus loss (a guidance
 policy for a user mid-edit). Same never-fatal spirit, deliberately different mechanism — don't
 "fix" one to match the other.
+
+`language` is validated strictly: a well-formed but unshipped tag (`fr`) is reported like a
+typo and replaced by `system`, never silently shown in English.
 
 Two spinner ranges deliberately do *not* match the table, and the mismatch is the point: in
 `settings/layout.rs` the periodic-resync spinner is bounded 1–3600 and the inactivity-resync
@@ -901,13 +906,18 @@ retrievable artifact for field reports. Mechanics:
   loader does not log what it finds: `Config::load_or_recover` returns the
   recovery outcome and a list of `ConfigNotice`s (unknown keys, repaired
   values, version mismatch, a failed backup refresh) as data, and `main`
-  logs them — together with a fail-open single-instance guard failure —
-  right after the attach. The file therefore starts with a version-stamped
+  logs them — together with a fail-open single-instance guard failure and the
+  resolved UI language — right after the attach. The file therefore starts with a version-stamped
   "File logging enabled" line followed by the config outcome and any
   repairs; only the startup banner and the debug-level path lines are
   console-only. This is the same "log at the point of handling" rule the
   rest of the code follows, applied to a case where the handling point is
-  after the sink exists.
+  after the sink exists. The one thing that precedes even the single-instance guard is the
+  read of the OS's UI-language list (`GetUserPreferredUILanguages`), a kernel32 query with no
+  side effects, so that the "already running" box a second instance shows has a language
+  without reading the config file. A failure of that read is the one startup line the file
+  cannot carry: the error is only in hand at the call itself, well before the config that
+  decides whether a file sink exists at all.
 - **Access:** the tray menu's "Open Log Folder" entry opens the directory in
   Explorer.
 - **Attach failure:** if the sink cannot be built (no `APPDATA`, an unwritable
@@ -1457,7 +1467,9 @@ The tray menu's "Settings" item opens a native settings window instead of
 dialog's own "Open config file" footer link (see "Message flow" below). The
 window exposes every existing config option plus a "Start with Windows"
 toggle, applies changes live, and follows the system light/dark theme like
-the tray menu already does.
+the tray menu already does. The Language picker is the first row of the
+General section, 120px wide; the window's base height is 654 logical px,
+before DPI scaling.
 
 **Own thread — load-bearing, not stylistic.** The window is spawned on a
 dedicated thread with its own `GetMessageW` loop, the same pattern the tray
@@ -1478,7 +1490,7 @@ exists focuses it instead of spawning a duplicate.
 
 | Seam | Responsibility | Windows implementation |
 |---|---|---|
-| `SettingsSink` | open/focus the window with a config snapshot, refresh displayed values (restore defaults, reverts), show inline hotkey errors/notices, re-assert `HWND_TOPMOST` | `settings::SettingsSinkImpl` |
+| `SettingsSink` | open/focus the window with a config snapshot, refresh displayed values (restore defaults, reverts), show inline hotkey errors/notices, re-assert `HWND_TOPMOST`, relabel the window in a new language | `settings::SettingsSinkImpl` |
 | `HotkeyPort` | `rebind`/`suspend`/`resume` — posts an in-place operation to the live hotkey thread; results arrive async as `BrightnessMessage::HotkeyRebindResult` | posts to the hotkey thread |
 | `ConfigStore` | `save(&Config, &SettingsDirty, force) -> SaveResult` | `config_store::WindowsConfigStore` |
 
@@ -1669,7 +1681,11 @@ there is no dialog-manager state recording which control had it. This was
 found the hard way (focus stranding on the window after a message box
 closed) and is now handled by hand: `WM_ACTIVATE` saves the focused child on
 deactivate and restores it on reactivate, and `WM_SETFOCUS` self-heals
-whenever focus lands on the top level through some other path.
+whenever focus lands on the top level through some other path. Initial focus
+goes to the "Start with Windows" checkbox rather than to the Language combo
+above it: a drop-down list commits a new selection on a single arrow key or
+wheel notch, so focusing it would let one stray keypress pin the UI language
+in the config.
 
 **Uncommitted edits on Close.** A value typed into a numeric edit but not yet
 committed (no `EN_KILLFOCUS` yet) still survives Close or Esc without an
@@ -1719,7 +1735,7 @@ implementation above).
 
 ### 15. Single-Instance Guard
 
-At most one instance runs per logon session. Startup creates a named mutex **before** spawning any worker thread, window, or hotkey registration; a second launch detects the existing name, shows an informational message box, and exits without side effects (no duplicate tray icon, overlay, or failed hotkey registration).
+At most one instance runs per logon session. Startup creates a named mutex **before** spawning any worker thread, window, or hotkey registration; a second launch detects the existing name, shows an informational message box, and exits without side effects (no duplicate tray icon, overlay, or failed hotkey registration). The one thing that precedes even this guard is the read of the OS's UI-language list (`GetUserPreferredUILanguages`), a kernel32 query with no side effects, so that the "already running" box a second instance shows has a language without reading the config file.
 
 **Reserved mutex name (stable contract):**
 
@@ -1772,41 +1788,17 @@ stored value is resolved from the combo's selected index, never from its text. C
 the product name, and the EDID fallback model name (`"Generic Monitor"`), which is part of a
 monitor's identity rather than a caption.
 
-**Not yet wired.** `ParsedHotkey::display_text` has no production caller: the settings window still
-shows the stored wire string, and parsing it only to re-render it would rewrite a hand-edited
-`"ctrl+shift+up"` as `"Ctrl+Shift+Up"` on screen — a visible change for no gain today. The seam
-exists, covered by tests, and waits for a language that actually renders differently. The tray's
-usage rows print the same wire string for the same reason; routing them through `display_text`
-needs a parse the tray does not do today.
+Every `pub` item in `i18n.rs` now has a caller in the binary or the platform layer.
 
-Three items are therefore `pub` with no consumer outside their own tests — `Lang::ALL`,
-`Lang::tag` and `ParsedHotkey::display_text`. That is deliberate, and the exception to "`pub`
-means the binary or `tests/` names it" (`code-conventions.md` §2): narrowing them to
-`pub(crate)` makes `dead_code` fire, and the only ways out are an `allow` or deleting an API a
-language picker, locale matching and a translated UI each need by name. Each says so in its own
-doc comment. `display_text`'s `"Unknown"` key fallback stays English and out of the table for a
-different reason: `parse_hotkey` rejects a key it cannot name, so nothing built from a config
-value can reach it — it can only surface a hotkey assembled from a raw VK code, where it reads
-as a diagnostic rather than as a caption.
+**Choosing the language.** The controller owns the resolved `Lang`, like every other piece of runtime state. At construction it resolves `config.language` (`"system"` or a tag) against the OS preference list that `main.rs` read once through the `LanguageSource` seam (`platform/windows/locale.rs`, `GetUserPreferredUILanguages` with `MUI_LANGUAGE_NAME`; read once because Windows applies a display-language change to running processes only after a sign-out). `Lang::lookup` is RFC 4647 lookup with truncation (`de-AT` → `de`, singleton subtags dropped with their following subtag), English the fallback.
 
-**Choosing the language.** There is no language setting yet, so every table lookup ends at the
-default language. Four places decide that, and a fifth is a gap rather than a decision:
+A `SettingChange::Language` re-resolves and, **only if the resolved language changed**, pushes it: `OsdSink::set_language` writes `OsdRenderState.lang` (the OSD's one writer besides `OsdWindow::new`); `SettingsSink::set_language` posts `WM_APP_SETTINGS_LANG`, whose handler relabels every `CONTROLS` entry with a `TextKey`, the title and both pickers, and invalidates the capture fields; the tray is not a seam, so `main.rs` diffs `Controller::lang()` each tick like the health warnings and posts `WM_TRAY_LANG` through `TrayStatusHandle::set_language`, which rebuilds the tooltip from the last warnings the tray thread remembers. The menu rebuilds on every open. `WindowState.lang` has exactly two writers, creation (from `SettingsSnapshot.lang`) and that message; a refresh never touches it, so `window_strings()` and the labels cannot disagree. The hotkey thread composes no user-facing text: a failed rebind reports `error` and `restore_error` raw and the controller joins them in its language.
 
-- `TRAY_LANG` in `platform/windows/tray.rs`, set once at startup through `set_tray_lang`.
-- The `let s = strings(...)` binding in `main.rs`, bound *before* `load_config()` runs — so
-  making the language config-driven has to move it as well as change it.
-- The `lang` seeded into `WindowState` in `create_settings_window` (`settings/window.rs`), which
-  every settings control label resolves through: the window and its hotkey-capture children both
-  read it via `window_strings()`, so they can never disagree.
-- The controller (`core/controller.rs`) and the hotkey thread (`platform/windows/hotkey.rs`),
-  which resolve the language inline where they compose hotkey status text rather than carrying
-  one of their own — there is no per-thread state for it to live in.
-- `OsdRenderState.lang` in `platform/windows/osd.rs` has *no* assignment path at all: the
-  thread-local starts at `Default` and every update writes only the brightness fields, so the OSD
-  renders in the default language whatever the rest of the app does. Adding a language setting
-  has to give this field a writer, not just change an existing one.
+The "already running" box precedes config loading and uses the OS language directly; a fixed choice that differs from the OS does not reach that one box, by design, because a second instance must not read a file the first may be saving.
 
-All of these change together.
+**Hotkey display text.** `ParsedHotkey::display_text` renders the settings capture fields (whose window text stays the wire string) and the tray usage rows. Modifiers and the named keys (`Up`, `PageUp`, `Home`, `Delete`, …) come from the table; function keys, `Plus`, `Minus`, letters and digits keep their wire name. German follows the wording Windows uses in accelerator labels and on the German key cap (`Strg+Umschalt+Nach-Oben`). A hand-edited `ctrl+shift+up` therefore displays as `Ctrl+Shift+Up` in English; the stored text is untouched.
+
+**Adding a language.** Add the `Lang` variant, its `tag()` (lowercase, generic), its `native_name()`, and a `const` table; the compiler lists every field until the table is complete, and `Lang::ALL` puts it in the picker. Nothing else changes.
 
 ---
 
@@ -2035,5 +2027,15 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - Autostart registry entry appears/disappears
 - Logging restart hint
 - Both footer links
+
+#### Language Switching Test
+
+- On a German Windows with no `language` in the config: first start shows the German tray tooltip/menu, settings window, and OSD error row (unplug a monitor's DDC or set an impossible value to provoke one).
+- Settings → Language: pick "English": every label, the title, both pickers and both hotkey fields relabel without the window moving; pick "Systemstandard" again: back to German; pick "Deutsch" on a German OS: nothing relabels, `config.json` still gains `"language": "de"`.
+- With the window open in German, hover the tray icon: tooltip German; open the menu: German rows with `Strg+Umschalt+Nach-Oben`.
+- Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
+- Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
+- Hand-edit `"language": "fr"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
+- Note which German labels truncate; that list is the input for the layout-hardening cycle.
 
 ---

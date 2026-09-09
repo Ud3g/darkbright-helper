@@ -33,6 +33,7 @@ use crate::error::{BrightnessError, Result};
 pub(super) const ID_AUTOSTART: u16 = 100;
 pub(super) const ID_STEP_EDIT: u16 = 101;
 pub(super) const ID_STEP_UPDOWN: u16 = 102;
+pub(super) const ID_LANGUAGE: u16 = 103;
 
 pub(super) const ID_HK_UP: u16 = 110;
 pub(super) const ID_HK_DOWN: u16 = 111;
@@ -79,6 +80,7 @@ const ID_SEP_ADVANCED: u16 = 215;
 const ID_LABEL_RESYNC_UNIT: u16 = 216;
 const ID_LABEL_INACT_UNIT: u16 = 217;
 const ID_LABEL_LOG_LEVEL: u16 = 218;
+const ID_LABEL_LANGUAGE: u16 = 219;
 
 /// Whether `id` is one of the four bold section-header labels, which need
 /// `build_font`'s bold variant rather than the regular one every other
@@ -128,6 +130,7 @@ const STYLE_EDIT_NUM_GROUP: u32 = STYLE_EDIT_NUM | WS_GROUP.0;
 const STYLE_CAPTURE: u32 = WS_BORDER.0 | WS_TABSTOP.0;
 const STYLE_CAPTURE_GROUP: u32 = STYLE_CAPTURE | WS_GROUP.0;
 const STYLE_COMBO: u32 = CBS_DROPDOWNLIST | CBS_HASSTRINGS | WS_TABSTOP.0;
+const STYLE_COMBO_GROUP: u32 = STYLE_COMBO | WS_GROUP.0;
 const STYLE_LINK: u32 = WS_TABSTOP.0;
 const STYLE_LINK_GROUP: u32 = STYLE_LINK | WS_GROUP.0;
 const STYLE_PUSHBUTTON: u32 = BS_PUSHBUTTON | WS_TABSTOP.0;
@@ -159,7 +162,7 @@ pub(super) struct ControlSpec {
 
 /// Base window client size at 96 DPI (100% scaling); see [`scale_dimension`].
 const BASE_WINDOW_WIDTH: i32 = 400;
-const BASE_WINDOW_HEIGHT: i32 = 624;
+const BASE_WINDOW_HEIGHT: i32 = 654;
 
 /// Every control in the settings window, at 96-DPI-baseline coordinates, in
 /// visual and creation order. See the module doc comment for why group
@@ -187,11 +190,35 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         text: None,
     },
     ControlSpec {
+        id: ID_LABEL_LANGUAGE,
+        class: "STATIC",
+        style: STYLE_LABEL,
+        x: 24,
+        y: 44,
+        w: 220,
+        h: 20,
+        text: Some(TextKey::LabelLanguage),
+    },
+    // 120 wide, unlike the log-level combo's 76: the English entry "System
+    // default" plus the 17px dropdown arrow does not fit 76 at this font.
+    // The two combos in this column therefore end at different x positions;
+    // aligning the column properly is layout work for the next cycle.
+    ControlSpec {
+        id: ID_LANGUAGE,
+        class: "COMBOBOX",
+        style: STYLE_COMBO_GROUP,
+        x: 250,
+        y: 42,
+        w: 120,
+        h: 120,
+        text: None,
+    },
+    ControlSpec {
         id: ID_AUTOSTART,
         class: "BUTTON",
-        style: STYLE_CHECKBOX_GROUP,
+        style: STYLE_CHECKBOX,
         x: 24,
-        y: 42,
+        y: 72,
         w: 300,
         h: 20,
         text: Some(TextKey::Autostart),
@@ -201,7 +228,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 24,
-        y: 72,
+        y: 102,
         w: 220,
         h: 20,
         text: Some(TextKey::LabelStep),
@@ -211,7 +238,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "EDIT",
         style: STYLE_EDIT_NUM,
         x: 250,
-        y: 70,
+        y: 100,
         w: 60,
         h: 22,
         text: None,
@@ -221,7 +248,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
         x: 310,
-        y: 70,
+        y: 100,
         w: 16,
         h: 22,
         text: None,
@@ -231,7 +258,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 332,
-        y: 72,
+        y: 102,
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentStep),
@@ -242,7 +269,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 12,
-        y: 108,
+        y: 138,
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderHotkeys),
@@ -252,7 +279,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_SEP,
         x: 12,
-        y: 128,
+        y: 158,
         w: 376,
         h: 2,
         text: None,
@@ -262,7 +289,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 24,
-        y: 140,
+        y: 170,
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyUp),
@@ -272,7 +299,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "HOTKEY_CAPTURE",
         style: STYLE_CAPTURE_GROUP,
         x: 170,
-        y: 138,
+        y: 168,
         w: 218,
         h: 22,
         text: None,
@@ -282,7 +309,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 24,
-        y: 170,
+        y: 200,
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyDown),
@@ -292,7 +319,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "HOTKEY_CAPTURE",
         style: STYLE_CAPTURE,
         x: 170,
-        y: 168,
+        y: 198,
         w: 218,
         h: 22,
         text: None,
@@ -302,7 +329,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "BUTTON",
         style: STYLE_CHECKBOX,
         x: 24,
-        y: 198,
+        y: 228,
         w: 340,
         h: 20,
         text: Some(TextKey::Intercept),
@@ -313,7 +340,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 36,
-        y: 222,
+        y: 252,
         w: 328,
         h: 34,
         text: Some(TextKey::HintIntercept),
@@ -326,7 +353,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 24,
-        y: 262,
+        y: 292,
         w: 340,
         h: 16,
         text: None,
@@ -337,7 +364,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 12,
-        y: 294,
+        y: 324,
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderOsd),
@@ -347,7 +374,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_SEP,
         x: 12,
-        y: 314,
+        y: 344,
         w: 376,
         h: 2,
         text: None,
@@ -357,7 +384,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 24,
-        y: 326,
+        y: 356,
         w: 140,
         h: 20,
         text: Some(TextKey::LabelTimeout),
@@ -367,7 +394,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "EDIT",
         style: STYLE_EDIT_NUM_GROUP,
         x: 250,
-        y: 324,
+        y: 354,
         w: 60,
         h: 22,
         text: None,
@@ -377,7 +404,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
         x: 310,
-        y: 324,
+        y: 354,
         w: 16,
         h: 22,
         text: None,
@@ -387,7 +414,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 332,
-        y: 326,
+        y: 356,
         w: 30,
         h: 20,
         text: Some(TextKey::UnitMilliseconds),
@@ -397,7 +424,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 24,
-        y: 356,
+        y: 386,
         w: 140,
         h: 20,
         text: Some(TextKey::LabelOpacity),
@@ -407,7 +434,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "EDIT",
         style: STYLE_EDIT_NUM,
         x: 250,
-        y: 354,
+        y: 384,
         w: 60,
         h: 22,
         text: None,
@@ -417,7 +444,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
         x: 310,
-        y: 354,
+        y: 384,
         w: 16,
         h: 22,
         text: None,
@@ -427,7 +454,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 332,
-        y: 356,
+        y: 386,
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentOpacity),
@@ -438,7 +465,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 12,
-        y: 392,
+        y: 422,
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderAdvanced),
@@ -448,7 +475,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_SEP,
         x: 12,
-        y: 412,
+        y: 442,
         w: 376,
         h: 2,
         text: None,
@@ -458,7 +485,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "BUTTON",
         style: STYLE_CHECKBOX_GROUP,
         x: 24,
-        y: 422,
+        y: 452,
         w: 220,
         h: 20,
         text: Some(TextKey::ResyncCheck),
@@ -468,7 +495,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "EDIT",
         style: STYLE_EDIT_NUM,
         x: 250,
-        y: 420,
+        y: 450,
         w: 60,
         h: 22,
         text: None,
@@ -478,7 +505,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
         x: 310,
-        y: 420,
+        y: 450,
         w: 16,
         h: 22,
         text: None,
@@ -488,7 +515,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 332,
-        y: 422,
+        y: 452,
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsResync),
@@ -498,7 +525,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "BUTTON",
         style: STYLE_CHECKBOX,
         x: 24,
-        y: 452,
+        y: 482,
         w: 220,
         h: 20,
         text: Some(TextKey::InactivityCheck),
@@ -508,7 +535,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "EDIT",
         style: STYLE_EDIT_NUM,
         x: 250,
-        y: 450,
+        y: 480,
         w: 60,
         h: 22,
         text: None,
@@ -518,7 +545,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "msctls_updown32",
         style: STYLE_UPDOWN,
         x: 310,
-        y: 450,
+        y: 480,
         w: 16,
         h: 22,
         text: None,
@@ -528,7 +555,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 332,
-        y: 452,
+        y: 482,
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsInactivity),
@@ -538,7 +565,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "BUTTON",
         style: STYLE_CHECKBOX,
         x: 24,
-        y: 482,
+        y: 512,
         w: 140,
         h: 20,
         text: Some(TextKey::LogCheck),
@@ -548,16 +575,16 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     // textbook DT_VCENTER arithmetic would put "Level:" a few pixels below
     // "Write log file", but that model does not match what actually
     // renders. Measured on hardware at 125% DPI (comparing capital-letter
-    // tops, since both strings start with one): at y:482 the two already
+    // tops, since both strings start with one): at y:512 the two already
     // read as aligned (647 vs 648 physical px, 1px); an earlier attempt to
-    // "correct" this to y:485 using the centering model instead put them
+    // "correct" this to y:515 using the centering model instead put them
     // 5px apart (647 vs 652). Left at the measured-aligned value.
     ControlSpec {
         id: ID_LABEL_LOG_LEVEL,
         class: "STATIC",
         style: STYLE_LABEL,
         x: 170,
-        y: 482,
+        y: 512,
         w: 74,
         h: 20,
         text: Some(TextKey::LabelLogLevel),
@@ -575,7 +602,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "COMBOBOX",
         style: STYLE_COMBO,
         x: 250,
-        y: 480,
+        y: 510,
         w: 76,
         h: 120,
         text: None,
@@ -585,7 +612,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 36,
-        y: 506,
+        y: 536,
         w: 340,
         h: 32,
         text: Some(TextKey::HintLogging),
@@ -602,7 +629,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "SysLink",
         style: STYLE_LINK_GROUP,
         x: 12,
-        y: 554,
+        y: 584,
         w: 250,
         h: 20,
         text: Some(TextKey::FooterLinks),
@@ -612,7 +639,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "BUTTON",
         style: STYLE_PUSHBUTTON_GROUP,
         x: 190,
-        y: 586,
+        y: 616,
         w: 110,
         h: 26,
         text: Some(TextKey::ButtonRestoreDefaults),
@@ -622,7 +649,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "BUTTON",
         style: STYLE_DEFPUSHBUTTON,
         x: 308,
-        y: 586,
+        y: 616,
         w: 80,
         h: 26,
         text: Some(TextKey::ButtonClose),
@@ -640,7 +667,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         class: "STATIC",
         style: STYLE_LABEL,
         x: 12,
-        y: 590,
+        y: 620,
         w: 172,
         h: 18,
         text: None,
@@ -804,10 +831,10 @@ pub(super) fn configure_updowns(hwnd: HWND) {
     );
 }
 
-/// Matches the log-level combo's closed (undropped) face height to the
-/// numeric edit rows' 22-logical-px height. Left alone, the combo's
-/// system-default closed face is 1-2px taller than an edit at the same
-/// font, a visible seam in that row.
+/// Matches one dropdown's closed (undropped) face height to the numeric
+/// edit rows' 22-logical-px height. Left alone, a combo's system-default
+/// closed face is 1-2px taller than an edit at the same font, a visible
+/// seam in that row.
 ///
 /// `CB_SETITEMHEIGHT`'s index `-1` sets the closed-selection field only —
 /// the dropdown *list* row height (index `0`) is untouched, so the entries
@@ -833,9 +860,9 @@ pub(super) fn configure_updowns(hwnd: HWND) {
 /// face did not move, consistent with that floor being hit; the mechanism
 /// is kept regardless — it still narrows or removes the seam at other
 /// DPI/font combinations, and does no harm where it clamps.
-pub(super) fn configure_combo_height(hwnd: HWND) {
+fn configure_one_combo_height(hwnd: HWND, combo_id: u16) {
     let (Ok(combo), Ok(edit)) = (
-        unsafe { GetDlgItem(Some(hwnd), i32::from(ID_LOG_LEVEL)) },
+        unsafe { GetDlgItem(Some(hwnd), i32::from(combo_id)) },
         unsafe { GetDlgItem(Some(hwnd), i32::from(ID_STEP_EDIT)) },
     ) else {
         return;
@@ -878,8 +905,9 @@ pub(super) fn configure_combo_height(hwnd: HWND) {
     // a silent clamp, which the readback below catches instead.
     if set_result == -1 {
         log::debug!(
+            combo_id,
             requested_item_height = item_height;
-            "CB_SETITEMHEIGHT rejected the log-level combo's closed-face height request"
+            "CB_SETITEMHEIGHT rejected the combo's closed-face height request"
         );
         return;
     }
@@ -891,14 +919,22 @@ pub(super) fn configure_combo_height(hwnd: HWND) {
         .is_ok()
         .then(|| after_rect.bottom - after_rect.top);
     log::debug!(
+        combo_id,
         default_item_height,
         default_closed_height,
         target_height,
         requested_item_height = item_height,
         applied_item_height,
         applied_closed_height:? = applied_closed_height;
-        "Log-level combo closed-face height applied"
+        "Combo closed-face height applied"
     );
+}
+
+/// Both dropdowns: see [`configure_one_combo_height`].
+pub(super) fn configure_combo_height(hwnd: HWND) {
+    for id in [ID_LANGUAGE, ID_LOG_LEVEL] {
+        configure_one_combo_height(hwnd, id);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1154,6 +1190,7 @@ mod tests {
     fn every_brief_mandated_id_is_present_in_the_table() {
         let ids: std::collections::HashSet<u16> = CONTROLS.iter().map(|c| c.id).collect();
         for id in [
+            ID_LANGUAGE,
             ID_AUTOSTART,
             ID_STEP_EDIT,
             ID_STEP_UPDOWN,
@@ -1203,6 +1240,122 @@ mod tests {
                 spec.y >= 0 && spec.y + spec.h <= BASE_WINDOW_HEIGHT,
                 "{spec:?} exceeds window height"
             );
+        }
+    }
+
+    #[test]
+    fn the_language_row_leads_the_general_section_and_shifts_the_rest_by_one_row() {
+        let spec = |id: u16| {
+            CONTROLS
+                .iter()
+                .find(|c| c.id == id)
+                .expect("control exists")
+        };
+        let language = spec(ID_LANGUAGE);
+        assert_eq!((language.x, language.y, language.w), (250, 42, 120));
+        assert_eq!(language.class, "COMBOBOX");
+        assert!(
+            language.style & WS_GROUP.0 != 0,
+            "first tab stop of the section"
+        );
+        assert_eq!(spec(ID_AUTOSTART).y, 72);
+        assert_eq!(spec(ID_AUTOSTART).style & WS_GROUP.0, 0);
+        assert_eq!(spec(ID_STEP_EDIT).y, 100);
+        assert_eq!(spec(ID_LOG_LEVEL).y, 510);
+        assert_eq!(spec(ID_CLOSE).y, 616);
+        assert_eq!(BASE_WINDOW_HEIGHT, 654);
+    }
+
+    /// Strips `SysLink`'s `<a>`/`</a>` anchor markup: it is the control's own
+    /// hyperlink syntax, never text the control draws, so measuring it as
+    /// visible width would overstate what the user actually sees.
+    fn strip_syslink_markup(text: &str) -> String {
+        text.replace("<a>", "").replace("</a>", "")
+    }
+
+    /// Prints every label whose text, measured at 96 DPI in the window's
+    /// own fonts, is wider than its control. Ignored because German is
+    /// known to overflow today; the hardening cycle turns this into a gate.
+    /// Run: `cargo test --locked report_label_overflow -- --ignored --nocapture`
+    #[test]
+    #[ignore = "diagnostic: prints the overflow record for the layout-hardening cycle"]
+    fn report_label_overflow() {
+        use super::super::window::{build_font, wide};
+        use crate::core::i18n::{Lang, strings};
+        use windows::Win32::Graphics::Gdi::{
+            DT_CALCRECT, DT_SINGLELINE, DT_WORDBREAK, DeleteObject, DrawTextW, GetDC, ReleaseDC,
+            SelectObject,
+        };
+        use windows::Win32::Graphics::Gdi::{FW_BOLD, FW_NORMAL};
+
+        let dpi = 96;
+        let regular = build_font(dpi, FW_NORMAL);
+        let bold = build_font(dpi, FW_BOLD);
+        let hdc = unsafe { GetDC(None) };
+        assert!(!hdc.is_invalid(), "no screen DC");
+
+        let hints = [ID_HK_HINT, ID_LOG_HINT];
+        println!("| lang | id | text | available | measured | overflow |");
+        println!("|---|---|---|---|---|---|");
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for spec in CONTROLS {
+                let Some(key) = spec.text else { continue };
+                let raw_text = s.get(key);
+                let text = if spec.class == "SysLink" {
+                    strip_syslink_markup(raw_text)
+                } else {
+                    raw_text.to_string()
+                };
+                let font = if is_section_header(spec.id) {
+                    bold
+                } else {
+                    regular
+                };
+                let mut buf = wide(&text);
+                let is_hint = hints.contains(&spec.id);
+                let mut rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: if is_hint { spec.w } else { 0 },
+                    bottom: 0,
+                };
+                let flags = if is_hint {
+                    DT_CALCRECT | DT_WORDBREAK
+                } else {
+                    DT_CALCRECT | DT_SINGLELINE
+                };
+                // SAFETY: `hdc` is a valid screen DC obtained above and released
+                // below; `font` is one of the two GDI fonts built above and
+                // still owned at this point; `buf` outlives the call and
+                // DrawTextW only reads the number of code units its own length
+                // reports.
+                unsafe {
+                    let old = SelectObject(hdc, font.into());
+                    DrawTextW(hdc, &mut buf, &raw mut rect, flags);
+                    SelectObject(hdc, old);
+                }
+                let (available, measured) = if is_hint {
+                    (spec.h, rect.bottom - rect.top)
+                } else {
+                    (spec.w, rect.right - rect.left)
+                };
+                if measured > available {
+                    println!(
+                        "| {} | {} | {text} | {available} | {measured} | +{} |",
+                        lang.tag(),
+                        spec.id,
+                        measured - available
+                    );
+                }
+            }
+        }
+        // SAFETY: releases the DC obtained via GetDC above and frees the two
+        // fonts built above; each is dropped exactly once, after its last use.
+        unsafe {
+            ReleaseDC(None, hdc);
+            let _ = DeleteObject(regular.into());
+            let _ = DeleteObject(bold.into());
         }
     }
 

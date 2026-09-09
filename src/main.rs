@@ -25,7 +25,7 @@ use windows::core::BOOL;
 
 use darkbright_helper::core::config::{Config, ConfigLoad, ConfigLoadOutcome, ConfigNotice};
 use darkbright_helper::core::controller::Controller;
-use darkbright_helper::core::i18n::{Lang, strings};
+use darkbright_helper::core::i18n::{Lang, LanguageSource, strings};
 use darkbright_helper::core::logfile::{LOG_FILE_NAME, LOG_MAX_BYTES, RotatingFileWriter};
 use darkbright_helper::core::panic_hook;
 use darkbright_helper::core::reconcile::{
@@ -42,7 +42,7 @@ use darkbright_helper::platform::windows::overlay::OverlayManager;
 use darkbright_helper::platform::windows::single_instance::{self, InstanceLock, SingleInstance};
 use darkbright_helper::platform::windows::{
     DdcSupervisor, PowerEventListener, SettingsSinkImpl, TrayIcon, TrayStatusHandle,
-    WindowsConfigStore,
+    WindowsConfigStore, WindowsLanguageSource,
 };
 use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
 use darkbright_helper::{BrightnessError, Result};
@@ -429,14 +429,16 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// * `tx` - Channel sender to notify the main thread of tray events.
 /// * `status_tx` - Hands the tray's status handle back to the main thread so
 ///   it can push degraded-state icon/tooltip updates.
+/// * `lang` - Initial UI language for the tooltip and menu text.
 fn spawn_tray_thread(
     tx: mpsc::Sender<BrightnessMessage>,
     status_tx: mpsc::Sender<TrayStatusHandle>,
+    lang: Lang,
 ) {
     let spawned = std::thread::Builder::new()
         .name("tray".to_string())
         .spawn(move || {
-            match TrayIcon::new(tx) {
+            match TrayIcon::new(tx, lang) {
                 Ok(tray) => {
                     log::info!("System tray icon created");
                     if let Err(e) = status_tx.send(tray.status_handle()) {
@@ -550,7 +552,11 @@ fn main() {
     // record panics through the logger before the default handler runs.
     panic_hook::install();
 
-    let s = strings(Lang::default());
+    // Read before the guard: the "already running" box below needs a
+    // language and must not read the config file, which the first
+    // instance may be saving. A kernel32 query with no side effects.
+    let os_languages = WindowsLanguageSource.preferred_languages();
+    let os_lang = Lang::from_preferences(&os_languages);
 
     // Enforce a single instance per logon session before spawning any worker,
     // window, or hotkey. A second launch informs the user and exits, so it
@@ -563,7 +569,7 @@ fn main() {
             Ok(InstanceLock::Acquired(guard)) => (Some(guard), None),
             Ok(InstanceLock::AlreadyRunning) => {
                 log::info!("Another instance is already running; exiting");
-                show_info_message_box("darkbright-helper", s.msgbox_already_running);
+                show_info_message_box("darkbright-helper", strings(os_lang).msgbox_already_running);
                 return;
             }
             Err(e) => (None, Some(e)),
@@ -574,6 +580,9 @@ fn main() {
         source,
         notices,
     } = load_config();
+
+    let lang = config.language_setting().resolve(&os_languages);
+    let s = strings(lang);
 
     // Attach the opt-in rolling file log now that the config is known. The
     // outcome outlives this block: a failure can only be reported once the
@@ -597,6 +606,7 @@ fn main() {
     if let Some(e) = &guard_failure {
         log::error!(error:% = e; "Single-instance check failed; continuing without guard");
     }
+    log::info!(lang = lang.tag(), setting = config.language.as_str(); "UI language resolved");
     report_config_load(&source, &notices);
 
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
@@ -620,7 +630,7 @@ fn main() {
 
     // The OSD is built here so its failure can abort startup; the controller
     // only receives it.
-    let osd = match OsdWindow::new(config.osd.opacity, config.osd.timeout_ms) {
+    let osd = match OsdWindow::new(config.osd.opacity, config.osd.timeout_ms, lang) {
         Ok(osd) => osd,
         Err(e) => {
             log::error!(error:% = e; "Failed to create OSD window");
@@ -640,6 +650,7 @@ fn main() {
 
     let mut controller = Controller::new(
         config.clone(),
+        os_languages,
         osd,
         OverlayManager::default(),
         supervisor,
@@ -664,9 +675,10 @@ fn main() {
     // The tray hands back a status handle for pushing degraded-state icon and
     // tooltip updates.
     let (tray_status_tx, tray_status_rx) = mpsc::channel();
-    spawn_tray_thread(tx.clone(), tray_status_tx);
+    spawn_tray_thread(tx.clone(), tray_status_tx, lang);
     let mut tray_status: Option<TrayStatusHandle> = None;
     let mut last_warnings = HealthWarnings::default();
+    let mut last_lang = lang;
 
     *SHUTDOWN_SENDER
         .lock()
@@ -785,6 +797,20 @@ fn main() {
             if let Some(handle) = tray_status {
                 handle.notify(warnings);
             }
+        }
+
+        // The change is only recorded once it has actually been pushed, so a
+        // language set while the tray handle is still missing is delivered
+        // when the handle arrives. That cannot happen today — the tray is
+        // spawned with the startup language and only the settings window,
+        // which opens from the tray menu, can change it — but nothing here
+        // depends on that ordering holding.
+        let current_lang = controller.lang();
+        if current_lang != last_lang
+            && let Some(handle) = tray_status
+        {
+            last_lang = current_lang;
+            handle.set_language(current_lang);
         }
 
         // Bounded wait: this thread must service both the MPSC channel and

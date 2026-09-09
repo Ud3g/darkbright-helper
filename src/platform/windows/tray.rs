@@ -8,7 +8,7 @@
 //! The tray icon runs its own message loop on a dedicated thread and communicates
 //! with the main thread via `BrightnessMessage` channels.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
@@ -42,6 +42,7 @@ use crate::core::state::{
 use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
 
+use super::hotkey::parse_hotkey;
 use super::theme;
 use super::{SafeHwnd, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
 
@@ -59,6 +60,10 @@ const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 
 /// Custom message posted by the main thread when degraded-state warnings
 /// change; the payload is packed by [`warnings_to_bits`].
 const WM_TRAY_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 101;
+
+/// Custom message posted by the main thread when the UI language changes;
+/// `wparam` is the language's index in [`Lang::ALL`].
+const WM_TRAY_LANG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 102;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu Item IDs
@@ -203,9 +208,24 @@ fn warning_menu_lines(s: &Strings, warnings: HealthWarnings) -> Vec<&'static str
 fn usage_menu_lines(s: &Strings, hotkey_up: &str, hotkey_down: &str) -> [String; 3] {
     [
         s.tray_usage_heading.to_string(),
-        format!("{}\t{hotkey_up}", s.tray_usage_brighter),
-        format!("{}\t{hotkey_down}", s.tray_usage_dimmer),
+        format!(
+            "{}\t{}",
+            s.tray_usage_brighter,
+            hotkey_display(s, hotkey_up)
+        ),
+        format!(
+            "{}\t{}",
+            s.tray_usage_dimmer,
+            hotkey_display(s, hotkey_down)
+        ),
     ]
+}
+
+/// A stored hotkey string as the user should read it: parsed and rendered
+/// in `s`'s language, or the string itself if it does not parse (it came
+/// from the validated config, so it always should).
+fn hotkey_display(s: &Strings, wire: &str) -> String {
+    parse_hotkey(wire).map_or_else(|_| wire.to_string(), |parsed| parsed.display_text(s))
 }
 
 /// Whether the tray icon should carry the amber warning badge.
@@ -284,9 +304,8 @@ thread_local! {
     /// the usage rows when a menu open's `TrayMenuOpening` request times out.
     static LAST_HOTKEYS: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
 
-    /// UI language for the tooltip and menu text built on this thread, set
-    /// once by `TrayIcon::new`. A later cycle will drive this from config;
-    /// today it is always `Lang::English`.
+    /// UI language for the tooltip and menu text built on this thread, seeded
+    /// by `TrayIcon::new` and changed by `WM_TRAY_LANG`.
     static TRAY_LANG: RefCell<Lang> = const { RefCell::new(Lang::English) };
 }
 
@@ -473,6 +492,17 @@ struct StatusIcons {
 thread_local! {
     /// Icon pair for status updates; set once by `TrayIcon::new` (tray thread).
     static STATUS_ICONS: RefCell<Option<StatusIcons>> = const { RefCell::new(None) };
+
+    /// The warnings last applied to the icon and tooltip, so a language
+    /// change can rebuild the tooltip without asking the main thread.
+    static LAST_WARNINGS: Cell<HealthWarnings> = const {
+        Cell::new(HealthWarnings {
+            ddc: DdcHealth::Ok,
+            hotkeys_lost: false,
+            hotkeys_degraded: false,
+            file_log_failed: false,
+        })
+    };
 }
 
 /// RAII: memory DC with a 32-bit top-down DIB section selected into it.
@@ -605,7 +635,29 @@ fn create_warning_icon(base: HICON) -> Result<HICON> {
 /// the active warnings.
 fn handle_status_update(hwnd: HWND, wparam: WPARAM) {
     let warnings = warnings_from_bits(wparam.0);
+    LAST_WARNINGS.with(|w| w.set(warnings));
+    apply_status(hwnd, warnings);
+}
 
+/// Decodes a `WM_TRAY_LANG` payload; `None` for an index outside `Lang::ALL`.
+fn lang_from_wparam(wparam: WPARAM) -> Option<Lang> {
+    Lang::from_index(wparam.0)
+}
+
+/// Applies a posted language change: rebuilds the tooltip in the new
+/// language from the last warnings. The menu is built fresh on every open
+/// and needs nothing here.
+fn handle_language_update(hwnd: HWND, wparam: WPARAM) {
+    let Some(lang) = lang_from_wparam(wparam) else {
+        log::warn!(index = wparam.0; "Ignoring tray language update with an unknown index");
+        return;
+    };
+    set_tray_lang(lang);
+    apply_status(hwnd, LAST_WARNINGS.with(Cell::get));
+}
+
+/// Swaps the tray icon and tooltip to match the given warnings.
+fn apply_status(hwnd: HWND, warnings: HealthWarnings) {
     let Some(icons) = STATUS_ICONS.with(|s| *s.borrow()) else {
         return;
     };
@@ -1124,6 +1176,10 @@ unsafe extern "system" fn tray_wnd_proc(
                 handle_status_update(hwnd, wparam);
                 LRESULT(0)
             }
+            WM_TRAY_LANG => {
+                handle_language_update(hwnd, wparam);
+                LRESULT(0)
+            }
             WM_TIMER => {
                 if wparam.0 == MENU_REFRESH_TIMER_ID {
                     refresh_open_menu();
@@ -1191,6 +1247,7 @@ impl TrayIcon {
     /// # Arguments
     ///
     /// * `sender` - Channel to send messages to the main thread.
+    /// * `lang` - Initial UI language for the tooltip and menu text.
     ///
     /// # Errors
     ///
@@ -1198,7 +1255,7 @@ impl TrayIcon {
     /// - The message window cannot be created
     /// - The icon resource cannot be loaded
     /// - The tray icon cannot be registered with the shell
-    pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
+    pub fn new(sender: Sender<BrightnessMessage>, lang: Lang) -> Result<Self> {
         let class_name = ensure_tray_class_registered()?;
 
         // Before the first menu exists: without this the context menu is drawn
@@ -1241,7 +1298,7 @@ impl TrayIcon {
 
         // Store sender in thread-local storage for window procedure access
         set_tray_sender(sender);
-        set_tray_lang(Lang::English);
+        set_tray_lang(lang);
 
         let icon_handle = load_tray_icon()?;
 
@@ -1334,6 +1391,22 @@ impl TrayStatusHandle {
                 LPARAM(0),
             ) {
                 log::debug!(error:% = e; "Tray status post failed (tray window gone?)");
+            }
+        }
+    }
+
+    /// Posts a UI-language change to the tray thread (fire-and-forget).
+    pub fn set_language(self, lang: Lang) {
+        // SAFETY: as in `notify` — a cross-thread `PostMessageW` to a handle
+        // carried as `isize`; the payload is a plain index in `wparam`.
+        unsafe {
+            if let Err(e) = PostMessageW(
+                Some(hwnd_from_isize(self.0)),
+                WM_TRAY_LANG,
+                WPARAM(lang.index()),
+                LPARAM(0),
+            ) {
+                log::debug!(error:% = e; "Tray language post failed (tray window gone?)");
             }
         }
     }
@@ -1532,6 +1605,26 @@ mod tests {
         // Everything after the tab lands in the menu's shortcut column.
         assert_eq!(lines[1], "Brighter\tAlt+F1");
         assert_eq!(lines[2], "Dimmer\tAlt+F2");
+    }
+
+    #[test]
+    fn usage_lines_render_the_hotkeys_in_the_tables_language() {
+        use crate::core::i18n::GERMAN;
+        let lines = usage_menu_lines(&GERMAN, "Ctrl+Shift+Up", "Ctrl+Shift+Down");
+        assert_eq!(lines[1], "Heller\tStrg+Umschalt+Nach-Oben");
+        assert_eq!(lines[2], "Dunkler\tStrg+Umschalt+Nach-Unten");
+    }
+
+    #[test]
+    fn usage_lines_fall_back_to_the_raw_string_for_an_unparseable_hotkey() {
+        let lines = usage_menu_lines(&ENGLISH, "garbage", "Ctrl+Shift+Down");
+        assert_eq!(lines[1], "Brighter\tgarbage");
+    }
+
+    #[test]
+    fn a_language_index_outside_all_decodes_to_none() {
+        assert_eq!(lang_from_wparam(WPARAM(Lang::ALL.len())), None);
+        assert_eq!(lang_from_wparam(WPARAM(1)), Some(Lang::German));
     }
 
     #[test]

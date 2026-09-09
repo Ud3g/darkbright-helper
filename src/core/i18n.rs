@@ -14,35 +14,157 @@
 //! translated.
 
 /// A language the user interface can be displayed in.
-///
-/// Only English exists today. The enum is here so that consumers already take
-/// a language parameter and adding a second one touches no call site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lang {
     /// English, the fallback for every unmatched locale.
     #[default]
     English,
+    /// German.
+    German,
 }
 
 impl Lang {
     /// Every language the app can display, in the order the picker shows them.
-    ///
-    /// Only the tests in this module read it so far, so it is `pub` rather than
-    /// `pub(crate)`: it is the seam a language picker enumerates, and narrowing
-    /// it would leave only deleting an API that is meant to be kept.
-    pub const ALL: &'static [Lang] = &[Lang::English];
+    pub const ALL: &'static [Lang] = &[Lang::English, Lang::German];
 
-    /// The BCP-47 tag identifying this language, for locale matching and for
-    /// the value stored in the config file.
-    ///
-    /// `pub` for the same reason as [`Lang::ALL`]: locale detection and the
-    /// stored language value both need it, and neither exists yet.
+    /// The BCP-47 tag identifying this language: what `config.json` stores
+    /// for a fixed choice and what locale matching compares against. Always
+    /// lowercase and generic (`de`, never `de-DE`).
     #[must_use]
     pub fn tag(self) -> &'static str {
         match self {
             Lang::English => "en",
+            Lang::German => "de",
         }
     }
+
+    /// The language's name in itself, for the picker: a user who cannot read
+    /// the current UI language can still find their own.
+    #[must_use]
+    pub fn native_name(self) -> &'static str {
+        match self {
+            Lang::English => "English",
+            Lang::German => "Deutsch",
+        }
+    }
+
+    /// Position in [`Lang::ALL`]. Used to carry a language through a Win32
+    /// message `wparam` and as the picker's combo index.
+    ///
+    /// # Panics
+    ///
+    /// Never in practice: every `Lang` variant is listed in [`Lang::ALL`].
+    #[must_use]
+    pub fn index(self) -> usize {
+        Lang::ALL
+            .iter()
+            .position(|&l| l == self)
+            .expect("every Lang variant is listed in Lang::ALL")
+    }
+
+    /// Inverse of [`Lang::index`]; `None` for an index outside [`Lang::ALL`].
+    #[must_use]
+    pub fn from_index(index: usize) -> Option<Lang> {
+        Lang::ALL.get(index).copied()
+    }
+
+    /// RFC 4647 §3.4 lookup of one language tag against the shipped
+    /// languages: the whole tag first, then with subtags removed from the
+    /// right until something matches. After each removal a trailing
+    /// single-character subtag (an extension or private-use singleton) is
+    /// removed too. Case-insensitive. `None` when nothing matches.
+    #[must_use]
+    pub(crate) fn lookup(tag: &str) -> Option<Lang> {
+        let lowered = tag.to_ascii_lowercase();
+        let mut subtags: Vec<&str> = lowered.split('-').collect();
+        loop {
+            let candidate = subtags.join("-");
+            if let Some(&lang) = Lang::ALL.iter().find(|l| l.tag() == candidate) {
+                return Some(lang);
+            }
+            subtags.pop()?;
+            if subtags.last().is_some_and(|s| s.len() == 1) {
+                subtags.pop();
+            }
+            if subtags.is_empty() {
+                return None;
+            }
+        }
+    }
+
+    /// The first entry of an ordered preference list (most preferred first)
+    /// that `Lang::lookup` resolves, or English when none does. The
+    /// documented fallback: English is the table every other language is a
+    /// translation of, so it is the one language that always exists.
+    #[must_use]
+    pub fn from_preferences(preferred: &[String]) -> Lang {
+        preferred
+            .iter()
+            .find_map(|tag| Lang::lookup(tag))
+            .unwrap_or(Lang::English)
+    }
+}
+
+/// The `language` config value that means "follow the OS display language".
+pub(crate) const SYSTEM_LANGUAGE: &str = "system";
+
+/// The parsed `language` config value: follow the OS, or one fixed language.
+///
+/// Only the choice is stored, never the language it resolved to, so a config
+/// carried to another machine follows that machine's OS language.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LanguageSetting {
+    /// Follow the OS display language (`SYSTEM_LANGUAGE` in the file).
+    #[default]
+    System,
+    /// Always this language, whatever the OS says.
+    Fixed(Lang),
+}
+
+impl LanguageSetting {
+    /// Parses a config value. Accepts [`SYSTEM_LANGUAGE`] (any case) or any
+    /// tag [`Lang::lookup`] resolves; everything else, a well-formed but
+    /// unshipped tag included, is `None`, so the config loader reports it
+    /// like any other unparseable field.
+    #[must_use]
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        if value.eq_ignore_ascii_case(SYSTEM_LANGUAGE) {
+            return Some(Self::System);
+        }
+        Lang::lookup(value).map(Self::Fixed)
+    }
+
+    /// The value written to the config file: [`SYSTEM_LANGUAGE`] or the
+    /// language's tag. A value read as `de-AT` is written back as `de`.
+    #[must_use]
+    pub(crate) fn wire(self) -> &'static str {
+        match self {
+            Self::System => SYSTEM_LANGUAGE,
+            Self::Fixed(lang) => lang.tag(),
+        }
+    }
+
+    /// The language to display, given the OS preference list.
+    #[must_use]
+    pub fn resolve(self, preferred: &[String]) -> Lang {
+        match self {
+            Self::System => Lang::from_preferences(preferred),
+            Self::Fixed(lang) => lang,
+        }
+    }
+}
+
+/// Seam for the OS's ordered UI-language preference list.
+///
+/// Read once at startup: Windows applies a change of the display language to
+/// already-running processes only after a sign-out, so the list read at
+/// process start matches what the rest of the desktop shows for the process
+/// lifetime. The binary calls it and hands the list to the controller as
+/// data; nothing in `core/` holds the source itself.
+pub trait LanguageSource {
+    /// Language tags, most preferred first. Empty when the OS cannot say,
+    /// which resolves to English.
+    fn preferred_languages(&self) -> Vec<String>;
 }
 
 /// Every user-visible string, for one language.
@@ -110,9 +232,53 @@ pub struct Strings {
     /// Separator placed between modifiers and the key name.
     pub key_separator: &'static str,
 
+    // --- Key names ---
+    //
+    // Display names for the keys `VK_TO_NAME` in `platform/windows/hotkey.rs`
+    // can name, one field per key a translation may render differently.
+    // Function keys, `Plus`, `Minus`, letters and digits keep their wire
+    // name in every language and have no field. German follows the wording
+    // Windows itself uses in accelerator labels and on the German key cap
+    // (Pos1, Entf, Einfg, Bild auf, Rücktaste, Nach-Oben); a later language
+    // should follow its own platform convention the same way.
+    /// Display name of the Up arrow key.
+    pub key_up: &'static str,
+    /// Display name of the Down arrow key.
+    pub key_down: &'static str,
+    /// Display name of the Left arrow key.
+    pub key_left: &'static str,
+    /// Display name of the Right arrow key.
+    pub key_right: &'static str,
+    /// Display name of Page Up.
+    pub key_page_up: &'static str,
+    /// Display name of Page Down.
+    pub key_page_down: &'static str,
+    /// Display name of Home.
+    pub key_home: &'static str,
+    /// Display name of End.
+    pub key_end: &'static str,
+    /// Display name of Insert.
+    pub key_insert: &'static str,
+    /// Display name of Delete.
+    pub key_delete: &'static str,
+    /// Display name of the space bar.
+    pub key_space: &'static str,
+    /// Display name of Tab.
+    pub key_tab: &'static str,
+    /// Display name of Enter.
+    pub key_enter: &'static str,
+    /// Display name of Escape.
+    pub key_escape: &'static str,
+    /// Display name of Backspace.
+    pub key_backspace: &'static str,
+
     // --- Settings window ---
     /// Section header above the general settings.
     pub header_general: &'static str,
+    /// Label before the language picker.
+    pub label_language: &'static str,
+    /// First entry of the language picker: follow the OS display language.
+    pub language_system_default: &'static str,
     /// Checkbox enabling the Windows startup entry.
     pub autostart: &'static str,
     /// Label for the per-keypress brightness step.
@@ -259,6 +425,8 @@ pub struct Strings {
 pub(crate) enum TextKey {
     /// Section header above the general settings.
     HeaderGeneral,
+    /// Label before the language picker.
+    LabelLanguage,
     /// Checkbox enabling the Windows startup entry.
     Autostart,
     /// Label for the per-keypress brightness step.
@@ -319,6 +487,7 @@ impl Strings {
     pub(crate) fn get(&self, key: TextKey) -> &'static str {
         match key {
             TextKey::HeaderGeneral => self.header_general,
+            TextKey::LabelLanguage => self.label_language,
             TextKey::Autostart => self.autostart,
             TextKey::LabelStep => self.label_step,
             TextKey::UnitPercentStep => self.unit_percent_step,
@@ -376,7 +545,25 @@ pub(crate) const ENGLISH: Strings = Strings {
     key_mod_win: "Win",
     key_separator: "+",
 
+    key_up: "Up",
+    key_down: "Down",
+    key_left: "Left",
+    key_right: "Right",
+    key_page_up: "PageUp",
+    key_page_down: "PageDown",
+    key_home: "Home",
+    key_end: "End",
+    key_insert: "Insert",
+    key_delete: "Delete",
+    key_space: "Space",
+    key_tab: "Tab",
+    key_enter: "Enter",
+    key_escape: "Escape",
+    key_backspace: "Backspace",
+
     header_general: "General",
+    label_language: "Language",
+    language_system_default: "System default",
     autostart: "Start with Windows",
     label_step: "Brightness step per keypress",
     unit_percent_step: "%",
@@ -433,17 +620,137 @@ pub(crate) const ENGLISH: Strings = Strings {
     msgbox_config_file_fallback: "config file",
 };
 
+/// The German strings.
+pub(crate) const GERMAN: Strings = Strings {
+    osd_ddc_error: "DDC-Fehler - Anpassung fehlgeschlagen",
+
+    tray_tip_ddc_unavailable: "DDC nicht verfügbar",
+    tray_tip_monitor_unresponsive: "Monitor antwortet nicht",
+    tray_tip_hotkeys_stopped: "Hotkeys gestoppt",
+    tray_tip_hotkey_change_failed: "Hotkey-Änderung fehlgeschlagen",
+    tray_tip_file_logging_off: "Dateiprotokoll aus",
+
+    tray_warn_ddc_unavailable: "⚠ DDC nicht verfügbar — Helligkeits-Hotkey drücken, um es erneut zu versuchen",
+    tray_warn_monitor_unresponsive: "⚠ Monitor antwortet nicht — App neu starten, falls das anhält",
+    tray_warn_hotkeys_stopped: "⚠ Hotkeys funktionieren nicht mehr — App neu starten",
+    tray_warn_hotkey_change_failed: "⚠ Hotkey-Änderung fehlgeschlagen — andere Kombination versuchen",
+    tray_warn_file_logging_failed: "⚠ Dateiprotokoll konnte nicht gestartet werden — prüfen, ob der Protokollordner beschreibbar ist",
+
+    tray_usage_heading: "Maus auf einen Monitor zeigen, dann:",
+    tray_usage_brighter: "Heller",
+    tray_usage_dimmer: "Dunkler",
+    tray_menu_settings: "Einstellungen",
+    tray_menu_open_log_folder: "Protokollordner öffnen",
+    tray_menu_quit_fmt: "{name} beenden",
+
+    key_mod_ctrl: "Strg",
+    key_mod_alt: "Alt",
+    key_mod_shift: "Umschalt",
+    key_mod_win: "Win",
+    key_separator: "+",
+
+    key_up: "Nach-Oben",
+    key_down: "Nach-Unten",
+    key_left: "Nach-Links",
+    key_right: "Nach-Rechts",
+    key_page_up: "Bild auf",
+    key_page_down: "Bild ab",
+    key_home: "Pos1",
+    key_end: "Ende",
+    key_insert: "Einfg",
+    key_delete: "Entf",
+    key_space: "Leertaste",
+    key_tab: "Tab",
+    key_enter: "Eingabe",
+    key_escape: "Esc",
+    key_backspace: "Rücktaste",
+
+    header_general: "Allgemein",
+    label_language: "Sprache",
+    language_system_default: "Systemstandard",
+    autostart: "Mit Windows starten",
+    label_step: "Helligkeitsschritt pro Tastendruck",
+    unit_percent_step: "%",
+    header_hotkeys: "Hotkeys",
+    label_hotkey_up: "Helligkeit erhöhen",
+    label_hotkey_down: "Helligkeit verringern",
+    intercept: "Versuchen, dedizierte Helligkeitstasten abzufangen",
+    hint_intercept: "(funktioniert nicht mit allen Tastaturen; manche Antivirenprogramme melden Low-Level-Hooks)",
+    header_osd: "Bildschirmanzeige",
+    label_timeout: "Anzeigedauer",
+    unit_milliseconds: "ms",
+    label_opacity: "Deckkraft",
+    unit_percent_opacity: "%",
+    header_advanced: "Erweitert",
+    resync_check: "Helligkeit abgleichen alle",
+    unit_seconds_resync: "s",
+    inactivity_check: "Abgleich nach Inaktivität von",
+    unit_seconds_inactivity: "s",
+    log_check: "Protokolldatei schreiben",
+    label_log_level: "Stufe:",
+    log_level_error: "error (Fehler)",
+    log_level_warn: "warn (Warnung)",
+    log_level_info: "info (Info)",
+    log_level_debug: "debug (Debug)",
+    log_level_trace: "trace (Ablaufverfolgung)",
+    hint_logging: "(Protokolländerungen gelten nach dem Neustart; debug und darunter protokollieren Monitor-Seriennummern und Pfade)",
+    footer_links: "<a>Konfigurationsdatei öffnen</a> \u{b7} <a>Protokollordner öffnen</a>",
+    button_restore_defaults: "Standardwerte wiederherstellen",
+    button_close: "Schließen",
+    window_title: "darkbright-helper Einstellungen",
+
+    capture_prompt: "Tastenkombination drücken… (Esc zum Abbrechen)",
+    capture_reject_no_modifier: "Strg, Alt oder Win hinzufügen (Umschalt allein reicht nicht)",
+    capture_reject_unnameable_key: "Diese Taste kann nicht als Hotkey verwendet werden",
+    capture_reject_duplicate: "Bereits dem anderen Helligkeits-Hotkey zugewiesen",
+
+    hotkey_status_unreachable: "Hotkey-Thread nicht erreichbar",
+    hotkey_status_no_response: "Hotkey-Thread hat nicht geantwortet",
+    hotkey_status_unknown_error: "unbekannter Fehler",
+    hotkey_status_restore_also_failed_fmt: "{error}; Wiederherstellen ebenfalls fehlgeschlagen: {restore_error}",
+    hotkey_notice_interception_unavailable: "Abfangen der Helligkeitstasten nicht verfügbar; einfache Tastenregistrierung wird verwendet",
+
+    msgbox_already_running: "darkbright-helper läuft bereits.",
+    msgbox_title_startup_error: "Startfehler",
+    msgbox_title_hotkey_error: "Hotkey-Fehler",
+    msgbox_title_autostart: "Autostart",
+    msgbox_title_restore_defaults: "Standardwerte wiederherstellen",
+    msgbox_startup_failed_lead: "darkbright-helper konnte nicht gestartet werden:",
+    msgbox_thread_spawn_advice: "Das System hat keinen Thread gestartet, was meist bedeutet, dass die Ressourcen knapp sind. Einige Anwendungen schließen oder den Computer neu starten und es erneut versuchen.",
+    msgbox_hotkey_failed_lead: "Hotkeys konnten nicht registriert werden:",
+    msgbox_hotkey_advice_fmt: "Mögliche Lösungen:\n• Andere Anwendungen schließen, die diese Hotkeys verwenden könnten\n• Die Hotkey-Konfiguration ändern in:\n  {path}\n• Die Anwendung nach der Änderung neu starten",
+    msgbox_autostart_failed_fmt: "Der Windows-Autostarteintrag konnte nicht aktualisiert werden:\n{error}",
+    msgbox_restore_defaults_question: "Alle Einstellungen auf die Standardwerte zurücksetzen? Hotkeys werden sofort übernommen.",
+    msgbox_config_file_fallback: "Konfigurationsdatei",
+};
+
 /// The string table for `lang`.
 #[must_use]
 pub fn strings(lang: Lang) -> &'static Strings {
     match lang {
         Lang::English => &ENGLISH,
+        Lang::German => &GERMAN,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ENGLISH, Lang, Strings, TextKey, strings};
+    use super::{ENGLISH, Lang, LanguageSetting, SYSTEM_LANGUAGE, Strings, TextKey, strings};
+
+    /// `Lang::index` panics on a variant missing from [`Lang::ALL`], and it
+    /// runs on the tray and settings language-push paths, so the list has to
+    /// stay complete. The `match` names every variant with no wildcard arm, so
+    /// a new one fails to compile here until it is added to both.
+    #[test]
+    fn every_language_variant_appears_in_all() {
+        for lang in [Lang::English, Lang::German] {
+            let listed = match lang {
+                Lang::English => Lang::ALL.contains(&Lang::English),
+                Lang::German => Lang::ALL.contains(&Lang::German),
+            };
+            assert!(listed, "{lang:?} is missing from Lang::ALL");
+        }
+    }
 
     #[test]
     fn every_language_tag_is_unique_and_lowercase() {
@@ -473,7 +780,10 @@ mod tests {
             tray_warn_hotkey_change_failed, tray_warn_file_logging_failed, tray_usage_heading,
             tray_usage_brighter, tray_usage_dimmer, tray_menu_settings, tray_menu_open_log_folder,
             tray_menu_quit_fmt, key_mod_ctrl, key_mod_alt, key_mod_shift, key_mod_win,
-            key_separator, header_general, autostart, label_step, unit_percent_step, header_hotkeys,
+            key_separator, key_up, key_down, key_left, key_right, key_page_up, key_page_down,
+            key_home, key_end, key_insert, key_delete, key_space, key_tab, key_enter, key_escape,
+            key_backspace, header_general, label_language, language_system_default, autostart,
+            label_step, unit_percent_step, header_hotkeys,
             label_hotkey_up, label_hotkey_down, intercept, hint_intercept, header_osd,
             label_timeout, unit_milliseconds, label_opacity, unit_percent_opacity, header_advanced,
             resync_check, unit_seconds_resync, inactivity_check, unit_seconds_inactivity, log_check,
@@ -507,7 +817,14 @@ mod tests {
             ("tray_menu_quit_fmt", tray_menu_quit_fmt), ("key_mod_ctrl", key_mod_ctrl),
             ("key_mod_alt", key_mod_alt), ("key_mod_shift", key_mod_shift),
             ("key_mod_win", key_mod_win), ("key_separator", key_separator),
-            ("header_general", header_general), ("autostart", autostart),
+            ("key_up", key_up), ("key_down", key_down), ("key_left", key_left),
+            ("key_right", key_right), ("key_page_up", key_page_up), ("key_page_down", key_page_down),
+            ("key_home", key_home), ("key_end", key_end), ("key_insert", key_insert),
+            ("key_delete", key_delete), ("key_space", key_space), ("key_tab", key_tab),
+            ("key_enter", key_enter), ("key_escape", key_escape), ("key_backspace", key_backspace),
+            ("header_general", header_general), ("label_language", label_language),
+            ("language_system_default", language_system_default),
+            ("autostart", autostart),
             ("label_step", label_step), ("unit_percent_step", unit_percent_step),
             ("header_hotkeys", header_hotkeys), ("label_hotkey_up", label_hotkey_up),
             ("label_hotkey_down", label_hotkey_down), ("intercept", intercept),
@@ -574,6 +891,7 @@ mod tests {
     fn every_key_resolves_to_a_non_empty_string_in_every_language() {
         const KEYS: &[TextKey] = &[
             TextKey::HeaderGeneral,
+            TextKey::LabelLanguage,
             TextKey::Autostart,
             TextKey::LabelStep,
             TextKey::UnitPercentStep,
@@ -608,6 +926,31 @@ mod tests {
     }
 
     #[test]
+    fn english_key_names_equal_the_wire_names() {
+        // In English the display name of every named key is its wire name,
+        // which is what keeps `english_display_text_matches_the_stored_format`
+        // in hotkey.rs true after key names are routed through this table.
+        let s = strings(Lang::English);
+        assert_eq!(s.key_up, "Up");
+        assert_eq!(s.key_down, "Down");
+        assert_eq!(s.key_left, "Left");
+        assert_eq!(s.key_right, "Right");
+        assert_eq!(s.key_page_up, "PageUp");
+        assert_eq!(s.key_page_down, "PageDown");
+        assert_eq!(s.key_home, "Home");
+        assert_eq!(s.key_end, "End");
+        assert_eq!(s.key_insert, "Insert");
+        assert_eq!(s.key_delete, "Delete");
+        assert_eq!(s.key_space, "Space");
+        assert_eq!(s.key_tab, "Tab");
+        assert_eq!(s.key_enter, "Enter");
+        assert_eq!(s.key_escape, "Escape");
+        assert_eq!(s.key_backspace, "Backspace");
+        assert_eq!(s.label_language, "Language");
+        assert_eq!(s.language_system_default, "System default");
+    }
+
+    #[test]
     fn the_footer_link_row_keeps_both_link_spans() {
         for &lang in Lang::ALL {
             let text = strings(lang).get(TextKey::FooterLinks);
@@ -638,6 +981,178 @@ mod tests {
             let text = strings(lang).hotkey_status_restore_also_failed_fmt;
             assert!(text.contains("{error}"), "{lang:?}");
             assert!(text.contains("{restore_error}"), "{lang:?}");
+        }
+    }
+
+    #[test]
+    fn german_exists_with_its_tag_and_native_name() {
+        assert_eq!(Lang::German.tag(), "de");
+        assert_eq!(Lang::German.native_name(), "Deutsch");
+        assert_eq!(Lang::English.native_name(), "English");
+        assert_eq!(Lang::ALL, &[Lang::English, Lang::German]);
+        assert_eq!(strings(Lang::German).button_close, "Schließen");
+    }
+
+    #[test]
+    fn native_names_are_non_empty_and_unique() {
+        let mut seen = Vec::new();
+        for lang in Lang::ALL {
+            let name = lang.native_name();
+            assert!(!name.is_empty(), "{lang:?} has an empty native name");
+            assert!(!seen.contains(&name), "duplicate native name {name}");
+            seen.push(name);
+        }
+    }
+
+    #[test]
+    fn index_round_trips_through_all() {
+        for (i, &lang) in Lang::ALL.iter().enumerate() {
+            assert_eq!(lang.index(), i);
+            assert_eq!(Lang::from_index(i), Some(lang));
+        }
+        assert_eq!(Lang::from_index(Lang::ALL.len()), None);
+    }
+
+    #[test]
+    fn every_format_field_keeps_the_english_placeholders() {
+        // Each `_fmt` field and the placeholders it must carry. A translation
+        // that drops or misspells one would leave `{path}` literal on screen.
+        type FormatCase = (
+            &'static str,
+            fn(&Strings) -> &'static str,
+            &'static [&'static str],
+        );
+        let formats: &[FormatCase] = &[
+            ("tray_menu_quit_fmt", |s| s.tray_menu_quit_fmt, &["{name}"]),
+            (
+                "hotkey_status_restore_also_failed_fmt",
+                |s| s.hotkey_status_restore_also_failed_fmt,
+                &["{error}", "{restore_error}"],
+            ),
+            (
+                "msgbox_hotkey_advice_fmt",
+                |s| s.msgbox_hotkey_advice_fmt,
+                &["{path}"],
+            ),
+            (
+                "msgbox_autostart_failed_fmt",
+                |s| s.msgbox_autostart_failed_fmt,
+                &["{error}"],
+            ),
+        ];
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for (name, get, placeholders) in formats {
+                for placeholder in *placeholders {
+                    assert!(
+                        get(s).contains(placeholder),
+                        "{lang:?}: {name} lost {placeholder}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn lookup_matches_whole_tags_case_insensitively() {
+        assert_eq!(Lang::lookup("de"), Some(Lang::German));
+        assert_eq!(Lang::lookup("DE"), Some(Lang::German));
+        assert_eq!(Lang::lookup("en"), Some(Lang::English));
+        assert_eq!(Lang::lookup("fr"), None);
+        assert_eq!(Lang::lookup(""), None);
+    }
+
+    #[test]
+    fn lookup_truncates_subtags_from_the_right() {
+        assert_eq!(Lang::lookup("de-AT"), Some(Lang::German));
+        assert_eq!(Lang::lookup("de-AT-1901"), Some(Lang::German));
+        assert_eq!(Lang::lookup("en-GB"), Some(Lang::English));
+        assert_eq!(Lang::lookup("fr-CA"), None);
+    }
+
+    #[test]
+    fn lookup_drops_a_singleton_left_trailing_by_truncation() {
+        // RFC 4647 §3.4: after removing the last subtag, a now-trailing
+        // single-character subtag (an extension or private-use singleton)
+        // is removed as well before the next comparison.
+        assert_eq!(Lang::lookup("de-x-foo"), Some(Lang::German));
+        assert_eq!(Lang::lookup("x-private"), None);
+    }
+
+    #[test]
+    fn from_preferences_takes_the_first_shipped_language() {
+        let prefs = |tags: &[&str]| tags.iter().map(|t| (*t).to_string()).collect::<Vec<_>>();
+        assert_eq!(Lang::from_preferences(&prefs(&["fr", "de"])), Lang::German);
+        assert_eq!(
+            Lang::from_preferences(&prefs(&["de-CH", "en"])),
+            Lang::German
+        );
+        assert_eq!(Lang::from_preferences(&prefs(&["fr"])), Lang::English);
+        assert_eq!(Lang::from_preferences(&[]), Lang::English);
+    }
+
+    #[test]
+    fn language_setting_parses_system_and_shipped_tags_only() {
+        assert_eq!(
+            LanguageSetting::parse("system"),
+            Some(LanguageSetting::System)
+        );
+        assert_eq!(
+            LanguageSetting::parse("SYSTEM"),
+            Some(LanguageSetting::System)
+        );
+        assert_eq!(
+            LanguageSetting::parse("de"),
+            Some(LanguageSetting::Fixed(Lang::German))
+        );
+        assert_eq!(
+            LanguageSetting::parse("de-CH"),
+            Some(LanguageSetting::Fixed(Lang::German))
+        );
+        assert_eq!(LanguageSetting::parse("fr"), None);
+        assert_eq!(LanguageSetting::parse("Deutsch"), None);
+        assert_eq!(LanguageSetting::parse("de_DE"), None);
+        assert_eq!(LanguageSetting::parse(""), None);
+    }
+
+    #[test]
+    fn language_setting_wire_round_trips() {
+        assert_eq!(LanguageSetting::System.wire(), SYSTEM_LANGUAGE);
+        assert_eq!(LanguageSetting::Fixed(Lang::German).wire(), "de");
+        for &lang in Lang::ALL {
+            let setting = LanguageSetting::Fixed(lang);
+            assert_eq!(LanguageSetting::parse(setting.wire()), Some(setting));
+        }
+        assert_eq!(LanguageSetting::default(), LanguageSetting::System);
+    }
+
+    #[test]
+    fn language_setting_resolves_system_through_the_preferences() {
+        let de = vec!["de-DE".to_string()];
+        assert_eq!(LanguageSetting::System.resolve(&de), Lang::German);
+        assert_eq!(
+            LanguageSetting::Fixed(Lang::English).resolve(&de),
+            Lang::English
+        );
+        assert_eq!(LanguageSetting::System.resolve(&[]), Lang::English);
+    }
+
+    #[test]
+    fn log_level_entries_lead_with_the_stored_token_in_every_language() {
+        for &lang in Lang::ALL {
+            let s = strings(lang);
+            for (token, shown) in [
+                ("error", s.log_level_error),
+                ("warn", s.log_level_warn),
+                ("info", s.log_level_info),
+                ("debug", s.log_level_debug),
+                ("trace", s.log_level_trace),
+            ] {
+                assert!(
+                    shown.starts_with(token),
+                    "{lang:?}: log level entry {shown:?} must start with the stored token {token}"
+                );
+            }
         }
     }
 }

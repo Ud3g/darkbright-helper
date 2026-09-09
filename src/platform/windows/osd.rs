@@ -163,11 +163,7 @@ pub(super) struct OsdRenderState {
     /// Whether an error occurred.
     pub(super) is_error: bool,
     /// Language the error row (and any future OSD text) is rendered in.
-    ///
-    /// Nothing assigns it: the state starts at [`Default`] and every update
-    /// writes only the fields above, so the OSD always renders in the default
-    /// language. Adding a language setting has to give this field an
-    /// assignment path — there is no `set_*` to find, unlike the tray's.
+    /// Written by [`OsdWindow::set_language`], seeded by [`OsdWindow::new`].
     pub(super) lang: Lang,
 }
 
@@ -515,13 +511,15 @@ impl OsdWindow {
     ///
     /// * `opacity` - Window opacity from 0.0 to 1.0.
     /// * `timeout_ms` - Auto-hide timeout in milliseconds.
+    /// * `lang` - Language the error row is rendered in until `set_language` changes it.
     ///
     /// # Errors
     ///
     /// Returns an error if window creation or opacity setting fails.
-    pub fn new(opacity: f32, timeout_ms: u32) -> Result<Self> {
+    pub fn new(opacity: f32, timeout_ms: u32, lang: Lang) -> Result<Self> {
         let hwnd = create_osd_window()?;
         set_osd_opacity(hwnd.as_raw(), opacity)?;
+        OSD_STATE.with(|s| s.borrow_mut().lang = lang);
 
         Ok(Self { hwnd, timeout_ms })
     }
@@ -644,6 +642,15 @@ impl OsdWindow {
             log::warn!(error:% = e; "Failed to apply OSD opacity from settings dialog");
         }
     }
+
+    /// Writes the language the OSD renders text in; the next paint uses it.
+    // The render state lives in this thread's thread-local, not in the struct,
+    // but the call still needs the window's thread affinity, so it stays a
+    // method rather than a free function.
+    #[expect(clippy::unused_self)]
+    pub(crate) fn set_language(&mut self, lang: Lang) {
+        OSD_STATE.with(|s| s.borrow_mut().lang = lang);
+    }
 }
 
 impl crate::core::controller::OsdSink for OsdWindow {
@@ -665,5 +672,8 @@ impl crate::core::controller::OsdSink for OsdWindow {
     }
     fn set_appearance(&mut self, opacity: f32, timeout_ms: u32) {
         OsdWindow::set_appearance(self, opacity, timeout_ms);
+    }
+    fn set_language(&mut self, lang: Lang) {
+        OsdWindow::set_language(self, lang);
     }
 }

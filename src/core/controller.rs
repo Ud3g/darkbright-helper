@@ -70,6 +70,10 @@ pub trait OsdSink {
     /// platform failure here is a preview glitch, not an adjustment failure,
     /// so it is logged rather than propagated.
     fn set_appearance(&mut self, opacity: f32, timeout_ms: u32);
+
+    /// Switches the language any text the OSD draws is rendered in. Takes
+    /// effect on the next paint; a visible OSD is not repainted for it.
+    fn set_language(&mut self, lang: Lang);
 }
 
 /// Seam for the per-monitor dimming overlay manager.
@@ -140,6 +144,10 @@ pub trait SettingsSink {
 
     /// Re-assert `HWND_TOPMOST` (the overlay re-asserts on every update).
     fn assert_topmost(&mut self);
+
+    /// Relabels every control, the title and both pickers in `lang`. Sent
+    /// only when the resolved language actually changed.
+    fn set_language(&mut self, lang: Lang);
 }
 
 /// Seam for the hotkey thread's in-place operations (rebind/suspend/resume).
@@ -216,6 +224,15 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     osd: Osd,
     /// Loaded configuration.
     config: Config,
+    /// The OS's ordered UI-language preference list, read once at startup;
+    /// what a `"system"` language choice resolves through.
+    os_languages: Vec<String>,
+    /// The language every user-visible string is currently rendered in.
+    /// Owned here, like every other piece of runtime state, and pushed to
+    /// the OSD and settings seams when it changes; the tray learns it from
+    /// the binary's loop, which diffs [`Controller::lang`] the way it diffs
+    /// the health warnings.
+    lang: Lang,
     /// Cache mapping platform handles to monitor ids (avoids repeated EDID reads).
     ///
     /// The only handle→identity mapping in the app: resolving one costs a
@@ -293,6 +310,7 @@ where
     #[must_use]
     pub fn new(
         config: Config,
+        os_languages: Vec<String>,
         osd: Osd,
         overlay: Ovl,
         ddc: Ddc,
@@ -302,11 +320,14 @@ where
         store: Store,
         now: Instant,
     ) -> Self {
+        let lang = config.language_setting().resolve(&os_languages);
         Self {
             states: HashMap::new(),
             overlay,
             osd,
             config,
+            os_languages,
+            lang,
             id_cache: HashMap::new(),
             ddc,
             locator,
@@ -363,6 +384,27 @@ where
             hotkeys_degraded: self.hotkeys_degraded,
             file_log_failed: self.file_log_failed,
         }
+    }
+
+    /// The language the UI is rendered in right now.
+    #[must_use]
+    pub fn lang(&self) -> Lang {
+        self.lang
+    }
+
+    /// Re-resolves the language from the config and pushes it to the OSD and
+    /// settings window if it changed. A change of the stored choice that
+    /// resolves to the same language pushes nothing: nothing on screen
+    /// would change.
+    fn apply_language(&mut self) {
+        let lang = self.config.language_setting().resolve(&self.os_languages);
+        if lang == self.lang {
+            return;
+        }
+        log::info!(from = self.lang.tag(), to = lang.tag(); "UI language changed");
+        self.lang = lang;
+        self.osd.set_language(lang);
+        self.settings.set_language(lang);
     }
 
     /// Requests a refresh of monitor list and brightness values.
@@ -435,6 +477,8 @@ where
             intercept_brightness_keys: self.config.hotkeys.intercept_brightness_keys,
             file_log_enabled: self.config.logging.file_enabled,
             file_log_level: self.config.logging.file_level.clone(),
+            language: self.config.language_setting(),
+            lang: self.lang,
         }
     }
 
@@ -500,6 +544,11 @@ where
             SettingChange::FileLogLevel(level) => {
                 self.config.logging.file_level = level;
                 self.dirty.log_level = true;
+            }
+            SettingChange::Language(setting) => {
+                self.config.language = setting.wire().to_string();
+                self.dirty.language = true;
+                self.apply_language();
             }
             SettingChange::RestoreDefaults => {
                 self.handle_restore_defaults(now);
@@ -588,13 +637,9 @@ where
             // sitting in the same fields (clearing them here would silently
             // drop that earlier change instead of saving it).
             self.hotkeys_degraded = true;
-            // Status text reaches the settings window, so it comes from the
-            // string table. The language is resolved on the spot rather than
-            // held on the controller: nothing can select anything but English
-            // yet, and a field would only have to be threaded through until it
-            // can.
+            // Status text reaches the settings window, so it comes from the table.
             self.settings
-                .hotkey_error(strings(Lang::English).hotkey_status_unreachable);
+                .hotkey_error(strings(self.lang).hotkey_status_unreachable);
             let snapshot = self.settings_snapshot();
             self.settings.refresh(&snapshot);
         }
@@ -612,7 +657,7 @@ where
             self.pending_hotkey_op = None;
             self.hotkeys_degraded = true;
             self.settings
-                .hotkey_error(strings(Lang::English).hotkey_status_unreachable);
+                .hotkey_error(strings(self.lang).hotkey_status_unreachable);
         }
     }
 
@@ -627,7 +672,7 @@ where
             self.pending_hotkey_op = None;
             self.hotkeys_degraded = true;
             self.settings
-                .hotkey_error(strings(Lang::English).hotkey_status_unreachable);
+                .hotkey_error(strings(self.lang).hotkey_status_unreachable);
         }
     }
 
@@ -665,6 +710,7 @@ where
         success: bool,
         fallback_active: bool,
         error: Option<String>,
+        restore_error: Option<String>,
         now: Instant,
     ) {
         match self.pending_hotkey_op {
@@ -692,20 +738,20 @@ where
             self.hotkeys_degraded = false;
             if fallback_active {
                 self.settings
-                    .hotkey_notice(strings(Lang::English).hotkey_notice_interception_unavailable);
+                    .hotkey_notice(strings(self.lang).hotkey_notice_interception_unavailable);
             }
             return;
         }
 
-        self.fail_hotkey_op(
-            op,
-            &error.unwrap_or_else(|| {
-                strings(Lang::English)
-                    .hotkey_status_unknown_error
-                    .to_string()
-            }),
-            now,
-        );
+        let message = match (error, restore_error) {
+            (Some(error), Some(restore_error)) => strings(self.lang)
+                .hotkey_status_restore_also_failed_fmt
+                .replace("{error}", &error)
+                .replace("{restore_error}", &restore_error),
+            (Some(error), None) => error,
+            (None, _) => strings(self.lang).hotkey_status_unknown_error.to_string(),
+        };
+        self.fail_hotkey_op(op, &message, now);
     }
 
     /// Reverts a failed rebind's config change (if one is pending), marks the
@@ -755,7 +801,7 @@ where
         )
     }
 
-    /// Resets the ten settings-dialog fields to their defaults and schedules
+    /// Resets the eleven settings-dialog fields to their defaults and schedules
     /// a save; also refreshes the open dialog so it shows the reset values.
     ///
     /// Rebinds the live hotkey thread too, but only when the reset actually
@@ -780,11 +826,13 @@ where
             intercept: true,
             log_enabled: true,
             log_level: true,
+            language: true,
         };
         self.pending_save_since = Some(now);
 
         let snapshot = self.settings_snapshot();
         self.settings.refresh(&snapshot);
+        self.apply_language();
 
         let hotkeys_changed = up_before != self.config.hotkeys.brightness_up
             || down_before != self.config.hotkeys.brightness_down
@@ -1416,7 +1464,7 @@ where
         {
             log::error!(op:? = op; "Hotkey thread did not respond to posted operation");
             self.pending_hotkey_op = None;
-            self.fail_hotkey_op(op, strings(Lang::English).hotkey_status_no_response, now);
+            self.fail_hotkey_op(op, strings(self.lang).hotkey_status_no_response, now);
         }
     }
 
@@ -1491,8 +1539,16 @@ where
                 success,
                 fallback_active,
                 error,
+                restore_error,
             } => {
-                self.handle_hotkey_rebind_result(op, success, fallback_active, error, now);
+                self.handle_hotkey_rebind_result(
+                    op,
+                    success,
+                    fallback_active,
+                    error,
+                    restore_error,
+                    now,
+                );
             }
             BrightnessMessage::HotkeyCaptureStarted => {
                 self.capture_active = true;

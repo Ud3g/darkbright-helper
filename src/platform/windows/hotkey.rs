@@ -37,7 +37,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::w;
 
 use crate::core::controller::HotkeyPort;
-use crate::core::i18n::{Lang, Strings, strings};
+use crate::core::i18n::Strings;
 use crate::core::state::{BrightnessMessage, HotkeyOp};
 use crate::error::{BrightnessError, Result};
 use crate::platform::windows::last_error_as_brightness_error;
@@ -408,6 +408,24 @@ impl HotkeyManager {
         })
     }
 
+    /// A manager with no window and nothing registered, for tests that only
+    /// exercise message construction (e.g. [`Self::send_ack`]). Safe despite
+    /// the invalid `hwnd` because `Drop` already tolerates one:
+    /// `unregister_all` runs over an empty `registered_ids`, and
+    /// `DestroyWindow` is skipped when `hwnd.is_invalid()`.
+    #[cfg(test)]
+    fn for_test(sender: Sender<BrightnessMessage>) -> Self {
+        Self {
+            hwnd: HWND::default(),
+            registered_ids: Vec::new(),
+            sender,
+            keyboard_hook: None,
+            current_up: None,
+            current_down: None,
+            current_intercept: false,
+        }
+    }
+
     /// Registers a global hotkey.
     ///
     /// # Arguments
@@ -613,12 +631,20 @@ impl HotkeyManager {
     /// Sends the ack the controller's [`crate::core::controller::HotkeyPort`]
     /// side waits for. Errors (channel closed) are dropped: if the main
     /// thread is gone there is nothing left to notify.
-    fn send_ack(&self, op: HotkeyOp, success: bool, fallback_active: bool, error: Option<String>) {
+    fn send_ack(
+        &self,
+        op: HotkeyOp,
+        success: bool,
+        fallback_active: bool,
+        error: Option<String>,
+        restore_error: Option<String>,
+    ) {
         let _ = self.sender.send(BrightnessMessage::HotkeyRebindResult {
             op,
             success,
             fallback_active,
             error,
+            restore_error,
         });
     }
 
@@ -640,39 +666,36 @@ impl HotkeyManager {
                 match parsed {
                     Ok((up, down)) => match self.apply_bindings(up, down, intercept) {
                         Ok(fallback_active) => {
-                            self.send_ack(HotkeyOp::Rebind, true, fallback_active, None);
+                            self.send_ack(HotkeyOp::Rebind, true, fallback_active, None, None);
                         }
                         Err(e) => {
-                            // This reaches the settings window's status
-                            // line, so its wording comes from the string
-                            // table; the two error details it joins are
-                            // `BrightnessError` `Display` output and stay
-                            // English.
-                            let message = match self.restore_previous_bindings() {
-                                Some(restore_err) => strings(Lang::English)
-                                    .hotkey_status_restore_also_failed_fmt
-                                    .replace("{error}", &e.to_string())
-                                    .replace("{restore_error}", &restore_err),
-                                None => e.to_string(),
-                            };
-                            self.send_ack(HotkeyOp::Rebind, false, false, Some(message));
+                            // Both details go up raw: the sentence that joins
+                            // them is the controller's, in its language.
+                            let restore_error = self.restore_previous_bindings();
+                            self.send_ack(
+                                HotkeyOp::Rebind,
+                                false,
+                                false,
+                                Some(e.to_string()),
+                                restore_error,
+                            );
                         }
                     },
                     Err(e) => {
-                        self.send_ack(HotkeyOp::Rebind, false, false, Some(e.to_string()));
+                        self.send_ack(HotkeyOp::Rebind, false, false, Some(e.to_string()), None);
                     }
                 }
             }
             HotkeyThreadCommand::Suspend => {
                 self.suspend_all();
-                self.send_ack(HotkeyOp::Suspend, true, false, None);
+                self.send_ack(HotkeyOp::Suspend, true, false, None, None);
             }
             HotkeyThreadCommand::Resume => match self.resume() {
                 Ok(fallback_active) => {
-                    self.send_ack(HotkeyOp::Resume, true, fallback_active, None);
+                    self.send_ack(HotkeyOp::Resume, true, fallback_active, None, None);
                 }
                 Err(e) => {
-                    self.send_ack(HotkeyOp::Resume, false, false, Some(e.to_string()));
+                    self.send_ack(HotkeyOp::Resume, false, false, Some(e.to_string()), None);
                 }
             },
         }
@@ -780,12 +803,11 @@ impl ParsedHotkey {
     /// The hotkey as a user should read it, in `s`'s language.
     ///
     /// Identical to the [`Display`](std::fmt::Display) output in English; a
-    /// translation changes only what is shown, never what is stored. Key names
-    /// themselves are not translated — they name physical keycaps.
-    ///
-    /// Only tests call it so far, so it is `pub` rather than `pub(crate)`: it is
-    /// the seam a translated UI renders through, and wiring it today would
-    /// re-render a hand-edited `"ctrl+shift+up"` as `"Ctrl+Shift+Up"` on screen.
+    /// translation changes only what is shown, never what is stored. This is
+    /// the seam the settings window's capture fields and the tray's usage
+    /// rows render through: a named key (arrows, `PageUp`, `Space`, …) comes
+    /// from `s` via [`key_display_name`], while function keys, `Plus`,
+    /// `Minus`, letters and digits keep their wire name in every language.
     ///
     /// The `"Unknown"` key fallback stays English and out of [`Strings`]: it is
     /// unreachable for any hotkey [`parse_hotkey`] produced — parsing rejects a
@@ -808,10 +830,12 @@ impl ParsedHotkey {
             parts.push(s.key_mod_win);
         }
 
-        let key_name = VK_TO_NAME
-            .iter()
-            .find(|(_, vk)| *vk == self.vk_code)
-            .map_or("Unknown", |(name, _)| name.as_str());
+        let key_name = key_display_name(self.vk_code, s).unwrap_or_else(|| {
+            VK_TO_NAME
+                .iter()
+                .find(|(_, vk)| *vk == self.vk_code)
+                .map_or("Unknown", |(name, _)| name.as_str())
+        });
 
         parts.push(key_name);
         parts.join(s.key_separator)
@@ -1299,6 +1323,30 @@ pub(crate) fn key_name(vk: VIRTUAL_KEY) -> Option<String> {
         .map(|(name, _)| name.clone())
 }
 
+/// The display name of `vk` in `s`'s language for keys a translation may
+/// render differently; `None` for every other key (function keys, `Plus`,
+/// `Minus`, letters, digits), whose wire name is the display name.
+fn key_display_name(vk: VIRTUAL_KEY, s: &Strings) -> Option<&'static str> {
+    Some(match vk {
+        VK_UP => s.key_up,
+        VK_DOWN => s.key_down,
+        VK_LEFT => s.key_left,
+        VK_RIGHT => s.key_right,
+        VK_PRIOR => s.key_page_up,
+        VK_NEXT => s.key_page_down,
+        VK_HOME => s.key_home,
+        VK_END => s.key_end,
+        VK_INSERT => s.key_insert,
+        VK_DELETE => s.key_delete,
+        VK_SPACE => s.key_space,
+        VK_TAB => s.key_tab,
+        VK_RETURN => s.key_enter,
+        VK_ESCAPE => s.key_escape,
+        VK_BACK => s.key_backspace,
+        _ => return None,
+    })
+}
+
 /// Formats `modifiers` and `vk` as a `"Ctrl+Shift+Up"`-style string, in the
 /// same human-readable format `config.json` already stores hotkeys in.
 ///
@@ -1730,5 +1778,54 @@ mod tests {
         assert!(port.resume().is_err());
         assert_eq!(port.next_seq, 2, "every post consumes one sequence number");
         assert!(queue.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn german_display_text_translates_modifiers_and_named_keys() {
+        use crate::core::i18n::GERMAN;
+        let cases = [
+            ("Ctrl+Shift+Up", "Strg+Umschalt+Nach-Oben"),
+            ("Ctrl+Shift+Down", "Strg+Umschalt+Nach-Unten"),
+            ("Alt+PageUp", "Alt+Bild auf"),
+            ("Win+Home", "Win+Pos1"),
+            ("Ctrl+Delete", "Strg+Entf"),
+            ("Ctrl+Backspace", "Strg+Rücktaste"),
+            ("Ctrl+Space", "Strg+Leertaste"),
+            ("Ctrl+F5", "Strg+F5"),
+            ("Ctrl+Plus", "Strg+Plus"),
+            ("Ctrl+A", "Strg+A"),
+            ("Ctrl+7", "Strg+7"),
+        ];
+        for (wire, german) in cases {
+            let parsed = parse_hotkey(wire).expect("fixture must parse");
+            assert_eq!(parsed.display_text(&GERMAN), german, "{wire}");
+            assert_eq!(parsed.to_string(), wire, "the wire format never changes");
+        }
+    }
+
+    #[test]
+    fn a_failed_rebind_reports_the_restore_error_separately() {
+        // The thread hands both raw errors to the controller instead of
+        // composing a sentence: the sentence's language lives there.
+        let (tx, rx) = std::sync::mpsc::channel();
+        let hotkeys = HotkeyManager::for_test(tx);
+        hotkeys.send_ack(
+            HotkeyOp::Rebind,
+            false,
+            false,
+            Some("boom".to_string()),
+            Some("worse".to_string()),
+        );
+        match rx.try_recv().expect("an ack was sent") {
+            BrightnessMessage::HotkeyRebindResult {
+                error,
+                restore_error,
+                ..
+            } => {
+                assert_eq!(error.as_deref(), Some("boom"));
+                assert_eq!(restore_error.as_deref(), Some("worse"));
+            }
+            other => panic!("unexpected message {other:?}"),
+        }
     }
 }

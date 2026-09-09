@@ -114,7 +114,9 @@ Two things the settings window cannot show you:
 
 Valid ranges and defaults for every field are tabulated in
 [`docs/architecture.md`](docs/architecture.md) §4. An out-of-range value is logged as an
-error and replaced with the default — a bad config never stops the app from starting.
+error and replaced with the default — a bad config never stops the app from starting. The
+interface follows the Windows display language (English and German today) and can be pinned
+to one language in Settings; the `language` field holds that choice.
 
 ## Logging
 

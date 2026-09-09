@@ -28,7 +28,7 @@ use windows::core::PCWSTR;
 use crate::core::i18n::Strings;
 use crate::core::state::{BrightnessMessage, SettingChange};
 
-use super::super::hotkey::{bindings_conflict, hotkey_string};
+use super::super::hotkey::{bindings_conflict, hotkey_string, parse_hotkey};
 use super::dark;
 use super::layout::{ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP};
 use super::window::{
@@ -49,7 +49,9 @@ use super::window::{
 // the stored "current binding" string: `apply_snapshot`'s existing
 // `set_text(state.hwnd, ID_HK_UP, &snap.hotkey_up)` needs no change to
 // populate this control, and [`paint_capture`] reads it back for the idle
-// display. `capture_wnd_proc`'s `WM_SETTEXT` arm invalidates after
+// display and renders it through `display_text`, so the stored text stays
+// the wire format while the display follows the UI language.
+// `capture_wnd_proc`'s `WM_SETTEXT` arm invalidates after
 // `DefWindowProcW` stores the new text — the one place this control leans
 // on a native control's behaviour it does not get for free: a real `EDIT`
 // repaints itself on `WM_SETTEXT`; a bare `DefWindowProcW` does not.
@@ -280,10 +282,11 @@ fn preview_text(modifiers: HOT_KEY_MODIFIERS, s: &Strings) -> String {
     }
 }
 
-/// What [`paint_capture`] draws: `idle_text` unchanged while idle, otherwise
-/// the live preview or, before any modifier is held, [`Strings::capture_prompt`].
-/// Pure and unit-tested without a live window — `idle_text` stands in for
-/// `window_text(hwnd)`.
+/// What [`paint_capture`] draws: while idle, `idle_text` is the stored wire
+/// string, rendered in `s`'s language; shown as-is only if it does not parse.
+/// While capturing, the live preview or, before any modifier is held,
+/// [`Strings::capture_prompt`]. Pure and unit-tested without a live
+/// window — `idle_text` stands in for `window_text(hwnd)`.
 #[must_use]
 fn capture_display_text(
     capturing: bool,
@@ -292,7 +295,8 @@ fn capture_display_text(
     s: &Strings,
 ) -> String {
     if !capturing {
-        return idle_text.to_string();
+        return parse_hotkey(idle_text)
+            .map_or_else(|_| idle_text.to_string(), |parsed| parsed.display_text(s));
     }
     let preview = preview_text(modifiers, s);
     if preview.is_empty() {
@@ -854,6 +858,28 @@ mod tests {
         assert_eq!(
             capture_display_text(false, MOD_CONTROL, "Ctrl+Shift+Up", &ENGLISH),
             "Ctrl+Shift+Up"
+        );
+    }
+
+    #[test]
+    fn capture_display_text_renders_the_idle_wire_string_in_the_tables_language() {
+        use crate::core::i18n::GERMAN;
+        assert_eq!(
+            capture_display_text(false, HOT_KEY_MODIFIERS(0), "Ctrl+Shift+Up", &GERMAN),
+            "Strg+Umschalt+Nach-Oben"
+        );
+        assert_eq!(
+            capture_display_text(false, HOT_KEY_MODIFIERS(0), "ctrl+shift+up", &ENGLISH),
+            "Ctrl+Shift+Up",
+            "a hand-edited spelling is shown canonical, the stored text is untouched"
+        );
+    }
+
+    #[test]
+    fn capture_display_text_falls_back_to_the_raw_idle_text_when_it_does_not_parse() {
+        assert_eq!(
+            capture_display_text(false, HOT_KEY_MODIFIERS(0), "garbage", &ENGLISH),
+            "garbage"
         );
     }
 

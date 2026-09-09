@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
+use crate::core::i18n::{Lang, LanguageSetting};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Monitor Identification
 // ─────────────────────────────────────────────────────────────────────────────
@@ -405,6 +407,8 @@ pub enum SettingChange {
     FileLogEnabled(bool),
     /// New file log level filter (e.g. "info", "debug").
     FileLogLevel(String),
+    /// New UI language choice.
+    Language(LanguageSetting),
     /// Reset all settings-dialog fields to their defaults.
     RestoreDefaults,
 }
@@ -444,6 +448,11 @@ pub struct SettingsSnapshot {
     pub file_log_enabled: bool,
     /// File log level filter.
     pub file_log_level: String,
+    /// The stored language choice, which the picker displays.
+    pub language: LanguageSetting,
+    /// The language the window resolves every label in. Comes from the
+    /// controller so the window can never disagree with it.
+    pub lang: Lang,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -795,6 +804,10 @@ pub enum BrightnessMessage {
         fallback_active: bool,
         /// Error message when `success` is `false`.
         error: Option<String>,
+        /// When a failed rebind's attempt to put the previous bindings back
+        /// failed too, that second error. Raw `BrightnessError` text; the
+        /// controller composes the user-facing line from both.
+        restore_error: Option<String>,
     },
     /// The settings window was destroyed (flush pending save; end capture).
     SettingsClosed,
