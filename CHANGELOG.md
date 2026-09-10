@@ -7,8 +7,9 @@ history lives in the git log.
 
 ### Added
 
-- The interface is available in French. The translation was produced and
-  reviewed with LLMs, not by a native speaker; corrections are welcome in
+- The interface is available in French, Spanish, Brazilian Portuguese,
+  Russian, Indonesian, Turkish and Vietnamese. These translations were produced
+  and reviewed with LLMs, not by native speakers; corrections are welcome in
   GitHub Discussions.
 
 ### Changed
