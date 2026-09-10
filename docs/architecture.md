@@ -2119,7 +2119,7 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
 - Hand-edit `"language": "ja"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
 - Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Note any text that ends in an ellipsis or is cut.
-- Click a hotkey field, press Shift+F5 to show its rejection, then switch Settings → Language before it clears: the rejection reappears in the new language — never left showing the language it was first shown in. Force a hotkey-thread error (e.g. kill the hotkey thread mid-rebind) to show the status line's error text, then switch language: that line goes empty instead, since the error text embeds detail no language table can translate.
+- Click a hotkey field, press Shift+F5 to show its rejection, then switch Settings → Language before it clears: the rejection reappears in the new language — never left showing the language it was first shown in.
 - Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
 
 #### Measured Layout at High DPI (German) Test
