@@ -2468,7 +2468,8 @@ mod tests {
                 "English",
                 "Español",
                 "Français",
-                "Português (Brasil)"
+                "Português (Brasil)",
+                "Русский"
             ]
         );
     }

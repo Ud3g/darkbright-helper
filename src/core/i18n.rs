@@ -22,6 +22,7 @@ mod es;
 mod fr;
 mod id;
 mod pt;
+mod ru;
 
 pub(crate) use de::GERMAN;
 pub(crate) use en::ENGLISH;
@@ -43,6 +44,8 @@ pub enum Lang {
     Spanish,
     /// Indonesian.
     Indonesian,
+    /// Russian.
+    Russian,
 }
 
 impl Lang {
@@ -57,6 +60,7 @@ impl Lang {
         Lang::Spanish,
         Lang::French,
         Lang::Portuguese,
+        Lang::Russian,
     ];
 
     /// The BCP-47 tag identifying this language: what `config.json` stores
@@ -71,6 +75,7 @@ impl Lang {
             Lang::Portuguese => "pt",
             Lang::Spanish => "es",
             Lang::Indonesian => "id",
+            Lang::Russian => "ru",
         }
     }
 
@@ -85,6 +90,7 @@ impl Lang {
             Lang::Portuguese => "Português (Brasil)",
             Lang::Spanish => "Español",
             Lang::Indonesian => "Bahasa Indonesia",
+            Lang::Russian => "Русский",
         }
     }
 
@@ -568,6 +574,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Portuguese => &pt::PORTUGUESE,
         Lang::Spanish => &es::SPANISH,
         Lang::Indonesian => &id::INDONESIAN,
+        Lang::Russian => &ru::RUSSIAN,
     }
 }
 
