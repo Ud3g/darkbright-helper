@@ -793,6 +793,7 @@ Hardware at 0%, overlay at 100%:
 When DDC communication fails after all retries:
 - Hardware (right) progress bar changes to red/error tint
 - OSD expands to show error message row: "DDC Error - Adjustment failed"
+- The message is centred by its measured width; a test keeps it inside the OSD in every language at 100–200 % scaling
 - Percentage reverts to last confirmed value
 - OSD timeout remains unchanged (1000ms)
 - On next successful adjustment, OSD shrinks back to compact height
