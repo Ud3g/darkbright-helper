@@ -1656,7 +1656,10 @@ mod tests {
     #[test]
     fn a_language_index_outside_all_decodes_to_none() {
         assert_eq!(lang_from_wparam(WPARAM(Lang::ALL.len())), None);
-        assert_eq!(lang_from_wparam(WPARAM(1)), Some(Lang::German));
+        assert_eq!(
+            lang_from_wparam(WPARAM(Lang::German.index())),
+            Some(Lang::German)
+        );
     }
 
     #[test]

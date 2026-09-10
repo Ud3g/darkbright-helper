@@ -248,12 +248,80 @@ fn the_rebind_restore_failure_keeps_both_error_placeholders() {
 }
 
 #[test]
-fn german_exists_with_its_tag_and_native_name() {
-    assert_eq!(Lang::German.tag(), "de");
-    assert_eq!(Lang::German.native_name(), "Deutsch");
-    assert_eq!(Lang::English.native_name(), "English");
-    assert_eq!(Lang::ALL, &[Lang::English, Lang::German]);
+fn each_language_has_its_tag_and_native_name() {
+    for (lang, tag, name) in [
+        (Lang::German, "de", "Deutsch"),
+        (Lang::English, "en", "English"),
+    ] {
+        assert_eq!(lang.tag(), tag);
+        assert_eq!(lang.native_name(), name);
+    }
     assert_eq!(strings(Lang::German).button_close, "Schließen");
+}
+
+#[test]
+fn all_is_sorted_by_native_name() {
+    let names: Vec<String> = Lang::ALL
+        .iter()
+        .map(|lang| lang.native_name().to_lowercase())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "Lang::ALL must stay in native-name order");
+}
+
+/// Fields a language deliberately leaves identical to English. A field that
+/// matches English without being listed here is most likely one nobody
+/// translated. The `match` has no wildcard arm, so a new language fails to
+/// compile here until its list is written.
+fn same_as_english(lang: Lang) -> &'static [&'static str] {
+    match lang {
+        Lang::English => &[],
+        Lang::German => &[
+            "header_hotkeys",
+            "key_mod_alt",
+            "key_mod_win",
+            "key_separator",
+            "key_tab",
+            "unit_percent_step",
+            "unit_milliseconds",
+            "unit_percent_opacity",
+            "unit_seconds_resync",
+            "unit_seconds_inactivity",
+            "msgbox_title_autostart",
+        ],
+    }
+}
+
+#[test]
+fn a_field_equal_to_english_is_a_declared_decision() {
+    let english: Vec<(&str, &str)> = every_field(&ENGLISH).into_iter().collect();
+    let mut failures = Vec::new();
+    for &lang in Lang::ALL {
+        if lang == Lang::English {
+            continue;
+        }
+        let declared = same_as_english(lang);
+        for ((name, value), &(_, source)) in every_field(strings(lang)).into_iter().zip(&english) {
+            // Config tokens, pinned to English by their own test.
+            if name.starts_with("log_level_") {
+                continue;
+            }
+            let identical = value == source;
+            if identical != declared.contains(&name) {
+                let relation = if identical {
+                    "equals"
+                } else {
+                    "no longer equals"
+                };
+                failures.push(format!(
+                    "{}: {name} {relation} English ({value:?})",
+                    lang.tag()
+                ));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
 #[test]
@@ -321,7 +389,7 @@ fn lookup_matches_whole_tags_case_insensitively() {
     assert_eq!(Lang::lookup("de"), Some(Lang::German));
     assert_eq!(Lang::lookup("DE"), Some(Lang::German));
     assert_eq!(Lang::lookup("en"), Some(Lang::English));
-    assert_eq!(Lang::lookup("fr"), None);
+    assert_eq!(Lang::lookup("ja"), None);
     assert_eq!(Lang::lookup(""), None);
 }
 
@@ -330,7 +398,7 @@ fn lookup_truncates_subtags_from_the_right() {
     assert_eq!(Lang::lookup("de-AT"), Some(Lang::German));
     assert_eq!(Lang::lookup("de-AT-1901"), Some(Lang::German));
     assert_eq!(Lang::lookup("en-GB"), Some(Lang::English));
-    assert_eq!(Lang::lookup("fr-CA"), None);
+    assert_eq!(Lang::lookup("ja-JP"), None);
 }
 
 #[test]
@@ -345,12 +413,12 @@ fn lookup_drops_a_singleton_left_trailing_by_truncation() {
 #[test]
 fn from_preferences_takes_the_first_shipped_language() {
     let prefs = |tags: &[&str]| tags.iter().map(|t| (*t).to_string()).collect::<Vec<_>>();
-    assert_eq!(Lang::from_preferences(&prefs(&["fr", "de"])), Lang::German);
+    assert_eq!(Lang::from_preferences(&prefs(&["ja", "de"])), Lang::German);
     assert_eq!(
         Lang::from_preferences(&prefs(&["de-CH", "en"])),
         Lang::German
     );
-    assert_eq!(Lang::from_preferences(&prefs(&["fr"])), Lang::English);
+    assert_eq!(Lang::from_preferences(&prefs(&["ja"])), Lang::English);
     assert_eq!(Lang::from_preferences(&[]), Lang::English);
 }
 
@@ -372,7 +440,7 @@ fn language_setting_parses_system_and_shipped_tags_only() {
         LanguageSetting::parse("de-CH"),
         Some(LanguageSetting::Fixed(Lang::German))
     );
-    assert_eq!(LanguageSetting::parse("fr"), None);
+    assert_eq!(LanguageSetting::parse("ja"), None);
     assert_eq!(LanguageSetting::parse("Deutsch"), None);
     assert_eq!(LanguageSetting::parse("de_DE"), None);
     assert_eq!(LanguageSetting::parse(""), None);

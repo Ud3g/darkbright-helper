@@ -33,8 +33,11 @@ pub enum Lang {
 }
 
 impl Lang {
-    /// Every language the app can display, in the order the picker shows them.
-    pub const ALL: &'static [Lang] = &[Lang::English, Lang::German];
+    /// Every language the app can display, sorted by native name: the order
+    /// the picker shows them in, so a user finds their language by its own
+    /// name. `config.json` stores the tag, so reordering changes no stored
+    /// choice.
+    pub const ALL: &'static [Lang] = &[Lang::German, Lang::English];
 
     /// The BCP-47 tag identifying this language: what `config.json` stores
     /// for a fixed choice and what locale matching compares against. Always

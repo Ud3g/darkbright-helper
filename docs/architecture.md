@@ -2085,7 +2085,7 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - With the window open in German, hover the tray icon: tooltip German; open the menu: German rows with `Strg+Umschalt+Nach-Oben`.
 - Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
-- Hand-edit `"language": "fr"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
+- Hand-edit `"language": "ja"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
 - Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
 
 #### Measured Layout at High DPI (German) Test
