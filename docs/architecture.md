@@ -1498,8 +1498,11 @@ allows.
 One row is checked by a test rather than placed by measurement: the hotkey status line under
 the capture fields is one line tall, its `SS_LEFT` style wraps, and its text is set only at run
 time. A gate in `settings::plan` measures each of its fixed messages in every language at every
-planned DPI against the line's width, and the fix for a failure is a shorter message. The one
-message that embeds error details is not covered, because its length depends on the detail.
+planned DPI against the line's width, and the fix for a failure is a shorter message. Two paths
+stay uncovered, because their length depends on detail no fixed budget can size for: the
+restore-also-failed format (`hotkey_status_restore_also_failed_fmt`), which embeds two error
+strings, and the hotkey thread's own error text shown on its own — an English `BrightnessError`
+message with no length bound.
 
 The window remembers which fixed message (if any) that line is currently showing, next to every
 place that sets it, so a live language switch can redraw it instead of leaving it in the language
@@ -1869,9 +1872,11 @@ the core terms, the key-name convention and its source, typography rules and the
 reference, so a later correction can see why a word was chosen. A field that deliberately equals
 English is declared for that language in the i18n test module; any other identical field fails
 the build as a probable untranslated string. Some slots cannot grow — one-line captions, unit
-suffixes, combo entries (the Language picker has a 138px budget before the English window
-widens), the one-line hotkey status line, the OSD error row and the tray tooltip — and tests fail
-when a translation overflows one; the fix is shorter wording, not wider geometry.
+suffixes, most combo entries, the one-line hotkey status line, the OSD error row and the tray
+tooltip — and tests fail when a translation overflows one; the fix there is shorter wording, not
+wider geometry. The Language picker is the exception: it carries an authored budget (138px
+before the English window widens), and a translation may widen it up to that budget — this
+branch moved it from 120px to 129px for exactly that reason.
 
 The shipped tables other than English and German were produced with LLMs and have not been read
 by a native speaker. Each went through the same passes: a translation from the English and
@@ -2118,7 +2123,7 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
 - Hand-edit `"language": "ja"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
-- Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Note any text that ends in an ellipsis or is cut.
+- Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Where the OSD error row can be provoked (a monitor that refuses DDC/CI), check it too in each language for clipped diacritics (Vietnamese) and complete Cyrillic text (Russian). Note any text that ends in an ellipsis or is cut.
 - Click a hotkey field, press Shift+F5 to show its rejection, then switch Settings → Language before it clears: the rejection reappears in the new language — never left showing the language it was first shown in.
 - Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
 

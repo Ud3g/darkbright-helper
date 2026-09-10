@@ -41,9 +41,8 @@ history lives in the git log.
 - The error dialog shown when Windows refuses to start one of the app's
   threads no longer has stray indentation and gaps in the middle of its
   sentence.
-- Longer messages on the settings window's hotkey status line are shown in
-  full. The notice that brightness keys cannot be intercepted, for one, used to
-  lose its end.
+- The settings window's hotkey status line no longer truncates its fixed
+  messages, such as the notice that brightness keys cannot be intercepted.
 
 ## [0.10.0] — 2026-09-05
 
