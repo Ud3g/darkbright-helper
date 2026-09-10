@@ -15,6 +15,7 @@ fn every_language_variant_appears_in_all() {
         Lang::Indonesian,
         Lang::Russian,
         Lang::Turkish,
+        Lang::Vietnamese,
     ] {
         let listed = match lang {
             Lang::English => Lang::ALL.contains(&Lang::English),
@@ -25,6 +26,7 @@ fn every_language_variant_appears_in_all() {
             Lang::Indonesian => Lang::ALL.contains(&Lang::Indonesian),
             Lang::Russian => Lang::ALL.contains(&Lang::Russian),
             Lang::Turkish => Lang::ALL.contains(&Lang::Turkish),
+            Lang::Vietnamese => Lang::ALL.contains(&Lang::Vietnamese),
         };
         assert!(listed, "{lang:?} is missing from Lang::ALL");
     }
@@ -273,6 +275,7 @@ fn each_language_has_its_tag_and_native_name() {
         (Lang::Indonesian, "id", "Bahasa Indonesia"),
         (Lang::Russian, "ru", "Русский"),
         (Lang::Turkish, "tr", "Türkçe"),
+        (Lang::Vietnamese, "vi", "Tiếng Việt"),
     ] {
         assert_eq!(lang.tag(), tag);
         assert_eq!(lang.native_name(), name);
@@ -295,7 +298,8 @@ fn all_is_sorted_by_native_name() {
 /// matches English without being listed here is most likely one nobody
 /// translated. The `match` has no wildcard arm, so a new language fails to
 /// compile here until its list is written.
-#[allow(clippy::too_many_lines)]
+// One arm per shipped language; the list only grows as languages are added.
+#[expect(clippy::too_many_lines)]
 fn same_as_english(lang: Lang) -> &'static [&'static str] {
     match lang {
         Lang::English => &[],
@@ -324,7 +328,7 @@ fn same_as_english(lang: Lang) -> &'static [&'static str] {
             "unit_seconds_resync",
             "unit_seconds_inactivity",
         ],
-        Lang::Portuguese => &[
+        Lang::Portuguese | Lang::Vietnamese => &[
             "key_mod_ctrl",
             "key_mod_alt",
             "key_mod_shift",

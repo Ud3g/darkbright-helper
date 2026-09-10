@@ -2469,6 +2469,7 @@ mod tests {
                 "Español",
                 "Français",
                 "Português (Brasil)",
+                "Tiếng Việt",
                 "Türkçe",
                 "Русский"
             ]
