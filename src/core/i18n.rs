@@ -23,6 +23,7 @@ mod fr;
 mod id;
 mod pt;
 mod ru;
+mod tr;
 
 pub(crate) use de::GERMAN;
 pub(crate) use en::ENGLISH;
@@ -46,6 +47,8 @@ pub enum Lang {
     Indonesian,
     /// Russian.
     Russian,
+    /// Turkish.
+    Turkish,
 }
 
 impl Lang {
@@ -60,6 +63,7 @@ impl Lang {
         Lang::Spanish,
         Lang::French,
         Lang::Portuguese,
+        Lang::Turkish,
         Lang::Russian,
     ];
 
@@ -76,6 +80,7 @@ impl Lang {
             Lang::Spanish => "es",
             Lang::Indonesian => "id",
             Lang::Russian => "ru",
+            Lang::Turkish => "tr",
         }
     }
 
@@ -91,6 +96,7 @@ impl Lang {
             Lang::Spanish => "Español",
             Lang::Indonesian => "Bahasa Indonesia",
             Lang::Russian => "Русский",
+            Lang::Turkish => "Türkçe",
         }
     }
 
@@ -575,6 +581,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Spanish => &es::SPANISH,
         Lang::Indonesian => &id::INDONESIAN,
         Lang::Russian => &ru::RUSSIAN,
+        Lang::Turkish => &tr::TURKISH,
     }
 }
 
