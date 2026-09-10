@@ -2460,7 +2460,10 @@ mod tests {
         use crate::core::i18n::GERMAN;
         let entries = language_combo_entries(&GERMAN);
         assert_eq!(entries[0], "Systemstandard");
-        assert_eq!(&entries[1..], &["Deutsch", "English", "Français"]);
+        assert_eq!(
+            &entries[1..],
+            &["Deutsch", "English", "Français", "Português (Brasil)"]
+        );
     }
 
     #[test]
