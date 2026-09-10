@@ -328,7 +328,29 @@ fn same_as_english(lang: Lang) -> &'static [&'static str] {
             "unit_seconds_resync",
             "unit_seconds_inactivity",
         ],
-        Lang::Portuguese | Lang::Vietnamese => &[
+        Lang::Portuguese => &[
+            "key_mod_ctrl",
+            "key_mod_alt",
+            "key_mod_shift",
+            "key_mod_win",
+            "key_separator",
+            "key_home",
+            "key_end",
+            "key_insert",
+            "key_delete",
+            "key_tab",
+            "key_enter",
+            "key_backspace",
+            "unit_percent_step",
+            "unit_milliseconds",
+            "unit_percent_opacity",
+            "unit_seconds_resync",
+            "unit_seconds_inactivity",
+        ],
+        // Each language's list is its own decision; Vietnamese's happening to
+        // match Portuguese's today is a coincidence, not a shared rule.
+        #[expect(clippy::match_same_arms)]
+        Lang::Vietnamese => &[
             "key_mod_ctrl",
             "key_mod_alt",
             "key_mod_shift",
