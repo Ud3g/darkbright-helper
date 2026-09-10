@@ -110,7 +110,7 @@ pub(crate) const PORTUGUESE: Strings = Strings {
     button_close: "Fechar",
     window_title: "Configurações do darkbright-helper",
 
-    capture_prompt: "Pressione uma combinação de teclas… (Esc para cancelar)",
+    capture_prompt: "Pressione as teclas… (Esc para cancelar)",
     capture_reject_no_modifier: "Adicione Ctrl, Alt ou Win (Shift sozinho não basta)",
     capture_reject_unnameable_key: "Esta tecla não pode ser usada como tecla de atalho",
     capture_reject_duplicate: "Já atribuída à outra tecla de atalho de brilho",

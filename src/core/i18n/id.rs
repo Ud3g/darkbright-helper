@@ -105,7 +105,7 @@ pub(crate) const INDONESIAN: Strings = Strings {
     button_close: "Tutup",
     window_title: "Pengaturan darkbright-helper",
 
-    capture_prompt: "Tekan kombinasi tombol… (Esc untuk membatalkan)",
+    capture_prompt: "Tekan kombinasi tombol… (Esc: Batal)",
     capture_reject_no_modifier: "Tambahkan Ctrl, Alt, atau Win (Shift saja tidak cukup)",
     capture_reject_unnameable_key: "Tombol ini tidak dapat digunakan sebagai tombol pintas",
     capture_reject_duplicate: "Sudah ditetapkan ke tombol pintas kecerahan lainnya",
