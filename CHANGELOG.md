@@ -7,6 +7,14 @@ history lives in the git log.
 
 ### Added
 
+- The interface is available in German, and it follows the Windows display
+  language: on a German Windows the tray menu, its tooltip, the settings window
+  and the on-screen display come up in German with no configuration. A new
+  Language picker at the top of the settings window pins one language instead
+  and switches everything at once, without a restart; `config.json` keeps the
+  choice in a new `language` field (`"system"` or a language tag). The settings
+  window sizes itself to the text of the chosen language, so no caption is cut
+  off.
 - The interface is available in French, Spanish, Brazilian Portuguese,
   Russian, Indonesian, Turkish and Vietnamese. These translations were produced
   and reviewed with LLMs, not by native speakers; corrections are welcome in
@@ -23,6 +31,16 @@ history lives in the git log.
 
 ### Fixed
 
+- Config repairs (an invalid value replaced by its default), recovery from
+  `config.json.bak`, and a failed single-instance check are now written to
+  `darkbright.log`. Before, everything logged before the file log started went
+  only to the console, which release builds hide, so a log attached to a bug
+  report never mentioned a broken config.
+- Shift+Tab from "Restore defaults" in the settings window reaches the footer
+  links again. After tabbing forward past them once, it used to skip them.
+- The error dialog shown when Windows refuses to start one of the app's
+  threads no longer has stray indentation and gaps in the middle of its
+  sentence.
 - Longer messages on the settings window's hotkey status line are shown in
   full. The notice that brightness keys cannot be intercepted, for one, used to
   lose its end.

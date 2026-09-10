@@ -1855,7 +1855,26 @@ The "already running" box precedes config loading and uses the OS language direc
 
 **Hotkey display text.** `ParsedHotkey::display_text` renders the settings capture fields (whose window text stays the wire string) and the tray usage rows. Modifiers and the named keys (`Up`, `PageUp`, `Home`, `Delete`, …) come from the table; function keys, `Plus`, `Minus`, letters and digits keep their wire name. German follows the wording Windows uses in accelerator labels and on the German key cap (`Strg+Umschalt+Nach-Oben`). A hand-edited `ctrl+shift+up` therefore displays as `Ctrl+Shift+Up` in English; the stored text is untouched.
 
-**Adding a language.** Add the `Lang` variant, its `tag()` (lowercase, generic), its `native_name()`, and a `const` table; the compiler lists every field until the table is complete, and `Lang::ALL` puts it in the picker. Nothing else changes.
+**Adding a language.** Add the `Lang` variant with its `tag()` (lowercase, generic) and
+`native_name()`, insert it into `Lang::ALL` in native-name order (a test enforces the order),
+give it an arm in `strings()`, and put its table in `src/core/i18n/<tag>.rs`. The compiler lists
+every field until the table is complete. The file's header records the variant, a glossary of
+the core terms, the key-name convention and its source, typography rules and the style
+reference, so a later correction can see why a word was chosen. A field that deliberately equals
+English is declared for that language in the i18n test module; any other identical field fails
+the build as a probable untranslated string. Some slots cannot grow — one-line captions, unit
+suffixes, combo entries (the Language picker has a 138px budget before the English window
+widens), the one-line hotkey status line, the OSD error row and the tray tooltip — and tests fail
+when a translation overflows one; the fix is shorter wording, not wider geometry.
+
+The shipped tables other than English and German were produced with LLMs and have not been read
+by a native speaker. Each went through the same passes: a translation from the English and
+German tables and the field doc comments; a blind back-translation into English from the
+strings alone, which exposes shifted meaning; an independent review from a native localizer's
+point of view, which is the only pass that catches a wrong term or register because a wrong
+term can translate back to the right English word; one tie-break where review and translator
+disagreed; and a further review of any string shortened to fit a slot. A correction from a
+native speaker outranks all of them.
 
 ---
 
@@ -2093,6 +2112,7 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
 - Hand-edit `"language": "ja"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
+- Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Note any text that ends in an ellipsis or is cut.
 - Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
 
 #### Measured Layout at High DPI (German) Test
