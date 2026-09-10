@@ -14,6 +14,12 @@ history lives in the git log.
   The configuration directory `%APPDATA%\BrightnessControl` is deliberately
   unchanged, since renaming it would orphan every existing config file.
 
+### Fixed
+
+- Longer messages on the settings window's hotkey status line are shown in
+  full. The notice that brightness keys cannot be intercepted, for one, used to
+  lose its end.
+
 ## [0.10.0] — 2026-09-05
 
 ### Added

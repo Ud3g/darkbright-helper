@@ -94,7 +94,7 @@ pub(crate) const GERMAN: Strings = Strings {
     hotkey_status_no_response: "Hotkey-Thread hat nicht geantwortet",
     hotkey_status_unknown_error: "unbekannter Fehler",
     hotkey_status_restore_also_failed_fmt: "{error}; Wiederherstellen ebenfalls fehlgeschlagen: {restore_error}",
-    hotkey_notice_interception_unavailable: "Abfangen der Helligkeitstasten nicht verfügbar; einfache Tastenregistrierung wird verwendet",
+    hotkey_notice_interception_unavailable: "Tastenabfangen nicht verfügbar; Hotkeys funktionieren",
 
     msgbox_already_running: "darkbright-helper läuft bereits.",
     msgbox_title_startup_error: "Startfehler",

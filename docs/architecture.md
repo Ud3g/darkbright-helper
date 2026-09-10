@@ -1494,6 +1494,12 @@ height is 654 logical px before DPI scaling, growing only when one of the
 window's two wrapping hints needs more lines than its authored height
 allows.
 
+One row is checked by a test rather than placed by measurement: the hotkey status line under
+the capture fields is one line tall, its `SS_LEFT` style wraps, and its text is set only at run
+time. A gate in `settings::plan` measures each of its fixed messages in every language at every
+planned DPI against the line's width, and the fix for a failure is a shorter message. The one
+message that embeds error details is not covered, because its length depends on the detail.
+
 **Own thread — load-bearing, not stylistic.** The window is spawned on a
 dedicated thread with its own `GetMessageW` loop, the same pattern the tray
 and power threads use. Ordinary interactions with a titled window — dragging

@@ -2107,7 +2107,7 @@ fn hotkey_rebind_result_fallback_active_shows_a_notice() {
     assert!(!c.hotkeys_degraded, "the rebind still succeeded");
     assert_eq!(
         c.settings.notices,
-        vec!["Brightness-key interception unavailable; using plain key registration".to_string()]
+        vec!["Key interception unavailable; hotkeys still work".to_string()]
     );
 }
 

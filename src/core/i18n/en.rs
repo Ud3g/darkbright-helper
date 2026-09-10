@@ -93,7 +93,7 @@ pub(crate) const ENGLISH: Strings = Strings {
     hotkey_status_no_response: "Hotkey thread did not respond",
     hotkey_status_unknown_error: "unknown error",
     hotkey_status_restore_also_failed_fmt: "{error}; restore also failed: {restore_error}",
-    hotkey_notice_interception_unavailable: "Brightness-key interception unavailable; using plain key registration",
+    hotkey_notice_interception_unavailable: "Key interception unavailable; hotkeys still work",
 
     msgbox_already_running: "darkbright-helper is already running.",
     msgbox_title_startup_error: "Startup Error",
