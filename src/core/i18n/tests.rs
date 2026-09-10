@@ -6,10 +6,11 @@ use super::{ENGLISH, Lang, LanguageSetting, SYSTEM_LANGUAGE, Strings, TextKey, s
 /// a new one fails to compile here until it is added to both.
 #[test]
 fn every_language_variant_appears_in_all() {
-    for lang in [Lang::English, Lang::German] {
+    for lang in [Lang::English, Lang::German, Lang::French] {
         let listed = match lang {
             Lang::English => Lang::ALL.contains(&Lang::English),
             Lang::German => Lang::ALL.contains(&Lang::German),
+            Lang::French => Lang::ALL.contains(&Lang::French),
         };
         assert!(listed, "{lang:?} is missing from Lang::ALL");
     }
@@ -252,6 +253,7 @@ fn each_language_has_its_tag_and_native_name() {
     for (lang, tag, name) in [
         (Lang::German, "de", "Deutsch"),
         (Lang::English, "en", "English"),
+        (Lang::French, "fr", "Français"),
     ] {
         assert_eq!(lang.tag(), tag);
         assert_eq!(lang.native_name(), name);
@@ -289,6 +291,18 @@ fn same_as_english(lang: Lang) -> &'static [&'static str] {
             "unit_seconds_resync",
             "unit_seconds_inactivity",
             "msgbox_title_autostart",
+        ],
+        Lang::French => &[
+            "key_mod_ctrl",
+            "key_mod_alt",
+            "key_mod_win",
+            "key_separator",
+            "key_tab",
+            "unit_percent_step",
+            "unit_milliseconds",
+            "unit_percent_opacity",
+            "unit_seconds_resync",
+            "unit_seconds_inactivity",
         ],
     }
 }
@@ -466,6 +480,27 @@ fn language_setting_resolves_system_through_the_preferences() {
         Lang::English
     );
     assert_eq!(LanguageSetting::System.resolve(&[]), Lang::English);
+}
+
+#[test]
+fn french_punctuation_keeps_its_no_break_space() {
+    // French sets a no-break space before : ; ! ? so the mark never starts a
+    // line on its own.
+    let mut failures = Vec::new();
+    for (name, value) in every_field(strings(Lang::French)) {
+        let chars: Vec<char> = value.chars().collect();
+        for (i, &c) in chars.iter().enumerate() {
+            if matches!(c, ':' | ';' | '!' | '?')
+                && !matches!(
+                    i.checked_sub(1).map(|j| chars[j]),
+                    Some('\u{a0}' | '\u{202f}')
+                )
+            {
+                failures.push(format!("{name}: {c:?} at {i} in {value:?}"));
+            }
+        }
+    }
+    assert!(failures.is_empty(), "\n{}", failures.join("\n"));
 }
 
 #[test]

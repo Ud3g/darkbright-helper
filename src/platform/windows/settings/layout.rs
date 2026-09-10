@@ -246,19 +246,19 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         text: Some(TextKey::LabelLanguage),
         anchor: Anchor::Label(Col::B),
     },
-    // 120 wide, unlike the log-level combo's 76: the English entry "System
-    // default" plus the 17px dropdown arrow does not fit 76 at this font.
-    // Each combo is sized to its own content by design — the log-level combo's
-    // 76 makes it end at 326, flush with the spinner rows' right edge, and
-    // there is no third edge the two could share without breaking either that
-    // alignment or this combo's fit.
+    // 129 wide, unlike the log-level combo's 76: "Langue du système" plus
+    // the dropdown arrow and text insets needs it at this font. Wider than
+    // 138 would push the English window off its 400px floor, because this
+    // combo is the widest run in column B. Each combo is sized to its own
+    // content by design — the log-level combo's 76 makes it end at 326, flush
+    // with the spinner rows' right edge.
     ControlSpec {
         id: ID_LANGUAGE,
         class: "COMBOBOX",
         style: STYLE_COMBO_GROUP,
         x: 250,
         y: 42,
-        w: 120,
+        w: 129,
         h: 120,
         text: None,
         anchor: Anchor::Control(Col::B),
@@ -1443,7 +1443,7 @@ mod tests {
                 .expect("control exists")
         };
         let language = spec(ID_LANGUAGE);
-        assert_eq!((language.x, language.y, language.w), (250, 42, 120));
+        assert_eq!((language.x, language.y, language.w), (250, 42, 129));
         assert_eq!(language.class, "COMBOBOX");
         assert!(
             language.style & WS_GROUP.0 != 0,

@@ -5,6 +5,12 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- The interface is available in French. The translation was produced and
+  reviewed with LLMs, not by a native speaker; corrections are welcome in
+  GitHub Discussions.
+
 ### Changed
 
 - The tray menu, its tooltip and the app's message boxes now call the program

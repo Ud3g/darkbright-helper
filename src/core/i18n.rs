@@ -18,6 +18,7 @@
 
 mod de;
 mod en;
+mod fr;
 
 pub(crate) use de::GERMAN;
 pub(crate) use en::ENGLISH;
@@ -30,6 +31,8 @@ pub enum Lang {
     English,
     /// German.
     German,
+    /// French.
+    French,
 }
 
 impl Lang {
@@ -37,7 +40,7 @@ impl Lang {
     /// the picker shows them in, so a user finds their language by its own
     /// name. `config.json` stores the tag, so reordering changes no stored
     /// choice.
-    pub const ALL: &'static [Lang] = &[Lang::German, Lang::English];
+    pub const ALL: &'static [Lang] = &[Lang::German, Lang::English, Lang::French];
 
     /// The BCP-47 tag identifying this language: what `config.json` stores
     /// for a fixed choice and what locale matching compares against. Always
@@ -47,6 +50,7 @@ impl Lang {
         match self {
             Lang::English => "en",
             Lang::German => "de",
+            Lang::French => "fr",
         }
     }
 
@@ -57,6 +61,7 @@ impl Lang {
         match self {
             Lang::English => "English",
             Lang::German => "Deutsch",
+            Lang::French => "Français",
         }
     }
 
@@ -536,6 +541,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
     match lang {
         Lang::English => &ENGLISH,
         Lang::German => &GERMAN,
+        Lang::French => &fr::FRENCH,
     }
 }
 

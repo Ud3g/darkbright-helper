@@ -1474,7 +1474,7 @@ dialog's own "Open config file" footer link (see "Message flow" below). The
 window exposes every existing config option plus a "Start with Windows"
 toggle, applies changes live, and follows the system light/dark theme like
 the tray menu already does. The Language picker is the first row of the
-General section, 120px wide.
+General section, 129px wide.
 
 The window's geometry is measured, not authored as one fixed table. Every
 control's baseline position and size at 96 DPI still lives in a declarative
