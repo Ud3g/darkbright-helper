@@ -2462,7 +2462,13 @@ mod tests {
         assert_eq!(entries[0], "Systemstandard");
         assert_eq!(
             &entries[1..],
-            &["Deutsch", "English", "Français", "Português (Brasil)"]
+            &[
+                "Deutsch",
+                "English",
+                "Español",
+                "Français",
+                "Português (Brasil)"
+            ]
         );
     }
 

@@ -18,6 +18,7 @@
 
 mod de;
 mod en;
+mod es;
 mod fr;
 mod pt;
 
@@ -36,6 +37,9 @@ pub enum Lang {
     French,
     /// Brazilian Portuguese. Every `pt-*` tag resolves to it, `pt-PT` included.
     Portuguese,
+    /// Spanish, in a neutral variety that avoids words specific to Spain or
+    /// Latin America.
+    Spanish,
 }
 
 impl Lang {
@@ -43,7 +47,13 @@ impl Lang {
     /// the picker shows them in, so a user finds their language by its own
     /// name. `config.json` stores the tag, so reordering changes no stored
     /// choice.
-    pub const ALL: &'static [Lang] = &[Lang::German, Lang::English, Lang::French, Lang::Portuguese];
+    pub const ALL: &'static [Lang] = &[
+        Lang::German,
+        Lang::English,
+        Lang::Spanish,
+        Lang::French,
+        Lang::Portuguese,
+    ];
 
     /// The BCP-47 tag identifying this language: what `config.json` stores
     /// for a fixed choice and what locale matching compares against. Always
@@ -55,6 +65,7 @@ impl Lang {
             Lang::German => "de",
             Lang::French => "fr",
             Lang::Portuguese => "pt",
+            Lang::Spanish => "es",
         }
     }
 
@@ -67,6 +78,7 @@ impl Lang {
             Lang::German => "Deutsch",
             Lang::French => "Français",
             Lang::Portuguese => "Português (Brasil)",
+            Lang::Spanish => "Español",
         }
     }
 
@@ -548,6 +560,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::German => &GERMAN,
         Lang::French => &fr::FRENCH,
         Lang::Portuguese => &pt::PORTUGUESE,
+        Lang::Spanish => &es::SPANISH,
     }
 }
 
