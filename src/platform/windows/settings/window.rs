@@ -2463,6 +2463,7 @@ mod tests {
         assert_eq!(
             &entries[1..],
             &[
+                "Bahasa Indonesia",
                 "Deutsch",
                 "English",
                 "Español",

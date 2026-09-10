@@ -20,6 +20,7 @@ mod de;
 mod en;
 mod es;
 mod fr;
+mod id;
 mod pt;
 
 pub(crate) use de::GERMAN;
@@ -40,6 +41,8 @@ pub enum Lang {
     /// Spanish, in a neutral variety that avoids words specific to Spain or
     /// Latin America.
     Spanish,
+    /// Indonesian.
+    Indonesian,
 }
 
 impl Lang {
@@ -48,6 +51,7 @@ impl Lang {
     /// name. `config.json` stores the tag, so reordering changes no stored
     /// choice.
     pub const ALL: &'static [Lang] = &[
+        Lang::Indonesian,
         Lang::German,
         Lang::English,
         Lang::Spanish,
@@ -66,6 +70,7 @@ impl Lang {
             Lang::French => "fr",
             Lang::Portuguese => "pt",
             Lang::Spanish => "es",
+            Lang::Indonesian => "id",
         }
     }
 
@@ -79,6 +84,7 @@ impl Lang {
             Lang::French => "Français",
             Lang::Portuguese => "Português (Brasil)",
             Lang::Spanish => "Español",
+            Lang::Indonesian => "Bahasa Indonesia",
         }
     }
 
@@ -561,6 +567,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::French => &fr::FRENCH,
         Lang::Portuguese => &pt::PORTUGUESE,
         Lang::Spanish => &es::SPANISH,
+        Lang::Indonesian => &id::INDONESIAN,
     }
 }
 
