@@ -43,7 +43,9 @@ use windows::core::{PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
-use crate::core::i18n::{Lang, LanguageSetting, Strings, strings};
+use crate::core::i18n::{
+    HotkeyStatusKey, Lang, LanguageSetting, Strings, hotkey_status_text, strings,
+};
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::error::{BrightnessError, Result};
 
@@ -712,6 +714,13 @@ pub(super) struct WindowState {
     last_posted_opacity: Cell<Option<u32>>,
     last_posted_periodic: Cell<Option<u32>>,
     last_posted_inactivity: Cell<Option<u32>>,
+    /// Which fixed message (if any) the hotkey status line (`ID_HK_ERROR`)
+    /// currently shows — set everywhere that line's text is set (here and in
+    /// `capture.rs`), and read by [`handle_language_message`] to redraw the
+    /// line in the new language rather than leave it in the old one. `None`
+    /// covers both an empty line and a message [`HotkeyStatusKey`] cannot
+    /// reproduce (it embeds runtime detail), which a switch clears instead.
+    pub(super) hotkey_status_key: Cell<Option<HotkeyStatusKey>>,
 }
 
 thread_local! {
@@ -978,8 +987,11 @@ fn handle_refresh_message(lparam: LPARAM) {
 /// `display_text`. Every caption having changed, the window then
 /// re-measures and resizes to fit the new one — keeping its position, since
 /// the user may have dragged it and a caption change is no reason to move
-/// it. A hotkey status line already on screen keeps its text until the next
-/// hotkey event replaces it.
+/// it. The hotkey status line redraws too, from whatever
+/// [`WindowState::hotkey_status_key`] remembers: a fixed message reappears
+/// in the new language, and anything else (an empty line, or a message that
+/// embeds runtime detail no key can rebuild) is cleared rather than left in
+/// the language it was shown in.
 fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
     let Some(lang) = Lang::from_index(wparam.0) else {
         log::warn!(index = wparam.0; "Ignoring settings language update with an unknown index");
@@ -1024,6 +1036,12 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
                 }
             }
         }
+
+        set_text(
+            hwnd,
+            ID_HK_ERROR,
+            hotkey_status_text(state.hotkey_status_key.get(), s),
+        );
     });
     // Outside the borrow above: resizing re-enters this window's message
     // handling, and those handlers read the same window state.
@@ -1036,11 +1054,24 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
 /// two — so both go through this same function; which colour it renders in
 /// (red for an error, muted for a notice) is decided by the control-colour
 /// handler, not here. Same reclaim contract as [`handle_refresh_message`].
+///
+/// The controller composes `message` already resolved to text, with no key
+/// travelling alongside it, so whether it can be redrawn after a later
+/// language switch is recovered here by matching it back against the
+/// current language's fixed table (`HotkeyStatusKey::matching`) — the
+/// controller resolved it from that same table in that same language, so
+/// the match is exact whenever the message is one of the fixed ones, and
+/// `None` otherwise (a hotkey-thread error string, or the formatted
+/// restore-also-failed message).
 fn handle_hotkey_message_text(lparam: LPARAM) {
     let ptr: *mut String = std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
     // SAFETY: one delivery, one reclaim, as in [`handle_refresh_message`].
     let message = unsafe { Box::from_raw(ptr) };
-    with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, &message));
+    with_window_state(|state| {
+        let key = HotkeyStatusKey::matching(&message, strings(state.lang.get()));
+        state.hotkey_status_key.set(key);
+        set_text(state.hwnd, ID_HK_ERROR, &message);
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2096,6 +2127,7 @@ fn create_settings_window(
         last_posted_opacity: Cell::new(None),
         last_posted_periodic: Cell::new(None),
         last_posted_inactivity: Cell::new(None),
+        hotkey_status_key: Cell::new(None),
     };
 
     create_controls(

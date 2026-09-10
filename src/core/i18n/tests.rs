@@ -1,4 +1,7 @@
-use super::{ENGLISH, Lang, LanguageSetting, SYSTEM_LANGUAGE, Strings, TextKey, strings};
+use super::{
+    ENGLISH, HotkeyStatusKey, Lang, LanguageSetting, SYSTEM_LANGUAGE, Strings, TextKey,
+    hotkey_status_text, strings,
+};
 
 /// `Lang::index` panics on a variant missing from [`Lang::ALL`], and it
 /// runs on the tray and settings language-push paths, so the list has to
@@ -649,5 +652,63 @@ fn log_level_entries_are_exactly_the_stored_tokens_in_every_language() {
                 lang.tag()
             );
         }
+    }
+}
+
+/// Regression test for the settings window's hotkey status line keeping a
+/// message in the language it was shown in after a live language switch: a
+/// key resolved from what a language showed must resolve back to the exact
+/// same message in that language, and to the equivalent message — never the
+/// original language's words — in every other one.
+#[test]
+fn every_hotkey_status_key_round_trips_and_translates_across_every_language() {
+    const KEYS: &[HotkeyStatusKey] = &[
+        HotkeyStatusKey::Unreachable,
+        HotkeyStatusKey::NoResponse,
+        HotkeyStatusKey::UnknownError,
+        HotkeyStatusKey::InterceptionUnavailable,
+        HotkeyStatusKey::RejectNoModifier,
+        HotkeyStatusKey::RejectUnnameableKey,
+        HotkeyStatusKey::RejectDuplicate,
+    ];
+    for &shown_in in Lang::ALL {
+        let shown = strings(shown_in);
+        for &key in KEYS {
+            let message = key.text(shown);
+            assert_eq!(
+                HotkeyStatusKey::matching(message, shown),
+                Some(key),
+                "{shown_in:?}'s {key:?} text does not match itself back"
+            );
+            for &switch_to in Lang::ALL {
+                let target = strings(switch_to);
+                assert_eq!(
+                    hotkey_status_text(Some(key), target),
+                    key.text(target),
+                    "{key:?} shown in {shown_in:?} did not translate to {switch_to:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A message that embeds runtime detail (the hotkey thread's own error
+/// text, or the formatted restore-also-failed message) has no key, and an
+/// empty line's key is `None` too — both must clear rather than guess.
+#[test]
+fn a_message_outside_the_fixed_table_has_no_hotkey_status_key() {
+    for &lang in Lang::ALL {
+        let s = strings(lang);
+        assert_eq!(HotkeyStatusKey::matching("", s), None);
+        assert_eq!(
+            HotkeyStatusKey::matching("DDC/CI error 0x80070005", s),
+            None
+        );
+        let formatted = s
+            .hotkey_status_restore_also_failed_fmt
+            .replace("{error}", "DDC/CI error 0x80070005")
+            .replace("{restore_error}", "timed out");
+        assert_eq!(HotkeyStatusKey::matching(&formatted, s), None);
+        assert_eq!(hotkey_status_text(None, s), "");
     }
 }

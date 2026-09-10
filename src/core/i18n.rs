@@ -576,6 +576,76 @@ impl Strings {
     }
 }
 
+/// Which fixed message from the table (if any) the settings window's
+/// one-line hotkey status line (`ID_HK_ERROR`) currently shows. The window
+/// remembers this next to the line's text so a live language switch can
+/// redraw it without carrying the previous language's words over — see
+/// `platform::windows::settings::window::handle_language_message`. A shown
+/// message with no variant here (the hotkey thread's own error text, or the
+/// two-detail restore-also-failed message) embeds runtime detail no key can
+/// rebuild, so it has no key and the line is cleared on a switch instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HotkeyStatusKey {
+    /// [`Strings::hotkey_status_unreachable`].
+    Unreachable,
+    /// [`Strings::hotkey_status_no_response`].
+    NoResponse,
+    /// [`Strings::hotkey_status_unknown_error`].
+    UnknownError,
+    /// [`Strings::hotkey_notice_interception_unavailable`].
+    InterceptionUnavailable,
+    /// [`Strings::capture_reject_no_modifier`].
+    RejectNoModifier,
+    /// [`Strings::capture_reject_unnameable_key`].
+    RejectUnnameableKey,
+    /// [`Strings::capture_reject_duplicate`].
+    RejectDuplicate,
+}
+
+impl HotkeyStatusKey {
+    /// Every variant, for [`Self::matching`]'s reverse lookup.
+    const ALL: [Self; 7] = [
+        Self::Unreachable,
+        Self::NoResponse,
+        Self::UnknownError,
+        Self::InterceptionUnavailable,
+        Self::RejectNoModifier,
+        Self::RejectUnnameableKey,
+        Self::RejectDuplicate,
+    ];
+
+    /// The fixed text for this status in `s`'s language.
+    #[must_use]
+    pub(crate) fn text(self, s: &Strings) -> &'static str {
+        match self {
+            Self::Unreachable => s.hotkey_status_unreachable,
+            Self::NoResponse => s.hotkey_status_no_response,
+            Self::UnknownError => s.hotkey_status_unknown_error,
+            Self::InterceptionUnavailable => s.hotkey_notice_interception_unavailable,
+            Self::RejectNoModifier => s.capture_reject_no_modifier,
+            Self::RejectUnnameableKey => s.capture_reject_unnameable_key,
+            Self::RejectDuplicate => s.capture_reject_duplicate,
+        }
+    }
+
+    /// Which key (if any) renders as `message` in `s`'s language — the
+    /// reverse of [`Self::text`]. `None` for anything outside the fixed
+    /// table: a hotkey-thread error string, the formatted
+    /// restore-also-failed message, or an empty line.
+    #[must_use]
+    pub(crate) fn matching(message: &str, s: &Strings) -> Option<Self> {
+        Self::ALL.into_iter().find(|key| key.text(s) == message)
+    }
+}
+
+/// What the settings window's hotkey status line should read right after a
+/// language switch: `key`'s fixed text in `s`'s language, or an empty line
+/// if nothing reproducible was showing.
+#[must_use]
+pub(crate) fn hotkey_status_text(key: Option<HotkeyStatusKey>, s: &Strings) -> &'static str {
+    key.map_or("", |k| k.text(s))
+}
+
 /// The string table for `lang`.
 #[must_use]
 pub fn strings(lang: Lang) -> &'static Strings {
