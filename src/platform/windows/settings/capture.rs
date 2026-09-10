@@ -510,8 +510,10 @@ fn handle_capture_getdlgcode(hwnd: HWND, lparam: LPARAM) -> u32 {
 
 /// Horizontal padding, in device pixels, between the control's client edge
 /// and where [`paint_capture`] draws text — matches a native `EDIT`
-/// control's own left/right margin.
-const CAPTURE_TEXT_INSET: i32 = 4;
+/// control's own left/right margin. The layout planner reads it too, so the
+/// drawable text width it computes matches what [`paint_capture`] actually
+/// uses.
+pub(super) const CAPTURE_TEXT_INSET: i32 = 4;
 
 /// UTF-16 encoding for `DrawTextW`, deliberately without [`wide`]'s
 /// NUL terminator: `DrawTextW` takes an explicit slice length, and drawing

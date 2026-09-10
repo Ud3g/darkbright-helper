@@ -321,10 +321,12 @@ pub struct Strings {
     pub label_log_level: &'static str,
     // --- Log level picker ---
     //
-    // Display only. The value written to config.json is always the English
-    // token, resolved from the combo's selected index — never from this text.
-    // A translation appends its own wording, as in "warn (Warnung)", so the
-    // stored value stays visible to anyone editing the file by hand.
+    // Display only; the value written to config.json is resolved from the
+    // combo's selected index, never from this text. Every language shows the
+    // bare English token: a translation in parentheses is permitted by the
+    // surrounding rule, but the longest one needs roughly twice the combo's
+    // width, and widening the combo would cost the window more room than a
+    // diagnostic picker is worth.
     /// Log level picker entry for `error`.
     pub log_level_error: &'static str,
     /// Log level picker entry for `warn`.
@@ -688,14 +690,14 @@ pub(crate) const GERMAN: Strings = Strings {
     unit_seconds_inactivity: "s",
     log_check: "Protokolldatei schreiben",
     label_log_level: "Stufe:",
-    log_level_error: "error (Fehler)",
-    log_level_warn: "warn (Warnung)",
-    log_level_info: "info (Info)",
-    log_level_debug: "debug (Debug)",
-    log_level_trace: "trace (Ablaufverfolgung)",
+    log_level_error: "error",
+    log_level_warn: "warn",
+    log_level_info: "info",
+    log_level_debug: "debug",
+    log_level_trace: "trace",
     hint_logging: "(Protokolländerungen gelten nach dem Neustart; debug und darunter protokollieren Monitor-Seriennummern und Pfade)",
     footer_links: "<a>Konfigurationsdatei öffnen</a> \u{b7} <a>Protokollordner öffnen</a>",
-    button_restore_defaults: "Standardwerte wiederherstellen",
+    button_restore_defaults: "Auf Standard zurücksetzen",
     button_close: "Schließen",
     window_title: "darkbright-helper Einstellungen",
 
@@ -714,7 +716,7 @@ pub(crate) const GERMAN: Strings = Strings {
     msgbox_title_startup_error: "Startfehler",
     msgbox_title_hotkey_error: "Hotkey-Fehler",
     msgbox_title_autostart: "Autostart",
-    msgbox_title_restore_defaults: "Standardwerte wiederherstellen",
+    msgbox_title_restore_defaults: "Auf Standard zurücksetzen",
     msgbox_startup_failed_lead: "darkbright-helper konnte nicht gestartet werden:",
     msgbox_thread_spawn_advice: "Das System hat keinen Thread gestartet, was meist bedeutet, dass die Ressourcen knapp sind. Einige Anwendungen schließen oder den Computer neu starten und es erneut versuchen.",
     msgbox_hotkey_failed_lead: "Hotkeys konnten nicht registriert werden:",
@@ -1138,19 +1140,21 @@ mod tests {
     }
 
     #[test]
-    fn log_level_entries_lead_with_the_stored_token_in_every_language() {
+    fn log_level_entries_are_exactly_the_stored_tokens_in_every_language() {
         for &lang in Lang::ALL {
             let s = strings(lang);
-            for (token, shown) in [
+            for (token, entry) in [
                 ("error", s.log_level_error),
                 ("warn", s.log_level_warn),
                 ("info", s.log_level_info),
                 ("debug", s.log_level_debug),
                 ("trace", s.log_level_trace),
             ] {
-                assert!(
-                    shown.starts_with(token),
-                    "{lang:?}: log level entry {shown:?} must start with the stored token {token}"
+                assert_eq!(
+                    entry,
+                    token,
+                    "{}'s log level entry must be the token that goes into config.json",
+                    lang.tag()
                 );
             }
         }

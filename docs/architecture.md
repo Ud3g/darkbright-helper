@@ -1415,7 +1415,12 @@ Three conditions are visible in the tray: the two supervision give-up states
   do its job, and a missing diagnostic log does not stop a single adjustment,
   so letting it light the badge would weaken the signal for the conditions that
   do. A failed file log therefore shows in the menu and the tooltip, never on
-  the icon.
+  the icon. The tooltip's `NOTIFYICONDATAW.szTip` field holds 128 UTF-16 units
+  and only 127 are copied in; against that bound the worst case measures 99
+  units in English and 113 in German (all four warnings active at once), and a
+  test walks every warning combination in every shipped language so a
+  translation that grows past the limit fails the build instead of silently
+  truncating on a user's screen.
 
 Recovery follows §12 and differs per cause: a dead worker's warning clears on
 user activity or resume, an unresponsive worker's clears when the worker answers
@@ -1468,8 +1473,26 @@ dialog's own "Open config file" footer link (see "Message flow" below). The
 window exposes every existing config option plus a "Start with Windows"
 toggle, applies changes live, and follows the system light/dark theme like
 the tray menu already does. The Language picker is the first row of the
-General section, 120px wide; the window's base height is 654 logical px,
-before DPI scaling.
+General section, 120px wide.
+
+The window's geometry is measured, not authored as one fixed table. Every
+control's baseline position and size at 96 DPI still lives in a declarative
+table (`settings::layout::CONTROLS`), but the planner (`settings::plan::plan_layout`)
+turns that table plus live text measurements into the rectangles actually
+used. Rows fall into two label columns (A and B); each column's width is the
+larger of an authored floor (140px and 220px) and the widest caption actually
+measured for the running language and DPI, so English and German both sit at
+the floor while a wider translation pushes just its own column out. The
+control column that follows each label column derives its left edge from
+that width. Rows anchored to "stretch" (section headers, separators, the
+footer's config-file link) keep their authored right margin as the window
+widens instead of a fixed width. The footer's two buttons pack into a
+right-aligned chain sized to their own captions, and the version line takes
+whatever space is left before that chain. The client width is the largest of
+everything those rows need and a 400px floor (`BASE_WINDOW_WIDTH`); the base
+height is 654 logical px before DPI scaling, growing only when one of the
+window's two wrapping hints needs more lines than its authored height
+allows.
 
 **Own thread — load-bearing, not stylistic.** The window is spawned on a
 dedicated thread with its own `GetMessageW` loop, the same pattern the tray
@@ -1715,10 +1738,33 @@ failed registry write reverts the checkbox and shows an inline notice.
 version row (§13), greyed, in the space left of the buttons. It is the one
 control whose caption is not a constant in the layout table — the string only
 exists once the build has run — so control creation substitutes it for that
-single id. Its width is what remains before "Restore defaults", which bounds
-what it can show: the longest realistic string, a three-digit commit count on
-a dirty tree, measures 165px in the dialog font at 96 DPI against 172px of
-room. A released build needs 30px of it.
+single id, and the planner measures that same string to size its slot. Its
+width is no longer a fixed allotment: it is whatever the footer's other
+elements (the margins, the two buttons, the gaps between them) leave, and
+because the footer's total requirement is one of the inputs to the window's
+own width, a long development build string widens the window instead of
+being clipped. Re-measured NUL-free at 96 DPI in the dialog font: `v0.10.0`
+is 36px, `Close` 35px, `Restore defaults` 84px, and its German translation
+`Auf Standard zurücksetzen` 140px. An English release footer needs 264px and
+its German counterpart 320px, both under the 400px floor, so the floor
+decides the window's width in a released build; a
+development build's longer string (`v0.10.0+64.gc4687e5.dirty (dev)`, 165px)
+needs 393px, still under the floor. In German, the equivalent development
+footer needs 449px, and the window grows to that width — a released build's
+shorter string does not, so the two languages need different real widths only
+in a development build.
+
+**A pre-existing overrun, not a new one.** The layout gate that runs in CI
+(`settings::plan`'s tests) holds the planned client size under 560×700
+logical px across every shipped language and DPI it plans for — a
+do-not-get-worse bound, not proof the window fits any given screen. At
+today's 654-logical-px baseline, converting a 654px-tall client through
+`AdjustWindowRectExForDpi` at 144 DPI (150% scaling) already yields roughly a
+1037px-tall outer window against roughly 1008px of usable height on a
+1920×1080 monitor's work area at that scaling. That overrun predates this
+measured layout and is mitigated, not fixed, by the placement clamp described
+above: the window's top-left corner stays pinned inside the work area rather
+than being centred off it.
 
 **Module placement.** `src/platform/windows/settings/` is a directory
 module: `mod.rs` (module wiring, `pub use` re-exports), `layout.rs`
@@ -1784,7 +1830,10 @@ error and a failed restore together takes its connective wording from
 `hotkey_status_restore_also_failed_fmt`, and only the two embedded details stay English. The
 canonical hotkey format (§3) and the log-level tokens (§8), because both round-trip through
 `config.json` — the picker's entries and `ParsedHotkey::display_text` are display-only, and the
-stored value is resolved from the combo's selected index, never from its text. Config field names,
+stored value is resolved from the combo's selected index, never from its text. The rule would
+permit a translation in parentheses alongside the token, but the picker shows the bare token in
+every language instead: the longest gloss needs roughly twice the combo's width, and widening the
+combo would cost the window more room than a diagnostic picker is worth. Config field names,
 the product name, and the EDID fallback model name (`"Generic Monitor"`), which is part of a
 monitor's identity rather than a caption.
 
@@ -2036,6 +2085,19 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
 - Hand-edit `"language": "fr"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
-- Note which German labels truncate; that list is the input for the layout-hardening cycle.
+- Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
+
+#### Measured Layout at High DPI (German) Test
+
+Uses the same installed-instance swap the other manual procedures in this section rely on: stop any installed copy first (the single-instance guard, §15, would otherwise reject the dev build) and restore it afterward.
+
+1. Set Windows to German, then open the settings window at each of 100%, 150% and 200% display scaling in turn (Settings → System → Display → Scale).
+2. **Expected** at every scaling: the version line renders in full in a development build, without being cut off; "Auf Standard zurücksetzen" is fully legible; the log-writing checkbox ("Protokolldatei schreiben") and its level label ("Stufe:") do not overlap.
+3. With the window open, switch Settings → Language between "Deutsch" and "English" repeatedly.
+   **Expected**: the window resizes to fit each language without moving from its current screen position, and no stale pixels from the previous layout remain visible.
+4. Drag the settings window across two monitors set to different DPI scalings, and trigger a further scaling change on one of them while the window straddles the boundary.
+   **Expected** (known, accepted): the new layout applies only on the DPI-change event that follows, not continuously while the window straddles both monitors.
+5. Repeat step 1 in German with a release-shaped version string: a build made from a clean checkout of a release tag — no commits ahead of it and no uncommitted changes, so `git describe` reports exactly the tag and `core::version::version_string()` (`src/core/version.rs`, fed by `build.rs`) returns the bare package version rather than the longer `+N.gHASH[.dirty] (dev)` form a development tree produces.
+   **Expected**: this is the geometry users actually receive. A development build's longer version string needs more width in German (449px, per §14) than a release string does — wide enough on its own to move the window off its 400px floor — so a pass that only ever exercises a development build would miss that most users see the narrower, floor-width window.
 
 ---

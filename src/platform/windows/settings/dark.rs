@@ -592,8 +592,9 @@ fn brush_lresult(brush: HBRUSH) -> LRESULT {
 
 /// Horizontal gap, in device pixels, between the checkbox glyph and its
 /// label text — matches the spacing a themed checkbox's own default paint
-/// uses.
-const CHECKBOX_TEXT_GAP: i32 = 4;
+/// uses. The layout planner reads it too, so the drawable text width it
+/// computes matches what this painter actually leaves for the caption.
+pub(super) const CHECKBOX_TEXT_GAP: i32 = 4;
 
 /// Whether `id` is one of the five checkboxes whose label needs hand-painting.
 #[must_use]
@@ -820,8 +821,10 @@ pub(super) fn paint_edit_border(hwnd: HWND) {
 const COMBO_SUBCLASS_ID: usize = 2;
 
 /// Horizontal inset, in device pixels, between the combo's client edge and
-/// where its text is drawn — matches a native combo's own left margin.
-const COMBO_TEXT_INSET: i32 = 4;
+/// where its text is drawn — matches a native combo's own left margin. The
+/// layout planner reads it too, so the drawable text width it computes
+/// matches what this painter actually uses.
+pub(super) const COMBO_TEXT_INSET: i32 = 4;
 
 /// Installs the log-level combo's dark-mode painting subclass. Called once at
 /// control creation; like the edits' subclass it checks the live dark flag on
@@ -1338,7 +1341,8 @@ fn draw_spin_button(hdc: HDC, rect: RECT, points_up: bool) {
 /// Half-width of the arrow glyph triangle, scaled to whichever half of the
 /// updown control (up or down) is smaller — keeps the glyph proportionate
 /// across DPI without needing its own DPI plumbing, since the button rect
-/// it is drawn into is already DPI-scaled by `layout()`.
+/// it is drawn into is already DPI-scaled by `apply()`, from the layout
+/// planner's output.
 #[must_use]
 fn arrow_half_width(rect: RECT) -> i32 {
     let smaller = (rect.right - rect.left).min(rect.bottom - rect.top);

@@ -12,13 +12,26 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::Controls::{UDACCEL, UDM_SETACCEL, UDM_SETRANGE32};
 use windows::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CB_GETITEMHEIGHT, CB_SETITEMHEIGHT, GetCursorPos, GetDlgItem, GetWindowRect, SWP_NOACTIVATE,
-    SWP_NOZORDER, SendMessageW, SetWindowPos, WS_BORDER, WS_CAPTION, WS_EX_TOPMOST, WS_GROUP,
-    WS_SYSMENU, WS_TABSTOP,
+    BeginDeferWindowPos, CB_GETITEMHEIGHT, CB_SETITEMHEIGHT, DeferWindowPos, EndDeferWindowPos,
+    GetCursorPos, GetDlgItem, GetWindowRect, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+    SendMessageW, SetWindowPos, WINDOW_EX_STYLE, WINDOW_STYLE, WS_BORDER, WS_CAPTION,
+    WS_EX_TOPMOST, WS_GROUP, WS_SYSMENU, WS_TABSTOP,
 };
 
-use crate::core::i18n::TextKey;
+use crate::core::i18n::{Lang, TextKey};
+use crate::core::version::version_string;
 use crate::error::{BrightnessError, Result};
+
+use super::measure::GdiMeasure;
+use super::plan::{Anchor, Col, Plan, plan_layout};
+
+/// The style and extended style the settings window is created with. Named
+/// here because the frame arithmetic (`AdjustWindowRectExForDpi`, in both
+/// the initial placement and every later resize) has to be told exactly the
+/// pair `CreateWindowExW` was given: a mismatch sizes the client area
+/// against the wrong non-client border, silently.
+pub(super) const SETTINGS_STYLE: WINDOW_STYLE = WINDOW_STYLE(WS_CAPTION.0 | WS_SYSMENU.0);
+pub(super) const SETTINGS_EX_STYLE: WINDOW_EX_STYLE = WS_EX_TOPMOST;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Control IDs
@@ -26,7 +39,7 @@ use crate::error::{BrightnessError, Result};
 // 100s = General, 110s = Hotkeys, 120s = On-screen display, 130s = Advanced,
 // 140s = footer. 200+ are decorative (section headers, separators, plain
 // text labels) — never addressed individually outside this module, but each
-// still needs a distinct id: `layout()` positions every control by
+// still needs a distinct id: [`apply`] positions every control by
 // `GetDlgItem(hwnd, id)`, which only ever finds the first match, so a shared
 // id would silently move just one control instead of all of them.
 
@@ -62,12 +75,12 @@ pub(super) const ID_CLOSE: u16 = 143;
 pub(super) const ID_VERSION: u16 = 144;
 
 const ID_HEADER_GENERAL: u16 = 200;
-const ID_SEP_GENERAL: u16 = 201;
+pub(super) const ID_SEP_GENERAL: u16 = 201;
 const ID_LABEL_STEP: u16 = 202;
-const ID_LABEL_STEP_UNIT: u16 = 203;
+pub(super) const ID_LABEL_STEP_UNIT: u16 = 203;
 const ID_HEADER_HOTKEYS: u16 = 204;
 const ID_SEP_HOTKEYS: u16 = 205;
-const ID_LABEL_HK_UP: u16 = 206;
+pub(super) const ID_LABEL_HK_UP: u16 = 206;
 const ID_LABEL_HK_DOWN: u16 = 207;
 const ID_HEADER_OSD: u16 = 208;
 const ID_SEP_OSD: u16 = 209;
@@ -79,7 +92,7 @@ const ID_HEADER_ADVANCED: u16 = 214;
 const ID_SEP_ADVANCED: u16 = 215;
 const ID_LABEL_RESYNC_UNIT: u16 = 216;
 const ID_LABEL_INACT_UNIT: u16 = 217;
-const ID_LABEL_LOG_LEVEL: u16 = 218;
+pub(super) const ID_LABEL_LOG_LEVEL: u16 = 218;
 const ID_LABEL_LANGUAGE: u16 = 219;
 
 /// Whether `id` is one of the four bold section-header labels, which need
@@ -90,6 +103,33 @@ pub(super) fn is_section_header(id: u16) -> bool {
         id,
         ID_HEADER_GENERAL | ID_HEADER_HOTKEYS | ID_HEADER_OSD | ID_HEADER_ADVANCED
     )
+}
+
+/// Whether `id` is one of the two explanatory statics that wrap onto more
+/// than one line, and so can grow taller when a translation is longer.
+/// Every other caption in the window is single-line at a fixed height.
+#[must_use]
+pub(super) fn wraps(id: u16) -> bool {
+    matches!(id, ID_HK_HINT | ID_LOG_HINT)
+}
+
+/// Whether `style` is a checkbox's. Checkboxes and pushbuttons share the
+/// `BUTTON` class, and only a checkbox spends width on an indicator its
+/// caption cannot use, so the style bits are the only way to tell them
+/// apart. The button type lives in the low four bits — `BS_PUSHBUTTON` is
+/// zero, so the test has to be for the checkbox value being present, not for
+/// the pushbutton value being absent.
+#[must_use]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the layout gate is the only caller; the painters learn a control's kind from its window handle instead"
+    )
+)]
+pub(super) fn is_checkbox(style: u32) -> bool {
+    const BS_TYPEMASK: u32 = 0xF;
+    style & BS_TYPEMASK == BS_AUTOCHECKBOX
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -142,7 +182,8 @@ const STYLE_DEFPUSHBUTTON: u32 = BS_DEFPUSHBUTTON | WS_TABSTOP.0;
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// One control's window class, style, 96-DPI-baseline geometry and initial
-/// text. `layout()` and `create_controls()` are the only readers; both walk
+/// text. `create_controls()` and the layout planner (`plan::plan_layout`,
+/// whose output `apply()` then positions) are the only readers; both walk
 /// [`CONTROLS`] in order, which is also creation order and therefore tab
 /// order (every focusable entry carries `WS_TABSTOP`, and `WS_GROUP` marks
 /// the first tab stop of each visual section).
@@ -151,18 +192,21 @@ pub(super) struct ControlSpec {
     pub(super) id: u16,
     pub(super) class: &'static str,
     pub(super) style: u32,
-    x: i32,
-    y: i32,
-    w: i32,
-    h: i32,
+    pub(super) x: i32,
+    pub(super) y: i32,
+    pub(super) w: i32,
+    pub(super) h: i32,
     /// The label to show, or `None` for controls whose text is set at runtime
     /// (edit fields, spinners, the version line) or that have none (separators).
     pub(super) text: Option<TextKey>,
+    /// How this control's position and width respond when a translation makes
+    /// the text around it wider; see `plan`.
+    pub(super) anchor: Anchor,
 }
 
 /// Base window client size at 96 DPI (100% scaling); see [`scale_dimension`].
-const BASE_WINDOW_WIDTH: i32 = 400;
-const BASE_WINDOW_HEIGHT: i32 = 654;
+pub(super) const BASE_WINDOW_WIDTH: i32 = 400;
+pub(super) const BASE_WINDOW_HEIGHT: i32 = 654;
 
 /// Every control in the settings window, at 96-DPI-baseline coordinates, in
 /// visual and creation order. See the module doc comment for why group
@@ -178,6 +222,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderGeneral),
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_GENERAL,
@@ -188,6 +233,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_LANGUAGE,
@@ -198,11 +244,14 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::LabelLanguage),
+        anchor: Anchor::Label(Col::B),
     },
     // 120 wide, unlike the log-level combo's 76: the English entry "System
     // default" plus the 17px dropdown arrow does not fit 76 at this font.
-    // The two combos in this column therefore end at different x positions;
-    // aligning the column properly is layout work for the next cycle.
+    // Each combo is sized to its own content by design — the log-level combo's
+    // 76 makes it end at 326, flush with the spinner rows' right edge, and
+    // there is no third edge the two could share without breaking either that
+    // alignment or this combo's fit.
     ControlSpec {
         id: ID_LANGUAGE,
         class: "COMBOBOX",
@@ -212,6 +261,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 120,
         h: 120,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_AUTOSTART,
@@ -222,6 +272,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 300,
         h: 20,
         text: Some(TextKey::Autostart),
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_STEP,
@@ -232,6 +283,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::LabelStep),
+        anchor: Anchor::Label(Col::B),
     },
     ControlSpec {
         id: ID_STEP_EDIT,
@@ -242,6 +294,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_STEP_UPDOWN,
@@ -252,6 +305,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_STEP_UNIT,
@@ -262,6 +316,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentStep),
+        anchor: Anchor::AfterControl(Col::B),
     },
     // ── Hotkeys ─────────────────────────────────────────────────────────
     ControlSpec {
@@ -273,6 +328,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderHotkeys),
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_HOTKEYS,
@@ -283,6 +339,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_HK_UP,
@@ -293,6 +350,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyUp),
+        anchor: Anchor::Label(Col::A),
     },
     ControlSpec {
         id: ID_HK_UP,
@@ -303,6 +361,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 218,
         h: 22,
         text: None,
+        anchor: Anchor::ControlStretch(Col::A),
     },
     ControlSpec {
         id: ID_LABEL_HK_DOWN,
@@ -313,6 +372,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelHotkeyDown),
+        anchor: Anchor::Label(Col::A),
     },
     ControlSpec {
         id: ID_HK_DOWN,
@@ -323,6 +383,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 218,
         h: 22,
         text: None,
+        anchor: Anchor::ControlStretch(Col::A),
     },
     ControlSpec {
         id: ID_INTERCEPT,
@@ -333,6 +394,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 20,
         text: Some(TextKey::Intercept),
+        anchor: Anchor::Stretch,
     },
     // Muted explainer text under the intercept checkbox.
     ControlSpec {
@@ -344,6 +406,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 328,
         h: 34,
         text: Some(TextKey::HintIntercept),
+        anchor: Anchor::Stretch,
     },
     // Inline hotkey status line, empty until handle_hotkey_message_text sets
     // it; whether it renders as an error (red) or a notice (muted) is a
@@ -357,6 +420,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 16,
         text: None,
+        anchor: Anchor::Stretch,
     },
     // ── On-screen display ───────────────────────────────────────────────
     ControlSpec {
@@ -368,6 +432,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderOsd),
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_OSD,
@@ -378,6 +443,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT,
@@ -388,6 +454,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelTimeout),
+        anchor: Anchor::Label(Col::B),
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_EDIT,
@@ -398,6 +465,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_OSD_TIMEOUT_UPDOWN,
@@ -408,6 +476,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_TIMEOUT_UNIT,
@@ -418,6 +487,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 30,
         h: 20,
         text: Some(TextKey::UnitMilliseconds),
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_OPACITY,
@@ -428,6 +498,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LabelOpacity),
+        anchor: Anchor::Label(Col::B),
     },
     ControlSpec {
         id: ID_OSD_OPACITY_EDIT,
@@ -438,6 +509,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_OSD_OPACITY_UPDOWN,
@@ -448,6 +520,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_OPACITY_UNIT,
@@ -458,6 +531,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitPercentOpacity),
+        anchor: Anchor::AfterControl(Col::B),
     },
     // ── Advanced ────────────────────────────────────────────────────────
     ControlSpec {
@@ -469,6 +543,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 16,
         text: Some(TextKey::HeaderAdvanced),
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_SEP_ADVANCED,
@@ -479,6 +554,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 376,
         h: 2,
         text: None,
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_RESYNC_CHECK,
@@ -489,6 +565,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::ResyncCheck),
+        anchor: Anchor::Checkbox(Col::B),
     },
     ControlSpec {
         id: ID_RESYNC_EDIT,
@@ -499,6 +576,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_RESYNC_UPDOWN,
@@ -509,6 +587,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_RESYNC_UNIT,
@@ -519,6 +598,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsResync),
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_INACT_CHECK,
@@ -529,6 +609,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 220,
         h: 20,
         text: Some(TextKey::InactivityCheck),
+        anchor: Anchor::Checkbox(Col::B),
     },
     ControlSpec {
         id: ID_INACT_EDIT,
@@ -539,6 +620,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 60,
         h: 22,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_INACT_UPDOWN,
@@ -549,6 +631,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 16,
         h: 22,
         text: None,
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LABEL_INACT_UNIT,
@@ -559,6 +642,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 20,
         h: 20,
         text: Some(TextKey::UnitSecondsInactivity),
+        anchor: Anchor::AfterControl(Col::B),
     },
     ControlSpec {
         id: ID_LOG_CHECK,
@@ -569,6 +653,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 140,
         h: 20,
         text: Some(TextKey::LogCheck),
+        anchor: Anchor::CheckboxRun,
     },
     // Same y as ID_LOG_CHECK's, not offset for its checkbox's own
     // vertical centering: a BUTTON checkbox centering its label per the
@@ -588,10 +673,12 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 74,
         h: 20,
         text: Some(TextKey::LabelLogLevel),
+        anchor: Anchor::InlineLabel,
     },
     // The combo's `h` is the height of the *dropped-down* list, a Win32
     // quirk: the closed control renders at the font's line height regardless
-    // of this value. See `no_two_controls_overlap`'s combo exemption below.
+    // of this value, which is why the planner's overlap check exempts the
+    // class.
     // `w: 76` matches the numeric edit+updown pair's combined width (60 +
     // 16) so the combo's right edge lands exactly where the spinner rows'
     // updown buttons end (250 + 76 = 326, same as 250 + 60 + 16 on those
@@ -606,6 +693,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 76,
         h: 120,
         text: None,
+        anchor: Anchor::Control(Col::B),
     },
     ControlSpec {
         id: ID_LOG_HINT,
@@ -616,6 +704,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 340,
         h: 32,
         text: Some(TextKey::HintLogging),
+        anchor: Anchor::Stretch,
     },
     // ── Footer ──────────────────────────────────────────────────────────
     // One SysLink carries both links as flowing text, `iLink` (0 = config
@@ -624,15 +713,19 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
     // separate control. SysLink markup: the visible text is exactly the
     // spec's wording; the `<a>` tags are SysLink's own syntax for "this span
     // is the hyperlink", not additional user-facing text.
+    // The row has always had the full width between the margins to draw in;
+    // the authored 250 was simply too narrow for its own text, which needs 177
+    // in English and 272 in German.
     ControlSpec {
         id: ID_LINK_CONFIG,
         class: "SysLink",
         style: STYLE_LINK_GROUP,
         x: 12,
         y: 584,
-        w: 250,
+        w: 376,
         h: 20,
         text: Some(TextKey::FooterLinks),
+        anchor: Anchor::Stretch,
     },
     ControlSpec {
         id: ID_RESTORE,
@@ -643,6 +736,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 110,
         h: 26,
         text: Some(TextKey::ButtonRestoreDefaults),
+        anchor: Anchor::FooterButton,
     },
     ControlSpec {
         id: ID_CLOSE,
@@ -653,15 +747,16 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 80,
         h: 26,
         text: Some(TextKey::ButtonClose),
+        anchor: Anchor::FooterButton,
     },
     // Which build is running, in the free space left of the buttons and
     // vertically centred against them. `text` is `None` because the string is
     // only known at build time: `window`'s control creation substitutes
     // `core::version` output for this one id.
     //
-    // `w` is what is left before "Restore defaults" starts, and it is the
-    // binding constraint; the width budget is measured in
-    // docs/architecture.md §14, "Version line".
+    // `w` is what is left before "Restore defaults" starts; the planner
+    // recomputes it from the measured version string, and widens the window
+    // when a development build's longer string does not fit.
     ControlSpec {
         id: ID_VERSION,
         class: "STATIC",
@@ -671,6 +766,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
         w: 172,
         h: 18,
         text: None,
+        anchor: Anchor::FooterFill,
     },
 ];
 
@@ -680,7 +776,7 @@ pub(super) const CONTROLS: &[ControlSpec] = &[
 /// whole [`CONTROLS`] table through it — is unit-testable without a live
 /// display.
 #[must_use]
-fn scale_dimension(px: i32, dpi: u32) -> i32 {
+pub(super) fn scale_dimension(px: i32, dpi: u32) -> i32 {
     let scaled = i64::from(px) * i64::from(dpi) / 96;
     i32::try_from(scaled).unwrap_or(px)
 }
@@ -707,22 +803,146 @@ pub(super) fn dpi_from_wparam(wparam: usize) -> u32 {
     u32::try_from(wparam & 0xFFFF).expect("value masked to 0xFFFF always fits in u32")
 }
 
-/// Positions every control in [`CONTROLS`] from its 96-DPI-baseline geometry
-/// scaled to `dpi`. Creation calls this once after all controls exist;
-/// `WM_DPICHANGED`'s handler calls it again, with the new DPI, for live
-/// relayout.
-pub(super) fn layout(hwnd: HWND, dpi: u32) {
-    for spec in CONTROLS {
-        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(spec.id)) }) else {
+/// The version line's caption, in the form the window actually shows it.
+///
+/// The label's text and the width the planner reserves for it both come
+/// from this one string, so the two cannot drift into a build whose version
+/// renders wider than its slot.
+#[must_use]
+pub(super) fn version_label() -> String {
+    format!("v{}", version_string())
+}
+
+/// Positions every control from `plan`, in one batch.
+///
+/// `SWP_NOZORDER` on every call is load-bearing rather than a default:
+/// z-order is tab order in this window (creation order, see [`CONTROLS`]),
+/// so a reordering here would silently change which control Tab reaches
+/// next, with nothing to catch it.
+///
+/// A lost `HDWP` from either `BeginDeferWindowPos` or `DeferWindowPos`
+/// discards the whole batch, and at creation — where every control is still
+/// at (0,0,0,0) — that would be a blank window. The per-control fallback
+/// degrades one control at a time instead, matching how the rest of this
+/// module fails.
+pub(super) fn apply(hwnd: HWND, plan: &Plan) {
+    if !apply_batched(hwnd, plan) {
+        apply_individually(hwnd, plan);
+    }
+}
+
+/// Queues every move into one `HDWP`. Returns `false` if the batch was lost
+/// at any point, in which case nothing has moved and the caller falls back.
+fn apply_batched(hwnd: HWND, plan: &Plan) -> bool {
+    let count = i32::try_from(plan.controls.len()).unwrap_or(0);
+    let Ok(mut hdwp) = (unsafe { BeginDeferWindowPos(count) }) else {
+        log::warn!("BeginDeferWindowPos failed; positioning settings controls individually");
+        return false;
+    };
+    for placed in &plan.controls {
+        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(placed.id)) }) else {
             continue;
         };
-        let x = scale_dimension(spec.x, dpi);
-        let y = scale_dimension(spec.y, dpi);
-        let w = scale_dimension(spec.w, dpi);
-        let h = scale_dimension(spec.h, dpi);
-        unsafe {
-            let _ = SetWindowPos(child, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        match unsafe {
+            DeferWindowPos(
+                hdwp,
+                child,
+                None,
+                placed.x,
+                placed.y,
+                placed.w,
+                placed.h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        } {
+            Ok(next) => hdwp = next,
+            Err(e) => {
+                log::warn!(error:% = e; "DeferWindowPos failed; positioning settings controls individually");
+                return false;
+            }
         }
+    }
+    if let Err(e) = unsafe { EndDeferWindowPos(hdwp) } {
+        log::warn!(error:% = e; "EndDeferWindowPos failed; positioning settings controls individually");
+        return false;
+    }
+    true
+}
+
+/// One `SetWindowPos` per control, for when the batched pass lost its
+/// `HDWP`.
+fn apply_individually(hwnd: HWND, plan: &Plan) {
+    for placed in &plan.controls {
+        let Ok(child) = (unsafe { GetDlgItem(Some(hwnd), i32::from(placed.id)) }) else {
+            continue;
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                child,
+                None,
+                placed.x,
+                placed.y,
+                placed.w,
+                placed.h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+/// Measures `lang`'s captions, plans the layout for `dpi`, applies it, and
+/// resizes the window's client area to match.
+///
+/// Creation does not call this — it plans before `CreateWindowExW` so the
+/// window is never the wrong size, not even for a frame. `WM_DPICHANGED`
+/// and a language change do, because both invalidate every measurement.
+pub(super) fn relayout(hwnd: HWND, dpi: u32, lang: Lang) {
+    let Some(mut measure) = GdiMeasure::new(dpi) else {
+        log::warn!(dpi; "No measurement context; leaving the settings layout as it is");
+        return;
+    };
+    let plan = plan_layout(lang, dpi, &version_label(), &mut measure);
+    apply(hwnd, &plan);
+    resize_client(hwnd, &plan);
+}
+
+/// Grows or shrinks the window's frame to hold `plan`'s client area, without
+/// moving it.
+///
+/// Never moving is deliberate and covers both callers: a DPI change arrives
+/// with a position Windows suggested and the handler has already applied,
+/// and a language change must leave a window the user dragged exactly where
+/// they put it. The one place that chooses a position is the initial
+/// placement, which runs before the window exists.
+fn resize_client(hwnd: HWND, plan: &Plan) {
+    let mut rect = RECT {
+        left: 0,
+        top: 0,
+        right: plan.client_w,
+        bottom: plan.client_h,
+    };
+    if let Err(e) = unsafe {
+        AdjustWindowRectExForDpi(
+            &raw mut rect,
+            SETTINGS_STYLE,
+            false,
+            SETTINGS_EX_STYLE,
+            plan.dpi,
+        )
+    } {
+        log::warn!(error:% = e; "AdjustWindowRectExForDpi failed; leaving the settings frame size alone");
+        return;
+    }
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 }
 
@@ -942,27 +1162,39 @@ pub(super) fn configure_combo_height(hwnd: HWND) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// The settings window's outer rect (position + size, in screen
-/// coordinates) plus the DPI it was computed for. A named struct rather
-/// than a same-typed tuple: `x`/`y`/`w`/`h`/`dpi` all being `i32`/`u32`
-/// makes a positional tuple a transposition hazard worth avoiding even
-/// though [`compute_placement`] is currently its only call site.
+/// coordinates). A named struct rather than a same-typed tuple: `x`/`y`/
+/// `w`/`h` all being `i32` makes a positional tuple a transposition hazard
+/// worth avoiding even though [`compute_placement`] is currently its only
+/// call site.
 pub(super) struct Placement {
     pub(super) x: i32,
     pub(super) y: i32,
     pub(super) w: i32,
     pub(super) h: i32,
-    pub(super) dpi: u32,
 }
 
-/// Computes [`Placement`]: centered on the *work area* (`rcWork`, which
-/// excludes the taskbar — the same area shell dialogs center on) of the
-/// monitor under the cursor, clamped so the window's top-left corner is
-/// always inside that work area even when the work area is smaller than the
-/// window itself. Geometry is computed before `CreateWindowExW` — new
-/// sequencing versus `osd.rs`, which creates once with `CW_USEDEFAULT` and
-/// positions per show; this window instead needs its final DPI known before
-/// creation so `layout()` only ever runs once at the right scale.
-pub(super) fn compute_placement() -> Result<Placement> {
+/// The monitor the settings window will open on: the work area to centre
+/// on and the DPI to plan and measure for.
+///
+/// Resolved once and then passed around, because the layout has to be
+/// planned at the target DPI *before* a placement can be computed from its
+/// size — resolving the monitor twice would risk answering for two
+/// different ones if the cursor moved in between.
+pub(super) struct TargetMonitor {
+    pub(super) dpi: u32,
+    /// `rcWork`, which excludes the taskbar — the same area shell dialogs
+    /// centre on.
+    work: RECT,
+}
+
+/// Resolves the monitor under the cursor.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if the cursor position cannot be
+/// read. A monitor that reports neither its DPI nor its work area is not
+/// fatal: 96 DPI and an empty work area still place a usable window.
+pub(super) fn target_monitor() -> Result<TargetMonitor> {
     let mut cursor = POINT::default();
     unsafe { GetCursorPos(&raw mut cursor) }
         .map_err(|e| BrightnessError::windows_api("GetCursorPos", e.code().0.cast_unsigned()))?;
@@ -976,7 +1208,6 @@ pub(super) fn compute_placement() -> Result<Placement> {
     {
         log::warn!(error:% = e; "GetDpiForMonitor failed, assuming 96 DPI");
     }
-    let dpi = dpi_x;
 
     let mut mi = MONITORINFO {
         cbSize: u32::try_from(std::mem::size_of::<MONITORINFO>()).unwrap_or(0),
@@ -986,9 +1217,46 @@ pub(super) fn compute_placement() -> Result<Placement> {
         log::warn!(error_code = super::super::get_last_error_code(); "GetMonitorInfoW failed; placement may be off-screen");
     }
 
-    let client_w = scale_dimension(BASE_WINDOW_WIDTH, dpi);
-    let client_h = scale_dimension(BASE_WINDOW_HEIGHT, dpi);
+    Ok(TargetMonitor {
+        dpi: dpi_x,
+        work: mi.rcWork,
+    })
+}
 
+/// Top-left corner for a window of `outer_w` × `outer_h` centred on `work`,
+/// clamped so the corner stays inside even when the window is larger than
+/// the work area — this window is unusually tall, and at high DPI on a
+/// short work area (150% on 1920x1080, say) that upper bound is what
+/// actually binds.
+#[must_use]
+fn clamp_into(work: RECT, outer_w: i32, outer_h: i32) -> (i32, i32) {
+    let x_centered = work.left + ((work.right - work.left) - outer_w) / 2;
+    let y_centered = work.top + ((work.bottom - work.top) - outer_h) / 2;
+    (
+        x_centered.clamp(work.left, (work.right - outer_w).max(work.left)),
+        y_centered.clamp(work.top, (work.bottom - outer_h).max(work.top)),
+    )
+}
+
+/// Computes [`Placement`] for a client area of `client_w` × `client_h` on
+/// `target`: the frame that holds it, centred on the monitor's work area
+/// and clamped into it by [`clamp_into`].
+///
+/// The client size is the planner's, not a constant, and the whole geometry
+/// is computed before `CreateWindowExW` — new sequencing versus `osd.rs`,
+/// which creates once with `CW_USEDEFAULT` and positions per show; this
+/// window instead opens at its final measured size rather than being
+/// resized into it afterwards.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if the frame size cannot be
+/// derived from the client size.
+pub(super) fn compute_placement(
+    target: &TargetMonitor,
+    client_w: i32,
+    client_h: i32,
+) -> Result<Placement> {
     let mut rect = RECT {
         left: 0,
         top: 0,
@@ -998,10 +1266,10 @@ pub(super) fn compute_placement() -> Result<Placement> {
     unsafe {
         AdjustWindowRectExForDpi(
             &raw mut rect,
-            WS_CAPTION | WS_SYSMENU,
+            SETTINGS_STYLE,
             false,
-            WS_EX_TOPMOST,
-            dpi,
+            SETTINGS_EX_STYLE,
+            target.dpi,
         )
     }
     .map_err(|e| {
@@ -1010,25 +1278,13 @@ pub(super) fn compute_placement() -> Result<Placement> {
 
     let outer_w = rect.right - rect.left;
     let outer_h = rect.bottom - rect.top;
-
-    let work = mi.rcWork;
-    let x_centered = work.left + ((work.right - work.left) - outer_w) / 2;
-    let y_centered = work.top + ((work.bottom - work.top) - outer_h) / 2;
-    // Clamp to [work.left, work.right - outer_w] (and the same on the y
-    // axis): the upper bound is floored at work.left via `.max` so a window
-    // taller/wider than the work area still starts at the work area's
-    // top-left corner instead of being pushed above/left of it — this
-    // window is unusually tall, so at high DPI on a short work area (e.g.
-    // 150% on 1920x1080) that upper bound is what actually binds.
-    let x = x_centered.clamp(work.left, (work.right - outer_w).max(work.left));
-    let y = y_centered.clamp(work.top, (work.bottom - outer_h).max(work.top));
+    let (x, y) = clamp_into(target.work, outer_w, outer_h);
 
     Ok(Placement {
         x,
         y,
         w: outer_w,
         h: outer_h,
-        dpi,
     })
 }
 
@@ -1116,65 +1372,19 @@ mod tests {
         assert_eq!(dpi_from_wparam(144), 144);
     }
 
-    /// Whether `class` is exempt from the overlap check: a combo box's `h`
-    /// is the height of its *dropped-down* list (a documented Win32 quirk —
-    /// see the `ID_LOG_LEVEL` comment in `CONTROLS`), not the closed
-    /// control's footprint, so its declared rect legitimately extends over
-    /// controls below it without a real visual collision.
-    fn overlap_exempt(class: &str) -> bool {
-        class == "COMBOBOX"
-    }
-
-    fn rects_overlap(a: &ControlSpec, b: &ControlSpec) -> bool {
-        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-    }
-
-    /// `spec` scaled to `dpi` — same fields, just run through
-    /// `scale_dimension` — so overlap checks can reuse [`rects_overlap`] on
-    /// the geometry `layout()` would actually produce at that DPI, not only
-    /// on the 96-DPI baseline table.
-    fn scaled(spec: &ControlSpec, dpi: u32) -> ControlSpec {
-        ControlSpec {
-            x: scale_dimension(spec.x, dpi),
-            y: scale_dimension(spec.y, dpi),
-            w: scale_dimension(spec.w, dpi),
-            h: scale_dimension(spec.h, dpi),
-            ..*spec
-        }
-    }
-
-    fn assert_no_overlap_at(dpi: u32) {
-        let scaled: Vec<ControlSpec> = CONTROLS.iter().map(|c| scaled(c, dpi)).collect();
-        for (i, a) in scaled.iter().enumerate() {
-            for b in &scaled[i + 1..] {
-                if overlap_exempt(a.class) || overlap_exempt(b.class) {
-                    continue;
-                }
-                assert!(
-                    !rects_overlap(a, b),
-                    "controls {} and {} overlap at {dpi} dpi: {:?} vs {:?}",
-                    a.id,
-                    b.id,
-                    a,
-                    b
-                );
-            }
-        }
-    }
-
     #[test]
-    fn no_two_controls_overlap() {
-        assert_no_overlap_at(96);
-    }
-
-    #[test]
-    fn no_two_controls_overlap_at_125_percent() {
-        assert_no_overlap_at(120);
-    }
-
-    #[test]
-    fn no_two_controls_overlap_at_150_percent() {
-        assert_no_overlap_at(144);
+    fn the_work_area_clamp_keeps_a_window_inside_it() {
+        // Work area 0..1000 x 0..800, window larger than it on both axes:
+        // the top-left corner must stay inside rather than being pushed
+        // above and left of it.
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1000,
+            bottom: 800,
+        };
+        assert_eq!(clamp_into(work, 400, 654), (300, 73));
+        assert_eq!(clamp_into(work, 1200, 900), (0, 0));
     }
 
     #[test]
@@ -1225,25 +1435,6 @@ mod tests {
     }
 
     #[test]
-    fn every_tabstop_control_fits_inside_the_client_rect() {
-        // A bounds check, not a membership check — despite the name (kept
-        // for continuity with the invariant it was written to guard), every
-        // entry is checked, not just WS_TABSTOP ones: a decorative label
-        // that overflows the window clips just as visibly as a control
-        // someone could tab to.
-        for spec in CONTROLS {
-            assert!(
-                spec.x >= 0 && spec.x + spec.w <= BASE_WINDOW_WIDTH,
-                "{spec:?} exceeds window width"
-            );
-            assert!(
-                spec.y >= 0 && spec.y + spec.h <= BASE_WINDOW_HEIGHT,
-                "{spec:?} exceeds window height"
-            );
-        }
-    }
-
-    #[test]
     fn the_language_row_leads_the_general_section_and_shifts_the_rest_by_one_row() {
         let spec = |id: u16| {
             CONTROLS
@@ -1264,99 +1455,6 @@ mod tests {
         assert_eq!(spec(ID_LOG_LEVEL).y, 510);
         assert_eq!(spec(ID_CLOSE).y, 616);
         assert_eq!(BASE_WINDOW_HEIGHT, 654);
-    }
-
-    /// Strips `SysLink`'s `<a>`/`</a>` anchor markup: it is the control's own
-    /// hyperlink syntax, never text the control draws, so measuring it as
-    /// visible width would overstate what the user actually sees.
-    fn strip_syslink_markup(text: &str) -> String {
-        text.replace("<a>", "").replace("</a>", "")
-    }
-
-    /// Prints every label whose text, measured at 96 DPI in the window's
-    /// own fonts, is wider than its control. Ignored because German is
-    /// known to overflow today; the hardening cycle turns this into a gate.
-    /// Run: `cargo test --locked report_label_overflow -- --ignored --nocapture`
-    #[test]
-    #[ignore = "diagnostic: prints the overflow record for the layout-hardening cycle"]
-    fn report_label_overflow() {
-        use super::super::window::{build_font, wide};
-        use crate::core::i18n::{Lang, strings};
-        use windows::Win32::Graphics::Gdi::{
-            DT_CALCRECT, DT_SINGLELINE, DT_WORDBREAK, DeleteObject, DrawTextW, GetDC, ReleaseDC,
-            SelectObject,
-        };
-        use windows::Win32::Graphics::Gdi::{FW_BOLD, FW_NORMAL};
-
-        let dpi = 96;
-        let regular = build_font(dpi, FW_NORMAL);
-        let bold = build_font(dpi, FW_BOLD);
-        let hdc = unsafe { GetDC(None) };
-        assert!(!hdc.is_invalid(), "no screen DC");
-
-        let hints = [ID_HK_HINT, ID_LOG_HINT];
-        println!("| lang | id | text | available | measured | overflow |");
-        println!("|---|---|---|---|---|---|");
-        for &lang in Lang::ALL {
-            let s = strings(lang);
-            for spec in CONTROLS {
-                let Some(key) = spec.text else { continue };
-                let raw_text = s.get(key);
-                let text = if spec.class == "SysLink" {
-                    strip_syslink_markup(raw_text)
-                } else {
-                    raw_text.to_string()
-                };
-                let font = if is_section_header(spec.id) {
-                    bold
-                } else {
-                    regular
-                };
-                let mut buf = wide(&text);
-                let is_hint = hints.contains(&spec.id);
-                let mut rect = RECT {
-                    left: 0,
-                    top: 0,
-                    right: if is_hint { spec.w } else { 0 },
-                    bottom: 0,
-                };
-                let flags = if is_hint {
-                    DT_CALCRECT | DT_WORDBREAK
-                } else {
-                    DT_CALCRECT | DT_SINGLELINE
-                };
-                // SAFETY: `hdc` is a valid screen DC obtained above and released
-                // below; `font` is one of the two GDI fonts built above and
-                // still owned at this point; `buf` outlives the call and
-                // DrawTextW only reads the number of code units its own length
-                // reports.
-                unsafe {
-                    let old = SelectObject(hdc, font.into());
-                    DrawTextW(hdc, &mut buf, &raw mut rect, flags);
-                    SelectObject(hdc, old);
-                }
-                let (available, measured) = if is_hint {
-                    (spec.h, rect.bottom - rect.top)
-                } else {
-                    (spec.w, rect.right - rect.left)
-                };
-                if measured > available {
-                    println!(
-                        "| {} | {} | {text} | {available} | {measured} | +{} |",
-                        lang.tag(),
-                        spec.id,
-                        measured - available
-                    );
-                }
-            }
-        }
-        // SAFETY: releases the DC obtained via GetDC above and frees the two
-        // fonts built above; each is dropped exactly once, after its last use.
-        unsafe {
-            ReleaseDC(None, hdc);
-            let _ = DeleteObject(regular.into());
-            let _ = DeleteObject(bold.into());
-        }
     }
 
     #[test]
