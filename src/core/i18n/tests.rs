@@ -297,144 +297,158 @@ fn all_is_sorted_by_native_name() {
     assert_eq!(names, sorted, "Lang::ALL must stay in native-name order");
 }
 
+const GERMAN_SAME_AS_ENGLISH: &[&str] = &[
+    "header_hotkeys",
+    "key_mod_alt",
+    "key_mod_win",
+    "key_separator",
+    "key_tab",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "unit_seconds_resync",
+    "unit_seconds_inactivity",
+    "msgbox_title_autostart",
+];
+
+const FRENCH_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_win",
+    "key_separator",
+    "key_tab",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "unit_seconds_resync",
+    "unit_seconds_inactivity",
+];
+
+const PORTUGUESE_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_shift",
+    "key_mod_win",
+    "key_separator",
+    "key_home",
+    "key_end",
+    "key_insert",
+    "key_delete",
+    "key_tab",
+    "key_enter",
+    "key_backspace",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "unit_seconds_resync",
+    "unit_seconds_inactivity",
+];
+
+// Matches Portuguese's list today; a coincidence, not a shared rule, so it
+// stays a separate const rather than a shared reference that would make a
+// future correction to either list silently change both.
+const VIETNAMESE_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_shift",
+    "key_mod_win",
+    "key_separator",
+    "key_home",
+    "key_end",
+    "key_insert",
+    "key_delete",
+    "key_tab",
+    "key_enter",
+    "key_backspace",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "unit_seconds_resync",
+    "unit_seconds_inactivity",
+];
+
+const SPANISH_SAME_AS_ENGLISH: &[&str] = &[
+    "header_general",
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_win",
+    "key_separator",
+    "key_tab",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "unit_seconds_resync",
+    "unit_seconds_inactivity",
+];
+
+const INDONESIAN_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_shift",
+    "key_mod_win",
+    "key_separator",
+    "key_page_up",
+    "key_page_down",
+    "key_home",
+    "key_end",
+    "key_insert",
+    "key_delete",
+    "key_tab",
+    "key_enter",
+    "key_backspace",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "label_log_level",
+];
+
+const RUSSIAN_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_shift",
+    "key_mod_win",
+    "key_separator",
+    "key_home",
+    "key_end",
+    "key_insert",
+    "key_delete",
+    "key_tab",
+    "key_backspace",
+    "unit_percent_step",
+    "unit_percent_opacity",
+];
+
+const TURKISH_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_shift",
+    "key_mod_win",
+    "key_separator",
+    "key_home",
+    "key_end",
+    "key_insert",
+    "key_delete",
+    "key_enter",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+];
+
 /// Fields a language deliberately leaves identical to English. A field that
 /// matches English without being listed here is most likely one nobody
 /// translated. The `match` has no wildcard arm, so a new language fails to
 /// compile here until its list is written.
-// One arm per shipped language; the list only grows as languages are added.
-#[expect(clippy::too_many_lines)]
 fn same_as_english(lang: Lang) -> &'static [&'static str] {
     match lang {
         Lang::English => &[],
-        Lang::German => &[
-            "header_hotkeys",
-            "key_mod_alt",
-            "key_mod_win",
-            "key_separator",
-            "key_tab",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-            "unit_seconds_resync",
-            "unit_seconds_inactivity",
-            "msgbox_title_autostart",
-        ],
-        Lang::French => &[
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_win",
-            "key_separator",
-            "key_tab",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-            "unit_seconds_resync",
-            "unit_seconds_inactivity",
-        ],
-        Lang::Portuguese => &[
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_shift",
-            "key_mod_win",
-            "key_separator",
-            "key_home",
-            "key_end",
-            "key_insert",
-            "key_delete",
-            "key_tab",
-            "key_enter",
-            "key_backspace",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-            "unit_seconds_resync",
-            "unit_seconds_inactivity",
-        ],
-        // Each language's list is its own decision; Vietnamese's happening to
-        // match Portuguese's today is a coincidence, not a shared rule.
-        #[expect(clippy::match_same_arms)]
-        Lang::Vietnamese => &[
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_shift",
-            "key_mod_win",
-            "key_separator",
-            "key_home",
-            "key_end",
-            "key_insert",
-            "key_delete",
-            "key_tab",
-            "key_enter",
-            "key_backspace",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-            "unit_seconds_resync",
-            "unit_seconds_inactivity",
-        ],
-        Lang::Spanish => &[
-            "header_general",
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_win",
-            "key_separator",
-            "key_tab",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-            "unit_seconds_resync",
-            "unit_seconds_inactivity",
-        ],
-        Lang::Indonesian => &[
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_shift",
-            "key_mod_win",
-            "key_separator",
-            "key_page_up",
-            "key_page_down",
-            "key_home",
-            "key_end",
-            "key_insert",
-            "key_delete",
-            "key_tab",
-            "key_enter",
-            "key_backspace",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-            "label_log_level",
-        ],
-        Lang::Russian => &[
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_shift",
-            "key_mod_win",
-            "key_separator",
-            "key_home",
-            "key_end",
-            "key_insert",
-            "key_delete",
-            "key_tab",
-            "key_backspace",
-            "unit_percent_step",
-            "unit_percent_opacity",
-        ],
-        Lang::Turkish => &[
-            "key_mod_ctrl",
-            "key_mod_alt",
-            "key_mod_shift",
-            "key_mod_win",
-            "key_separator",
-            "key_home",
-            "key_end",
-            "key_insert",
-            "key_delete",
-            "key_enter",
-            "unit_percent_step",
-            "unit_milliseconds",
-            "unit_percent_opacity",
-        ],
+        Lang::German => GERMAN_SAME_AS_ENGLISH,
+        Lang::French => FRENCH_SAME_AS_ENGLISH,
+        Lang::Portuguese => PORTUGUESE_SAME_AS_ENGLISH,
+        Lang::Vietnamese => VIETNAMESE_SAME_AS_ENGLISH,
+        Lang::Spanish => SPANISH_SAME_AS_ENGLISH,
+        Lang::Indonesian => INDONESIAN_SAME_AS_ENGLISH,
+        Lang::Russian => RUSSIAN_SAME_AS_ENGLISH,
+        Lang::Turkish => TURKISH_SAME_AS_ENGLISH,
     }
 }
 
@@ -544,6 +558,10 @@ fn lookup_truncates_subtags_from_the_right() {
     assert_eq!(Lang::lookup("de-AT-1901"), Some(Lang::German));
     assert_eq!(Lang::lookup("en-GB"), Some(Lang::English));
     assert_eq!(Lang::lookup("ja-JP"), None);
+    // Every pt-* tag resolves to the one shipped Portuguese table (Brazilian
+    // Portuguese), pt-PT included — see `Lang::Portuguese`'s doc comment.
+    assert_eq!(Lang::lookup("pt-PT"), Some(Lang::Portuguese));
+    assert_eq!(Lang::lookup("pt-BR"), Some(Lang::Portuguese));
 }
 
 #[test]
@@ -662,18 +680,9 @@ fn log_level_entries_are_exactly_the_stored_tokens_in_every_language() {
 /// original language's words — in every other one.
 #[test]
 fn every_hotkey_status_key_round_trips_and_translates_across_every_language() {
-    const KEYS: &[HotkeyStatusKey] = &[
-        HotkeyStatusKey::Unreachable,
-        HotkeyStatusKey::NoResponse,
-        HotkeyStatusKey::UnknownError,
-        HotkeyStatusKey::InterceptionUnavailable,
-        HotkeyStatusKey::RejectNoModifier,
-        HotkeyStatusKey::RejectUnnameableKey,
-        HotkeyStatusKey::RejectDuplicate,
-    ];
     for &shown_in in Lang::ALL {
         let shown = strings(shown_in);
-        for &key in KEYS {
+        for key in HotkeyStatusKey::ALL {
             let message = key.text(shown);
             assert_eq!(
                 HotkeyStatusKey::matching(message, shown),
@@ -682,13 +691,59 @@ fn every_hotkey_status_key_round_trips_and_translates_across_every_language() {
             );
             for &switch_to in Lang::ALL {
                 let target = strings(switch_to);
-                assert_eq!(
-                    hotkey_status_text(Some(key), target),
-                    key.text(target),
-                    "{key:?} shown in {shown_in:?} did not translate to {switch_to:?}"
-                );
+                // The round trip above only proves the key survives a
+                // switch; this proves the redraw actually uses switch_to's
+                // words instead of carrying shown_in's over unchanged.
+                if switch_to != shown_in && key.text(target) != message {
+                    assert_ne!(
+                        hotkey_status_text(Some(key), target),
+                        message,
+                        "{key:?} shown in {shown_in:?} kept its {shown_in:?} words after switching to {switch_to:?}"
+                    );
+                }
             }
         }
+    }
+}
+
+/// [`HotkeyStatusKey::text`] has a match with no wildcard arm, so a variant
+/// missing from [`HotkeyStatusKey::ALL`] fails to compile here — the same
+/// idiom as `every_language_variant_appears_in_all` above.
+#[test]
+fn every_hotkey_status_key_variant_appears_in_all() {
+    for key in [
+        HotkeyStatusKey::Unreachable,
+        HotkeyStatusKey::NoResponse,
+        HotkeyStatusKey::UnknownError,
+        HotkeyStatusKey::InterceptionUnavailable,
+        HotkeyStatusKey::RejectNoModifier,
+        HotkeyStatusKey::RejectUnnameableKey,
+        HotkeyStatusKey::RejectDuplicate,
+    ] {
+        let listed = match key {
+            HotkeyStatusKey::Unreachable => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::Unreachable)
+            }
+            HotkeyStatusKey::NoResponse => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::NoResponse)
+            }
+            HotkeyStatusKey::UnknownError => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::UnknownError)
+            }
+            HotkeyStatusKey::InterceptionUnavailable => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::InterceptionUnavailable)
+            }
+            HotkeyStatusKey::RejectNoModifier => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::RejectNoModifier)
+            }
+            HotkeyStatusKey::RejectUnnameableKey => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::RejectUnnameableKey)
+            }
+            HotkeyStatusKey::RejectDuplicate => {
+                HotkeyStatusKey::ALL.contains(&HotkeyStatusKey::RejectDuplicate)
+            }
+        };
+        assert!(listed, "{key:?} is missing from HotkeyStatusKey::ALL");
     }
 }
 

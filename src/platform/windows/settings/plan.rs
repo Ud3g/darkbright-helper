@@ -474,7 +474,7 @@ mod tests {
     use super::super::measure::GdiMeasure;
     use super::super::window::{language_combo_entries, log_level_combo_entries};
     use super::*;
-    use crate::core::i18n::{Lang, strings};
+    use crate::core::i18n::{HotkeyStatusKey, Lang, strings};
 
     /// Measures a fixed width per character, so an assertion can be read
     /// without knowing any font's metrics.
@@ -976,20 +976,14 @@ mod tests {
         }
     }
 
-    /// The fixed messages the hotkey status line can show in `lang`. The
-    /// rebind failure that embeds error details is left out: its length
-    /// depends on the English detail it carries, so no budget can hold it.
+    /// The fixed messages the hotkey status line can show in `lang`, built
+    /// from [`HotkeyStatusKey::ALL`] so a variant added there is gated here
+    /// too. The rebind failure that embeds error details is left out: its
+    /// length depends on the English detail it carries, so no budget can
+    /// hold it.
     fn status_line_texts(lang: Lang) -> [&'static str; 7] {
         let s = strings(lang);
-        [
-            s.capture_reject_no_modifier,
-            s.capture_reject_unnameable_key,
-            s.capture_reject_duplicate,
-            s.hotkey_status_unreachable,
-            s.hotkey_status_no_response,
-            s.hotkey_status_unknown_error,
-            s.hotkey_notice_interception_unavailable,
-        ]
+        HotkeyStatusKey::ALL.map(|key| key.text(s))
     }
 
     #[test]

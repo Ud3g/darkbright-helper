@@ -603,8 +603,10 @@ pub(crate) enum HotkeyStatusKey {
 }
 
 impl HotkeyStatusKey {
-    /// Every variant, for [`Self::matching`]'s reverse lookup.
-    const ALL: [Self; 7] = [
+    /// Every variant, for [`Self::matching`]'s reverse lookup, the settings
+    /// layout gate's fixed-message list (`settings::plan`), and the test that
+    /// keeps both in step with the enum.
+    pub(crate) const ALL: [Self; 7] = [
         Self::Unreachable,
         Self::NoResponse,
         Self::UnknownError,
