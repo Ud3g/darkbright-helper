@@ -1803,9 +1803,10 @@ Implementation: `src/platform/windows/single_instance.rs` (RAII `SingleInstance`
 
 ### 16. User-Visible Strings
 
-Every string a user can read lives in one table, `src/core/i18n.rs`: a `Strings` struct with one
-`&'static str` field per string, the `ENGLISH` const that fills it in, and `strings(Lang)` to pick
-a table. It sits in `core/` because the OSD, the tray, the settings window, the controller and
+Every string a user can read lives in one table per language: a `Strings` struct in
+`src/core/i18n.rs` with one `&'static str` field per string, one `const` per language in
+`src/core/i18n/<tag>.rs` that fills it in, and `strings(Lang)` to pick a table. It sits in
+`core/` because the OSD, the tray, the settings window, the controller and
 `BrightnessError::user_message` all draw from it, and none of them should own it.
 
 **Why a struct and not a catalog file.** Completeness becomes a compile-time property: adding a
