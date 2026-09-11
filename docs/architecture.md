@@ -1489,7 +1489,11 @@ that width. Rows anchored to "stretch" (section headers, separators, the
 footer's config-file link) keep their authored right margin as the window
 widens instead of a fixed width. The footer's two buttons pack into a
 right-aligned chain sized to their own captions, and the version line takes
-whatever space is left before that chain. The client width is the largest of
+whatever space is left before that chain. The two hotkey capture fields
+stretch to the right margin too, and the window is at least wide enough for
+the widest text either can show in the running language — all four modifiers
+plus the widest named key — so a long translated key name widens the window
+instead of ending in an ellipsis. The client width is the largest of
 everything those rows need and a 400px floor (`BASE_WINDOW_WIDTH`); the base
 height is 654 logical px before DPI scaling, growing only when one of the
 window's two wrapping hints needs more lines than its authored height
@@ -1768,7 +1772,11 @@ development build's longer string (`v0.10.0+64.gc4687e5.dirty (dev)`, 165px)
 needs 393px, still under the floor. In German, the equivalent development
 footer needs 449px, and the window grows to that width — a released build's
 shorter string does not, so the two languages need different real widths only
-in a development build.
+in a development build. For the same reason the layout gate plans every
+language twice, with the longest development string and with the shortest
+release string (`v1.0.0`): a gate that planned only the development string
+would check a wider window than the one users receive, and a translation that
+fits only there would pass it.
 
 **A pre-existing overrun, not a new one.** The layout gate that runs in CI
 (`settings::plan`'s tests) holds the planned client size under 560×700

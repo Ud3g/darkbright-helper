@@ -32,8 +32,8 @@ use super::super::hotkey::{bindings_conflict, hotkey_string, parse_hotkey};
 use super::dark;
 use super::layout::{ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP};
 use super::window::{
-    get_text, post_change, send_message, set_text, wide, window_strings, window_text,
-    with_window_state,
+    HotkeyStatusTone, get_text, post_change, send_message, set_text, wide, window_strings,
+    window_text, with_window_state,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -428,6 +428,7 @@ fn accept_capture(hwnd: HWND, candidate: String, change: fn(String) -> SettingCh
 fn reject_capture(key: HotkeyStatusKey) {
     with_window_state(|state| {
         state.hotkey_status_key.set(Some(key));
+        state.hotkey_status_tone.set(HotkeyStatusTone::Error);
         set_text(state.hwnd, ID_HK_ERROR, key.text(strings(state.lang.get())));
     });
 }
