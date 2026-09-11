@@ -627,7 +627,7 @@ map's contents are exempt (its key format is not yet a contract).
 | `refresh.inactivity_seconds` | 0 - 600 | 30 |
 | `logging.file_enabled` | `true` / `false` | `false` |
 | `logging.file_level` | `error` / `warn` / `info` / `debug` / `trace` (case-insensitive) | `info` |
-| `language` | `system` or a shipped BCP-47 tag (`en`, `de`; a regional tag such as `de-AT` resolves to its language; case-insensitive) | `system` |
+| `language` | `system` or a shipped BCP-47 tag (`de`, `en`, `es`, `fr`, `id`, `pt`, `ru`, `tr`, `vi`; a regional tag such as `de-AT` or `pt-BR` resolves to its language; case-insensitive) | `system` |
 
 These ranges are shared with, but enforced differently by, the settings window (§14): the
 loader above *substitutes the default* for an out-of-range value (a repair policy for
@@ -635,7 +635,7 @@ unattended startup), while the dialog *clamps to the nearest bound* on focus los
 policy for a user mid-edit). Same never-fatal spirit, deliberately different mechanism — don't
 "fix" one to match the other.
 
-`language` is validated strictly: a well-formed but unshipped tag (`fr`) is reported like a
+`language` is validated strictly: a well-formed but unshipped tag (`ja`) is reported like a
 typo and replaced by `system`, never silently shown in English.
 
 Two spinner ranges deliberately do *not* match the table, and the mismatch is the point: in
