@@ -9,9 +9,10 @@
 use windows::Win32::Foundation::{HWND, POINT};
 use windows::Win32::Graphics::Gdi::{HMONITOR, MONITOR_DEFAULTTONEAREST, MonitorFromPoint};
 use windows::Win32::UI::WindowsAndMessaging::{
-    DestroyWindow, GetCursorPos, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
+    DestroyWindow, GetCursorPos, HICON, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MESSAGEBOX_STYLE,
     MessageBoxW,
 };
+use windows::core::Owned;
 
 use crate::error::{BrightnessError, Result};
 
@@ -210,6 +211,42 @@ impl Drop for SafeHwnd {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Application Icon
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Resource ID under which `build.rs` embeds `res/icon.ico`: `winres` gives
+/// the icon it adds the ID 1.
+pub(crate) const APP_ICON_RESOURCE_ID: u16 = 1;
+
+/// Loads the embedded application icon at `size` × `size` pixels.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::WindowsApi` if the module handle or the icon
+/// cannot be loaded.
+pub(crate) fn load_app_icon(size: i32) -> Result<Owned<HICON>> {
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows::Win32::UI::Controls::LoadIconWithScaleDown;
+    use windows::core::PCWSTR;
+
+    let hinstance = unsafe { GetModuleHandleW(None) }.map_err(|e| {
+        BrightnessError::windows_api("GetModuleHandleW", e.code().0.cast_unsigned())
+    })?;
+    // A resource ID travels in the name pointer's low word.
+    let name = PCWSTR(std::ptr::without_provenance(usize::from(
+        APP_ICON_RESOURCE_ID,
+    )));
+    // Unlike `LoadImageW`, this scales a larger image down to `size` rather
+    // than a smaller one up, so a caption icon stays sharp at any scaling.
+    let icon = unsafe { LoadIconWithScaleDown(Some(hinstance.into()), name, size, size) }.map_err(
+        |e| BrightnessError::windows_api("LoadIconWithScaleDown", e.code().0.cast_unsigned()),
+    )?;
+    // SAFETY: an icon from `LoadIconWithScaleDown` belongs to the caller and
+    // must be freed with `DestroyIcon`, which is what `Owned` calls on drop.
+    Ok(unsafe { Owned::new(icon) })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Message Box Helper
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -293,5 +330,38 @@ mod tests {
     fn test_handle_seam_round_trip() {
         assert_eq!(hmonitor_to_isize(hmonitor_from_isize(0x1234)), 0x1234);
         assert_eq!(hwnd_to_isize(hwnd_from_isize(0x1234)), 0x1234);
+    }
+
+    /// Width of `icon`'s colour bitmap, in pixels.
+    fn icon_width(icon: HICON) -> i32 {
+        use windows::Win32::Graphics::Gdi::{BITMAP, DeleteObject, GetObjectW};
+        use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
+
+        let mut info = ICONINFO::default();
+        unsafe { GetIconInfo(icon, &raw mut info) }.expect("GetIconInfo");
+        let mut bitmap = BITMAP::default();
+        let bitmap_size = i32::try_from(std::mem::size_of::<BITMAP>()).expect("BITMAP size");
+        // SAFETY: `GetObjectW` writes at most `bitmap_size` bytes, the size of
+        // the `BITMAP` it points at. `GetIconInfo` hands the caller copies of
+        // both bitmaps, so each is deleted exactly once here.
+        unsafe {
+            GetObjectW(
+                info.hbmColor.into(),
+                bitmap_size,
+                Some((&raw mut bitmap).cast()),
+            );
+            let _ = DeleteObject(info.hbmColor.into());
+            let _ = DeleteObject(info.hbmMask.into());
+        }
+        bitmap.bmWidth
+    }
+
+    #[test]
+    fn the_embedded_app_icon_loads_at_every_size_a_window_asks_for() {
+        // Small and large window icons from 100 % to 200 % scaling.
+        for size in [16, 20, 24, 32, 40, 48, 64] {
+            let icon = load_app_icon(size).expect("the application icon is embedded");
+            assert_eq!(icon_width(*icon), size, "icon loaded for {size} px");
+        }
     }
 }

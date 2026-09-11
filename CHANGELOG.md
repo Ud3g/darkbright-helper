@@ -28,6 +28,9 @@ history lives in the git log.
   the autostart entry and the single-instance guard already used the real name.
   The configuration directory `%APPDATA%\BrightnessControl` is deliberately
   unchanged, since renaming it would orphan every existing config file.
+- The settings window shows the app's icon in its title bar, on its taskbar
+  button and in Alt+Tab, where it used to show Windows' generic window icon.
+  The icon is loaded at the size the window's display scaling calls for.
 
 ### Fixed
 

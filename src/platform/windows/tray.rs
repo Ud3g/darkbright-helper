@@ -94,10 +94,6 @@ const MENU_ID_USAGE_BASE: u32 = 4000;
 /// Tooltip text shown when hovering over the tray icon.
 const TRAY_TOOLTIP: &str = "darkbright-helper";
 
-/// Resource ID for the embedded application icon.
-/// Must match the ID defined in build.rs when embedding resources.
-const IDI_APP_ICON: u16 = 1;
-
 /// Application name displayed in the tray menu.
 const APP_NAME: &str = "darkbright-helper";
 
@@ -432,7 +428,9 @@ fn load_icon_from_resource() -> Result<HICON> {
 
         let handle = LoadImageW(
             Some(hinstance.into()),
-            PCWSTR(IDI_APP_ICON as *const u16),
+            PCWSTR(std::ptr::without_provenance(usize::from(
+                super::APP_ICON_RESOURCE_ID,
+            ))),
             IMAGE_ICON,
             0, // Use default width
             0, // Use default height
