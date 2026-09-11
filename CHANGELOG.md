@@ -43,6 +43,9 @@ history lives in the git log.
   sentence.
 - The settings window's hotkey status line no longer truncates its fixed
   messages, such as the notice that brightness keys cannot be intercepted.
+- That notice is no longer shown in red like a hotkey error. The hotkeys keep
+  working when the brightness keys cannot be intercepted, so it now appears in
+  the grey the window uses for its other hints.
 
 ## [0.10.0] — 2026-09-05
 

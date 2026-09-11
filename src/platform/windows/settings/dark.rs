@@ -67,7 +67,7 @@ use super::layout::{
     ID_LOG_CHECK, ID_LOG_HINT, ID_OSD_OPACITY_EDIT, ID_OSD_TIMEOUT_EDIT, ID_RESYNC_CHECK,
     ID_RESYNC_EDIT, ID_STEP_EDIT, ID_VERSION,
 };
-use super::window::{WindowState, window_text, with_window_state};
+use super::window::{HotkeyStatusTone, WindowState, window_text, with_window_state};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Palette
@@ -460,21 +460,22 @@ fn is_numeric_edit_id(id: u16) -> bool {
 /// The text colour a `STATIC` control should be drawn in, or `None` to leave
 /// it to the system.
 ///
-/// Four groups differ: the hotkey status line is red in either theme, the
-/// hint and version labels are grey in both, a disabled numeric edit (which
+/// Four groups differ: the hotkey status line is red in either theme while
+/// `tone` (what the line currently shows) is an error, and a notice there is
+/// grey like the hint and version labels; a disabled numeric edit (which
 /// Windows re-routes through this path — see [`is_numeric_edit_id`]) is grey
 /// on the control background, and everything else follows the theme's
 /// ordinary text colour. In light mode only the first two are answered at
 /// all; the rest is left to the system.
-fn static_color(id: u16, dark: bool) -> Option<StaticColor> {
-    if id == ID_HK_ERROR {
+fn static_color(id: u16, dark: bool, tone: HotkeyStatusTone) -> Option<StaticColor> {
+    if id == ID_HK_ERROR && tone == HotkeyStatusTone::Error {
         return Some(StaticColor::Fixed(if dark {
             DARK_ERROR_TEXT
         } else {
             LIGHT_ERROR_TEXT
         }));
     }
-    if id == ID_HK_HINT || id == ID_LOG_HINT || id == ID_VERSION {
+    if id == ID_HK_ERROR || id == ID_HK_HINT || id == ID_LOG_HINT || id == ID_VERSION {
         return Some(if dark {
             StaticColor::Fixed(DARK_GRAY_TEXT)
         } else {
@@ -501,7 +502,7 @@ pub(super) fn ctlcolor_static(
     let child = super::super::hwnd_from_isize(lparam.0);
     let id = u16::try_from(unsafe { GetDlgCtrlID(child) }).unwrap_or(0);
     let dark = state.dark.get();
-    let choice = static_color(id, dark)?;
+    let choice = static_color(id, dark, state.hotkey_status_tone.get())?;
 
     let (color, brush) = match choice {
         StaticColor::Fixed(c) => (
@@ -1367,14 +1368,26 @@ mod tests {
     // ── static_color ─────────────────────────────────────────────────────
 
     #[test]
-    fn error_line_is_fixed_in_both_themes() {
+    fn an_error_on_the_status_line_is_red_in_both_themes() {
         assert_eq!(
-            static_color(ID_HK_ERROR, true),
+            static_color(ID_HK_ERROR, true, HotkeyStatusTone::Error),
             Some(StaticColor::Fixed(DARK_ERROR_TEXT))
         );
         assert_eq!(
-            static_color(ID_HK_ERROR, false),
+            static_color(ID_HK_ERROR, false, HotkeyStatusTone::Error),
             Some(StaticColor::Fixed(LIGHT_ERROR_TEXT))
+        );
+    }
+
+    #[test]
+    fn a_notice_on_the_status_line_takes_the_hint_grey_in_both_themes() {
+        assert_eq!(
+            static_color(ID_HK_ERROR, true, HotkeyStatusTone::Notice),
+            Some(StaticColor::Fixed(DARK_GRAY_TEXT))
+        );
+        assert_eq!(
+            static_color(ID_HK_ERROR, false, HotkeyStatusTone::Notice),
+            Some(StaticColor::SysGray)
         );
     }
 
@@ -1382,21 +1395,27 @@ mod tests {
     fn secondary_text_is_gray_in_dark_and_sys_gray_in_light() {
         for id in [ID_HK_HINT, ID_LOG_HINT, ID_VERSION] {
             assert_eq!(
-                static_color(id, true),
+                static_color(id, true, HotkeyStatusTone::Error),
                 Some(StaticColor::Fixed(DARK_GRAY_TEXT))
             );
-            assert_eq!(static_color(id, false), Some(StaticColor::SysGray));
+            assert_eq!(
+                static_color(id, false, HotkeyStatusTone::Error),
+                Some(StaticColor::SysGray)
+            );
         }
     }
 
     #[test]
     fn a_plain_static_is_untouched_in_light_mode() {
-        assert_eq!(static_color(999, false), None);
+        assert_eq!(static_color(999, false, HotkeyStatusTone::Notice), None);
     }
 
     #[test]
     fn a_plain_static_gets_the_dark_text_colour() {
-        assert_eq!(static_color(999, true), Some(StaticColor::Fixed(DARK_TEXT)));
+        assert_eq!(
+            static_color(999, true, HotkeyStatusTone::Notice),
+            Some(StaticColor::Fixed(DARK_TEXT))
+        );
     }
 
     #[test]
@@ -1409,13 +1428,13 @@ mod tests {
             ID_INACT_EDIT,
         ] {
             assert_eq!(
-                static_color(id, true),
+                static_color(id, true, HotkeyStatusTone::Notice),
                 Some(StaticColor::FixedOnControl(DARK_GRAY_TEXT)),
                 "id {id} should read on the control background"
             );
             // In light mode a disabled edit is left to DefWindowProcW, same
             // as any other plain static.
-            assert_eq!(static_color(id, false), None);
+            assert_eq!(static_color(id, false, HotkeyStatusTone::Notice), None);
         }
     }
 

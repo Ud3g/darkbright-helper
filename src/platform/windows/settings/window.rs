@@ -721,6 +721,23 @@ pub(super) struct WindowState {
     /// covers both an empty line and a message [`HotkeyStatusKey`] cannot
     /// reproduce (it embeds runtime detail), which a switch clears instead.
     pub(super) hotkey_status_key: Cell<Option<HotkeyStatusKey>>,
+    /// Whether that line's message is an error or a notice, stored next to
+    /// its text wherever the text is set and read when the line is painted.
+    /// A language switch leaves it alone: the redrawn message is the same
+    /// one, only in other words.
+    pub(super) hotkey_status_tone: Cell<HotkeyStatusTone>,
+}
+
+/// Whether the hotkey status line reports a failure or only informs. It
+/// decides the line's colour, not its text: red for an error, the hint grey
+/// for a notice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HotkeyStatusTone {
+    /// A failed registration or a rejected capture.
+    Error,
+    /// Information only — the hotkeys still work, as when brightness keys
+    /// cannot be intercepted.
+    Notice,
 }
 
 thread_local! {
@@ -1051,9 +1068,11 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
 /// Reclaims ownership of `lparam`'s `Box<String>` and shows it on the
 /// hotkey status line. A registration error and a non-error notice share
 /// the single `ID_HK_ERROR` control — it is one inline status line, not
-/// two — so both go through this same function; which colour it renders in
-/// (red for an error, muted for a notice) is decided by the control-colour
-/// handler, not here. Same reclaim contract as [`handle_refresh_message`].
+/// two — so both go through this same function. `tone` is stored before the
+/// text is set, because setting the text repaints the line and the
+/// control-colour handler reads the stored tone to choose red for an error or
+/// the hint grey for a notice. Same reclaim contract as
+/// [`handle_refresh_message`].
 ///
 /// The controller composes `message` already resolved to text, with no key
 /// travelling alongside it, so whether it can be redrawn after a later
@@ -1063,15 +1082,26 @@ fn handle_language_message(hwnd: HWND, wparam: WPARAM) {
 /// the match is exact whenever the message is one of the fixed ones, and
 /// `None` otherwise (a hotkey-thread error string, or the formatted
 /// restore-also-failed message).
-fn handle_hotkey_message_text(lparam: LPARAM) {
+fn handle_hotkey_message_text(lparam: LPARAM, tone: HotkeyStatusTone) {
     let ptr: *mut String = std::ptr::with_exposed_provenance_mut(lparam.0.cast_unsigned());
     // SAFETY: one delivery, one reclaim, as in [`handle_refresh_message`].
     let message = unsafe { Box::from_raw(ptr) };
     with_window_state(|state| {
         let key = HotkeyStatusKey::matching(&message, strings(state.lang.get()));
         state.hotkey_status_key.set(key);
+        state.hotkey_status_tone.set(tone);
         set_text(state.hwnd, ID_HK_ERROR, &message);
     });
+}
+
+/// The tone of a status message the controller sent, read from which of the
+/// two messages carried it.
+fn hotkey_status_tone(msg: u32) -> HotkeyStatusTone {
+    if msg == WM_APP_SETTINGS_HK_NOTICE {
+        HotkeyStatusTone::Notice
+    } else {
+        HotkeyStatusTone::Error
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1998,7 +2028,7 @@ unsafe extern "system" fn settings_wnd_proc(
                 LRESULT(0)
             }
             WM_APP_SETTINGS_HK_ERROR | WM_APP_SETTINGS_HK_NOTICE => {
-                handle_hotkey_message_text(lparam);
+                handle_hotkey_message_text(lparam, hotkey_status_tone(msg));
                 LRESULT(0)
             }
             WM_APP_SETTINGS_LANG => {
@@ -2128,6 +2158,7 @@ fn create_settings_window(
         last_posted_periodic: Cell::new(None),
         last_posted_inactivity: Cell::new(None),
         hotkey_status_key: Cell::new(None),
+        hotkey_status_tone: Cell::new(HotkeyStatusTone::Error),
     };
 
     create_controls(
@@ -2437,6 +2468,18 @@ impl SettingsSink for SettingsSinkImpl {
 mod tests {
     use super::super::layout::{ID_OSD_OPACITY_UPDOWN, ID_OSD_TIMEOUT_UPDOWN, ID_STEP_UPDOWN};
     use super::*;
+
+    #[test]
+    fn a_controller_notice_keeps_its_tone_apart_from_an_error() {
+        assert_eq!(
+            hotkey_status_tone(WM_APP_SETTINGS_HK_NOTICE),
+            HotkeyStatusTone::Notice
+        );
+        assert_eq!(
+            hotkey_status_tone(WM_APP_SETTINGS_HK_ERROR),
+            HotkeyStatusTone::Error
+        );
+    }
 
     #[test]
     fn log_level_index_matches_insertion_order_case_insensitively() {
