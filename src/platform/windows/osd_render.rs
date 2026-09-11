@@ -5,12 +5,13 @@
 //! GDI resource cleanup is handled by RAII guards (`SelectedFont`, `BackBuffer`)
 //! and the `fill_rect` helper, so callers never balance `DeleteObject` by hand.
 
-use windows::Win32::Foundation::{COLORREF, RECT};
+use windows::Win32::Foundation::{COLORREF, RECT, SIZE};
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CLIP_DEFAULT_PRECIS, CreateCompatibleBitmap, CreateCompatibleDC, CreateFontW,
     CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH, DEFAULT_QUALITY, DeleteDC, DeleteObject,
-    FF_DONTCARE, FW_NORMAL, FillRect, HBITMAP, HDC, HFONT, HGDIOBJ, OUT_DEFAULT_PRECIS, SRCCOPY,
-    SelectObject, SetBkMode, SetTextAlign, SetTextColor, TA_LEFT, TA_RIGHT, TRANSPARENT, TextOutW,
+    FF_DONTCARE, FW_NORMAL, FillRect, GetTextExtentPoint32W, HBITMAP, HDC, HFONT, HGDIOBJ,
+    OUT_DEFAULT_PRECIS, SRCCOPY, SelectObject, SetBkMode, SetTextAlign, SetTextColor, TA_LEFT,
+    TA_RIGHT, TRANSPARENT, TextOutW,
 };
 use windows::core::w;
 
@@ -462,6 +463,18 @@ fn draw_percentage_text(
     }
 }
 
+/// Width of `text` drawn with the font currently selected into `hdc`, or
+/// `None` if GDI cannot measure it. `TextOutW` draws one unformatted line,
+/// which is exactly the extent `GetTextExtentPoint32W` reports.
+fn text_width(hdc: HDC, text: &[u16]) -> Option<i32> {
+    let mut size = SIZE::default();
+    // SAFETY: `size` is a live local the call writes through, and the binding
+    // passes `text`'s own length, so nothing is read past the slice.
+    unsafe { GetTextExtentPoint32W(hdc, text, &raw mut size) }
+        .as_bool()
+        .then_some(size.cx)
+}
+
 /// Draws the error message centered in the error row at the bottom of the OSD.
 ///
 /// The error row occupies the bottom `error_row_height` pixels of the expanded window.
@@ -477,13 +490,9 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
 
     // Calculate position - centered horizontally, in footer area at bottom
     let width = client_rect.right - client_rect.left;
-    // Approximate text width (~7 pixels per character at this font size)
-    // Scaling approximation: original was 7px for 18pt font. Ratio ~0.38
-    #[expect(clippy::cast_possible_truncation)]
-    let approx_char_width = (f64::from(font_size) * 0.38).round() as i32;
-    let approx_text_width = i32::try_from(wide_text.len()).unwrap_or(0) * approx_char_width;
-
-    let x = (width - approx_text_width) / 2;
+    // A text that cannot be measured starts at the padding rather than at a
+    // guessed centre.
+    let x = text_width(hdc, &wide_text).map_or(metrics.padding, |text_w| (width - text_w) / 2);
     let y = client_rect.bottom - error_row_height + (error_row_height - font_size) / 2;
 
     unsafe {
@@ -496,6 +505,42 @@ fn draw_error_message(hdc: HDC, client_rect: &RECT, message: &str, metrics: &Osd
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_error_message_fits_the_osd_in_every_language_at_every_dpi() {
+        use windows::Win32::Graphics::Gdi::{CreateCompatibleDC, DeleteDC};
+
+        use super::super::osd::OsdMetrics;
+        use super::{FontFace, SelectedFont, text_width};
+        use crate::core::i18n::{Lang, strings};
+
+        let dc = unsafe { CreateCompatibleDC(None) };
+        assert!(
+            !dc.is_invalid(),
+            "no memory DC — the test would measure nothing"
+        );
+        let mut failures: Vec<String> = Vec::new();
+        for dpi in [96, 120, 144, 192] {
+            let metrics = OsdMetrics::for_dpi(dpi);
+            let available = metrics.width - 2 * metrics.padding;
+            let _font = SelectedFont::new(dc, metrics.font_size, FontFace::Text);
+            for &lang in Lang::ALL {
+                let text = strings(lang).osd_ddc_error;
+                let wide: Vec<u16> = text.encode_utf16().collect();
+                let needed = text_width(dc, &wide).expect("GDI measured the error text");
+                if needed > available {
+                    failures.push(format!(
+                        "| {} | {dpi} | {text} | {available} | {needed} |",
+                        lang.tag()
+                    ));
+                }
+            }
+        }
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
+    }
+
     #[test]
     fn the_error_row_text_comes_from_the_string_table() {
         use crate::core::i18n::{Lang, strings};

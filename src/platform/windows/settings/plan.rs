@@ -467,14 +467,14 @@ mod tests {
 
     use super::super::super::hotkey::{ParsedHotkey, key_name};
     use super::super::layout::{
-        ID_CLOSE, ID_HK_DOWN, ID_HK_UP, ID_LABEL_HK_UP, ID_LABEL_LOG_LEVEL, ID_LABEL_STEP_UNIT,
-        ID_LANGUAGE, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE, ID_SEP_GENERAL,
-        ID_STEP_EDIT, ID_STEP_UPDOWN, is_checkbox,
+        ID_CLOSE, ID_HK_DOWN, ID_HK_ERROR, ID_HK_UP, ID_LABEL_HK_UP, ID_LABEL_LOG_LEVEL,
+        ID_LABEL_STEP_UNIT, ID_LANGUAGE, ID_LINK_CONFIG, ID_LOG_CHECK, ID_LOG_LEVEL, ID_RESTORE,
+        ID_SEP_GENERAL, ID_STEP_EDIT, ID_STEP_UPDOWN, is_checkbox,
     };
     use super::super::measure::GdiMeasure;
     use super::super::window::{language_combo_entries, log_level_combo_entries};
     use super::*;
-    use crate::core::i18n::{Lang, strings};
+    use crate::core::i18n::{HotkeyStatusKey, Lang, strings};
 
     /// Measures a fixed width per character, so an assertion can be read
     /// without knowing any font's metrics.
@@ -974,6 +974,43 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The fixed messages the hotkey status line can show in `lang`, built
+    /// from [`HotkeyStatusKey::ALL`] so a variant added there is gated here
+    /// too. The rebind failure that embeds error details is left out: its
+    /// length depends on the English detail it carries, so no budget can
+    /// hold it.
+    fn status_line_texts(lang: Lang) -> [&'static str; 7] {
+        let s = strings(lang);
+        HotkeyStatusKey::ALL.map(|key| key.text(s))
+    }
+
+    #[test]
+    fn no_status_line_text_needs_a_second_line_in_any_language_at_any_dpi() {
+        // The status line is one line tall and SS_LEFT wraps, so a message
+        // wider than the line silently loses everything after its first
+        // break. Its text is set at run time, which is why the caption gate
+        // above never sees it.
+        let mut failures: Vec<String> = Vec::new();
+        for &lang in Lang::ALL {
+            for dpi in GATE_DPIS {
+                let mut m = gate_measure(dpi);
+                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
+                let placed = *plan.get(ID_HK_ERROR).expect("planned");
+                for text in status_line_texts(lang) {
+                    let needed = m.text_width(text, false);
+                    if needed > placed.w {
+                        failures.push(format!(
+                            "| {} | {dpi} | {text} | {} | {needed} |",
+                            lang.tag(),
+                            placed.w
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
     #[test]

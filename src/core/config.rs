@@ -1088,7 +1088,7 @@ mod tests {
 
     #[test]
     fn an_unshipped_or_malformed_language_is_repaired_to_system() {
-        for bad in ["fr", "Deutsch", "de_DE", ""] {
+        for bad in ["ja", "Deutsch", "de_DE", ""] {
             let json = format!(r#"{{ "language": "{bad}" }}"#);
             let mut config: Config = serde_json::from_str(&json).unwrap();
             let notices = config.validate_and_fix();

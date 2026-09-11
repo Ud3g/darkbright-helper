@@ -25,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-use crate::core::i18n::Strings;
+use crate::core::i18n::{HotkeyStatusKey, Strings, strings};
 use crate::core::state::{BrightnessMessage, SettingChange};
 
 use super::super::hotkey::{bindings_conflict, hotkey_string, parse_hotkey};
@@ -312,8 +312,12 @@ enum CaptureOutcome {
     /// A valid, non-conflicting binding, already formatted as the
     /// `config.json` string (e.g. `"Ctrl+Shift+Up"`).
     Accept(String),
-    /// Rejected; the inline message to show on `ID_HK_ERROR`.
-    Rejected(&'static str),
+    /// Rejected; which fixed message to show on `ID_HK_ERROR`. Carrying the
+    /// key rather than its already-resolved text is what lets
+    /// [`reject_capture`] remember it, so a later language switch can
+    /// redraw the same rejection instead of leaving it in the language it
+    /// was first shown in.
+    Rejected(HotkeyStatusKey),
 }
 
 /// The accept/reject predicate for a captured `(modifiers, vk)` pair against
@@ -327,16 +331,15 @@ fn evaluate_candidate(
     modifiers: HOT_KEY_MODIFIERS,
     vk: VIRTUAL_KEY,
     other_binding: &str,
-    s: &Strings,
 ) -> CaptureOutcome {
     if !has_required_modifier(modifiers) {
-        return CaptureOutcome::Rejected(s.capture_reject_no_modifier);
+        return CaptureOutcome::Rejected(HotkeyStatusKey::RejectNoModifier);
     }
     let Some(candidate) = hotkey_string(modifiers, vk) else {
-        return CaptureOutcome::Rejected(s.capture_reject_unnameable_key);
+        return CaptureOutcome::Rejected(HotkeyStatusKey::RejectUnnameableKey);
     };
     if bindings_conflict(&candidate, other_binding) {
-        return CaptureOutcome::Rejected(s.capture_reject_duplicate);
+        return CaptureOutcome::Rejected(HotkeyStatusKey::RejectDuplicate);
     }
     CaptureOutcome::Accept(candidate)
 }
@@ -358,7 +361,10 @@ fn vk_from_wparam(wparam: WPARAM) -> VIRTUAL_KEY {
 /// successful rebind, with no way for the user to tell whether the just-
 /// shown value actually took.
 fn clear_capture_error() {
-    with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, ""));
+    with_window_state(|state| {
+        state.hotkey_status_key.set(None);
+        set_text(state.hwnd, ID_HK_ERROR, "");
+    });
 }
 
 /// Enters capture: focuses the control (harmless if it already has focus),
@@ -412,12 +418,18 @@ fn accept_capture(hwnd: HWND, candidate: String, change: fn(String) -> SettingCh
     with_window_state(|state| post_change(state, change(candidate)));
 }
 
-/// Rejects a candidate without leaving capture: shows `message` on the
-/// shared `ID_HK_ERROR` status line so the user can just try again. Takes
-/// no `hwnd` — the capture field itself doesn't change, only the shared
-/// status line reached via `WindowState::hwnd`.
-fn reject_capture(message: &str) {
-    with_window_state(|state| set_text(state.hwnd, ID_HK_ERROR, message));
+/// Rejects a candidate without leaving capture: shows `key`'s message on the
+/// shared `ID_HK_ERROR` status line so the user can just try again, and
+/// remembers `key` so a later language switch can redraw the same rejection
+/// instead of leaving it in the language it was first shown in — see
+/// `window::handle_language_message`. Takes no `hwnd` — the capture field
+/// itself doesn't change, only the shared status line reached via
+/// `WindowState::hwnd`.
+fn reject_capture(key: HotkeyStatusKey) {
+    with_window_state(|state| {
+        state.hotkey_status_key.set(Some(key));
+        set_text(state.hwnd, ID_HK_ERROR, key.text(strings(state.lang.get())));
+    });
 }
 
 /// Re-reads the live modifier mask and repaints — the shared half of
@@ -459,9 +471,9 @@ fn handle_capture_keydown(hwnd: HWND, vk: VIRTUAL_KEY) {
     with_window_state(|state| other_binding = get_text(state.hwnd, other_id));
 
     let modifiers = live_modifier_flags();
-    match evaluate_candidate(modifiers, vk, &other_binding, window_strings()) {
+    match evaluate_candidate(modifiers, vk, &other_binding) {
         CaptureOutcome::Accept(candidate) => accept_capture(hwnd, candidate, change),
-        CaptureOutcome::Rejected(message) => reject_capture(message),
+        CaptureOutcome::Rejected(key) => reject_capture(key),
     }
 }
 
@@ -903,49 +915,44 @@ mod tests {
 
     #[test]
     fn evaluate_candidate_accepts_a_valid_non_conflicting_binding() {
-        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x42), "Ctrl+Shift+Up", &ENGLISH); // Ctrl+B
+        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x42), "Ctrl+Shift+Up"); // Ctrl+B
         assert_eq!(outcome, CaptureOutcome::Accept("Ctrl+B".to_string()));
     }
 
     #[test]
     fn evaluate_candidate_rejects_no_modifier_at_all() {
-        let outcome = evaluate_candidate(
-            HOT_KEY_MODIFIERS(0),
-            VIRTUAL_KEY(0x42),
-            "Ctrl+Shift+Up",
-            &ENGLISH,
-        );
+        let outcome = evaluate_candidate(HOT_KEY_MODIFIERS(0), VIRTUAL_KEY(0x42), "Ctrl+Shift+Up");
         assert_eq!(
             outcome,
-            CaptureOutcome::Rejected(ENGLISH.capture_reject_no_modifier)
+            CaptureOutcome::Rejected(HotkeyStatusKey::RejectNoModifier)
         );
     }
 
     #[test]
     fn evaluate_candidate_rejects_shift_alone() {
-        let outcome = evaluate_candidate(MOD_SHIFT, VK_UP, "Ctrl+Shift+Down", &ENGLISH);
+        let outcome = evaluate_candidate(MOD_SHIFT, VK_UP, "Ctrl+Shift+Down");
         assert_eq!(
             outcome,
-            CaptureOutcome::Rejected(ENGLISH.capture_reject_no_modifier)
+            CaptureOutcome::Rejected(HotkeyStatusKey::RejectNoModifier)
         );
     }
 
     #[test]
     fn evaluate_candidate_rejects_a_key_the_parser_cannot_name() {
         // No entry in KEY_MAP/VK_TO_NAME for this virtual-key code.
-        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x07), "Ctrl+Shift+Up", &ENGLISH);
+        let outcome = evaluate_candidate(MOD_CONTROL, VIRTUAL_KEY(0x07), "Ctrl+Shift+Up");
         assert_eq!(
             outcome,
-            CaptureOutcome::Rejected(ENGLISH.capture_reject_unnameable_key)
+            CaptureOutcome::Rejected(HotkeyStatusKey::RejectUnnameableKey)
         );
     }
 
     #[test]
     fn evaluate_candidate_rejects_a_binding_the_other_field_already_has() {
-        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "Ctrl+Shift+Up", &ENGLISH);
+        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "Ctrl+Shift+Up");
         assert_eq!(
             outcome,
-            CaptureOutcome::Rejected(ENGLISH.capture_reject_duplicate)
+            CaptureOutcome::Rejected(HotkeyStatusKey::RejectDuplicate)
         );
     }
 
@@ -954,10 +961,10 @@ mod tests {
         // A hand-edited config.json can spell the same binding with its
         // modifiers in a different order; that must still be caught as the
         // same duplicate, not missed on a literal-string comparison.
-        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "shift+ctrl+up", &ENGLISH);
+        let outcome = evaluate_candidate(MOD_CONTROL | MOD_SHIFT, VK_UP, "shift+ctrl+up");
         assert_eq!(
             outcome,
-            CaptureOutcome::Rejected(ENGLISH.capture_reject_duplicate)
+            CaptureOutcome::Rejected(HotkeyStatusKey::RejectDuplicate)
         );
     }
 
@@ -965,7 +972,7 @@ mod tests {
     fn evaluate_candidate_does_not_conflict_with_unparseable_other_field_text() {
         // Matches bindings_conflict's own permissiveness: an unparseable
         // "other" binding never blocks a capture.
-        let outcome = evaluate_candidate(MOD_CONTROL, VK_UP, "garbage", &ENGLISH);
+        let outcome = evaluate_candidate(MOD_CONTROL, VK_UP, "garbage");
         assert_eq!(outcome, CaptureOutcome::Accept("Ctrl+Up".to_string()));
     }
 }

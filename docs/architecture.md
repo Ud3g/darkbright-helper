@@ -793,6 +793,7 @@ Hardware at 0%, overlay at 100%:
 When DDC communication fails after all retries:
 - Hardware (right) progress bar changes to red/error tint
 - OSD expands to show error message row: "DDC Error - Adjustment failed"
+- The message is centred by its measured width; a test keeps it inside the OSD in every language at 100–200 % scaling
 - Percentage reverts to last confirmed value
 - OSD timeout remains unchanged (1000ms)
 - On next successful adjustment, OSD shrinks back to compact height
@@ -1473,7 +1474,7 @@ dialog's own "Open config file" footer link (see "Message flow" below). The
 window exposes every existing config option plus a "Start with Windows"
 toggle, applies changes live, and follows the system light/dark theme like
 the tray menu already does. The Language picker is the first row of the
-General section, 120px wide.
+General section, 129px wide.
 
 The window's geometry is measured, not authored as one fixed table. Every
 control's baseline position and size at 96 DPI still lives in a declarative
@@ -1493,6 +1494,21 @@ everything those rows need and a 400px floor (`BASE_WINDOW_WIDTH`); the base
 height is 654 logical px before DPI scaling, growing only when one of the
 window's two wrapping hints needs more lines than its authored height
 allows.
+
+One row is checked by a test rather than placed by measurement: the hotkey status line under
+the capture fields is one line tall, its `SS_LEFT` style wraps, and its text is set only at run
+time. A gate in `settings::plan` measures each of its fixed messages in every language at every
+planned DPI against the line's width, and the fix for a failure is a shorter message. Two paths
+stay uncovered, because their length depends on detail no fixed budget can size for: the
+restore-also-failed format (`hotkey_status_restore_also_failed_fmt`), which embeds two error
+strings, and the hotkey thread's own error text shown on its own — an English `BrightnessError`
+message with no length bound.
+
+The window remembers which fixed message (if any) that line is currently showing, next to every
+place that sets it, so a live language switch can redraw it instead of leaving it in the language
+it was first shown in. A message the switch cannot reproduce — one that embeds runtime detail,
+such as the restore-also-failed message or the hotkey thread's own error text — is cleared
+instead of guessed at.
 
 **Own thread — load-bearing, not stylistic.** The window is spawned on a
 dedicated thread with its own `GetMessageW` loop, the same pattern the tray
@@ -1803,9 +1819,10 @@ Implementation: `src/platform/windows/single_instance.rs` (RAII `SingleInstance`
 
 ### 16. User-Visible Strings
 
-Every string a user can read lives in one table, `src/core/i18n.rs`: a `Strings` struct with one
-`&'static str` field per string, the `ENGLISH` const that fills it in, and `strings(Lang)` to pick
-a table. It sits in `core/` because the OSD, the tray, the settings window, the controller and
+Every string a user can read lives in one table per language: a `Strings` struct in
+`src/core/i18n.rs` with one `&'static str` field per string, one `const` per language in
+`src/core/i18n/<tag>.rs` that fills it in, and `strings(Lang)` to pick a table. It sits in
+`core/` because the OSD, the tray, the settings window, the controller and
 `BrightnessError::user_message` all draw from it, and none of them should own it.
 
 **Why a struct and not a catalog file.** Completeness becomes a compile-time property: adding a
@@ -1847,7 +1864,28 @@ The "already running" box precedes config loading and uses the OS language direc
 
 **Hotkey display text.** `ParsedHotkey::display_text` renders the settings capture fields (whose window text stays the wire string) and the tray usage rows. Modifiers and the named keys (`Up`, `PageUp`, `Home`, `Delete`, …) come from the table; function keys, `Plus`, `Minus`, letters and digits keep their wire name. German follows the wording Windows uses in accelerator labels and on the German key cap (`Strg+Umschalt+Nach-Oben`). A hand-edited `ctrl+shift+up` therefore displays as `Ctrl+Shift+Up` in English; the stored text is untouched.
 
-**Adding a language.** Add the `Lang` variant, its `tag()` (lowercase, generic), its `native_name()`, and a `const` table; the compiler lists every field until the table is complete, and `Lang::ALL` puts it in the picker. Nothing else changes.
+**Adding a language.** Add the `Lang` variant with its `tag()` (lowercase, generic) and
+`native_name()`, insert it into `Lang::ALL` in native-name order (a test enforces the order),
+give it an arm in `strings()`, and put its table in `src/core/i18n/<tag>.rs`. The compiler lists
+every field until the table is complete. The file's header records the variant, a glossary of
+the core terms, the key-name convention and its source, typography rules and the style
+reference, so a later correction can see why a word was chosen. A field that deliberately equals
+English is declared for that language in the i18n test module; any other identical field fails
+the build as a probable untranslated string. Some slots cannot grow — one-line captions, unit
+suffixes, most combo entries, the one-line hotkey status line, the OSD error row and the tray
+tooltip — and tests fail when a translation overflows one; the fix there is shorter wording, not
+wider geometry. The Language picker is the exception: it carries an authored budget (138px
+before the English window widens), and a translation may widen it up to that budget — this
+branch moved it from 120px to 129px for exactly that reason.
+
+The shipped tables other than English and German were produced with LLMs and have not been read
+by a native speaker. Each went through the same passes: a translation from the English and
+German tables and the field doc comments; a blind back-translation into English from the
+strings alone, which exposes shifted meaning; an independent review from a native localizer's
+point of view, which is the only pass that catches a wrong term or register because a wrong
+term can translate back to the right English word; one tie-break where review and translator
+disagreed; and a further review of any string shortened to fit a slot. A correction from a
+native speaker outranks all of them.
 
 ---
 
@@ -2084,7 +2122,9 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - With the window open in German, hover the tray icon: tooltip German; open the menu: German rows with `Strg+Umschalt+Nach-Oben`.
 - Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
-- Hand-edit `"language": "fr"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
+- Hand-edit `"language": "ja"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
+- Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Where the OSD error row can be provoked (a monitor that refuses DDC/CI), check it too in each language for clipped diacritics (Vietnamese) and complete Cyrillic text (Russian). Note any text that ends in an ellipsis or is cut.
+- Click a hotkey field, press Shift+F5 to show its rejection, then switch Settings → Language before it clears: the rejection reappears in the new language — never left showing the language it was first shown in.
 - Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
 
 #### Measured Layout at High DPI (German) Test
