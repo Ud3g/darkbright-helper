@@ -5,6 +5,8 @@ history lives in the git log.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-09-11
+
 ### Added
 
 - The interface is available in German, and it follows the Windows display
