@@ -52,7 +52,8 @@ by CI's separate MSRV job, not by the update PR itself.
 
 `build.rs` embeds two resources through `winres`, both Windows-only:
 
-- **The application icon** (`res/icon.ico`), used by the shell and by the tray.
+- **The application icon** (`res/icon.ico`), used by the shell, by the tray, and
+  by the settings window's title bar, taskbar button and Alt+Tab entry.
 - **An application manifest** declaring a dependency on version 6 of the common
   controls (`Microsoft.Windows.Common-Controls`, resource type `RT_MANIFEST`,
   ID 1). This is what enables visual styles for system-drawn controls.
@@ -1703,7 +1704,11 @@ resizes to Windows' suggested rect, rebuilds both fonts at the new size,
 swaps them into the window's state before re-sending `WM_SETFONT` to every
 control (so a paint reentered synchronously from that already sees the new
 font handle), and relayouts every control from the same baseline table
-`create_settings_window` used initially. Known unverified: dragging the
+`create_settings_window` used initially. The window's small and large icons
+(title bar, taskbar button, Alt+Tab) are loaded from the embedded application
+icon at the system icon sizes for the window's DPI, once at creation and again
+on every `WM_DPICHANGED`; a replaced pair is freed only after `WM_SETICON` has
+handed the window the new one. Known unverified: dragging the
 window across two monitors at different DPIs has not been exercised on real
 hardware; `WM_DPICHANGED` has instead been confirmed through a live
 per-monitor scale-factor change on a single monitor, which drives the same
@@ -1950,9 +1955,9 @@ now announces itself in the log, and a wrong theme is visible on sight.
 ### `Owned<T>` for handles the `windows` crate knows how to free
 
 A handle whose type has a `windows::core::Free` impl is held as `windows::core::Owned<T>`
-rather than in a hand-rolled `Drop` wrapper: the single-instance mutex (`HANDLE`) and the
+rather than in a hand-rolled `Drop` wrapper: the single-instance mutex (`HANDLE`), the
 `SetupAPI` device list and registry key in `src/platform/windows/ddc.rs` (`HDEVINFO`,
-`HKEY`) all do. The ownership claim then lives at the one `unsafe { Owned::new(..) }` call,
+`HKEY`) and the settings window's icons (`HICON`, from `load_app_icon`) all do. The ownership claim then lives at the one `unsafe { Owned::new(..) }` call,
 which carries the `// SAFETY:` comment a wrapper's `Drop` would otherwise carry.
 
 `SafeHwnd` stays hand-rolled on purpose: `DestroyWindow` is not the `Free` pattern (it is

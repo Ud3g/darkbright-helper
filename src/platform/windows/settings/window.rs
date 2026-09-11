@@ -20,6 +20,7 @@ use windows::Win32::UI::Controls::{
     LIST_ITEM_STATE_FLAGS, LITEM, LM_SETITEM, NM_CLICK, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR, NMLINK,
     NMUPDOWN, UDN_DELTAPOS, UPDOWN_CLASS, WC_BUTTON, WC_COMBOBOX, WC_EDIT, WC_LINK, WC_STATIC,
 };
+use windows::Win32::UI::HiDpi::GetSystemMetricsForDpi;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, SetFocus, VK_RETURN, VK_SHIFT, VK_TAB,
 };
@@ -29,17 +30,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CB_SETCURSEL, CBN_SELCHANGE, CS_HREDRAW, CS_VREDRAW, CreateWindowExW, DC_HASDEFID,
     DLGC_WANTCHARS, DLGC_WANTMESSAGE, DLGC_WANTTAB, DM_GETDEFID, DefWindowProcW, DestroyWindow,
     DispatchMessageW, EN_KILLFOCUS, GWL_STYLE, GetDlgItem, GetMessageW, GetNextDlgTabItem,
-    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HMENU, HWND_TOPMOST, IDC_ARROW, IDOK,
-    IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG,
-    MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassExW, SW_SHOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE,
-    WINDOW_EX_STYLE, WINDOW_STYLE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN,
-    WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX, WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED,
-    WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS, WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT,
-    WM_SETTINGCHANGE, WNDCLASSEXW, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW, HICON, HMENU, HWND_TOPMOST, ICON_BIG,
+    ICON_SMALL, IDC_ARROW, IDOK, IsChild, IsDialogMessageW, LoadCursorW, MB_ICONERROR,
+    MB_ICONWARNING, MB_OK, MB_OKCANCEL, MSG, MessageBoxW, PM_REMOVE, PeekMessageW, PostMessageW,
+    PostQuitMessage, RegisterClassExW, SM_CXICON, SM_CXSMICON, SW_SHOW, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    SetWindowTextW, ShowWindow, TranslateMessage, WA_INACTIVE, WINDOW_EX_STYLE, WINDOW_STYLE,
+    WM_ACTIVATE, WM_APP, WM_CLOSE, WM_COMMAND, WM_CTLCOLORBTN, WM_CTLCOLOREDIT, WM_CTLCOLORLISTBOX,
+    WM_CTLCOLORSTATIC, WM_DESTROY, WM_DPICHANGED, WM_GETDLGCODE, WM_KEYDOWN, WM_KILLFOCUS,
+    WM_NCDESTROY, WM_NOTIFY, WM_SETFOCUS, WM_SETFONT, WM_SETICON, WM_SETTINGCHANGE, WNDCLASSEXW,
+    WS_CHILD, WS_TABSTOP, WS_VISIBLE,
 };
-use windows::core::{PCWSTR, w};
+use windows::core::{Owned, PCWSTR, w};
 
 use crate::core::config::{DEFAULT_REFRESH_INACTIVITY_SECONDS, DEFAULT_REFRESH_PERIODIC_SECONDS};
 use crate::core::controller::SettingsSink;
@@ -49,7 +51,9 @@ use crate::core::i18n::{
 use crate::core::state::{BrightnessMessage, SettingChange, SettingsSnapshot};
 use crate::error::{BrightnessError, Result};
 
-use super::super::{autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
+use super::super::{
+    autostart, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error, load_app_icon,
+};
 use super::capture::capture_wnd_proc;
 use super::dark;
 use super::layout::{
@@ -726,6 +730,10 @@ pub(super) struct WindowState {
     /// A language switch leaves it alone: the redrawn message is the same
     /// one, only in other words.
     pub(super) hotkey_status_tone: Cell<HotkeyStatusTone>,
+    /// The icons the title bar, taskbar button and Alt+Tab entry show, loaded
+    /// for the window's DPI and replaced on `WM_DPICHANGED`. `None` only if
+    /// the first load failed, which leaves Windows' generic icon in place.
+    icons: Cell<Option<WindowIcons>>,
 }
 
 /// Whether the hotkey status line reports a failure or only informs. It
@@ -920,6 +928,11 @@ fn handle_dpichanged(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
         let new_bold = build_font(dpi, FW_BOLD);
         let old_regular = state.font_regular.replace(new_regular);
         let old_bold = state.font_bold.replace(new_bold);
+        // `set_window_icons` has already handed the window the new pair, so
+        // the pair it replaces can be freed here.
+        if let Some(icons) = set_window_icons(state.hwnd, dpi) {
+            drop(state.icons.replace(Some(icons)));
+        }
 
         for spec in CONTROLS {
             let Ok(child) = (unsafe { GetDlgItem(Some(state.hwnd), i32::from(spec.id)) }) else {
@@ -2060,6 +2073,53 @@ unsafe extern "system" fn settings_wnd_proc(
     }
 }
 
+/// The settings window's small and large icon, kept alive for as long as the
+/// window shows them. Dropped with [`WindowState`] on `WM_DESTROY`, once the
+/// window no longer paints its caption.
+struct WindowIcons {
+    small: Owned<HICON>,
+    big: Owned<HICON>,
+}
+
+/// System icon sizes at `dpi`, in pixels: the small icon (title bar) and the
+/// large one (Alt+Tab, taskbar).
+fn window_icon_sizes(dpi: u32) -> (i32, i32) {
+    unsafe {
+        (
+            GetSystemMetricsForDpi(SM_CXSMICON, dpi),
+            GetSystemMetricsForDpi(SM_CXICON, dpi),
+        )
+    }
+}
+
+/// Loads the application icon at `dpi`'s sizes and hands both to `hwnd` with
+/// `WM_SETICON`. `None` leaves the window's current icons in place: an icon
+/// that fails to load costs looks, not function, so it is logged and skipped.
+fn set_window_icons(hwnd: HWND, dpi: u32) -> Option<WindowIcons> {
+    let (small_size, big_size) = window_icon_sizes(dpi);
+    let icons = match (load_app_icon(small_size), load_app_icon(big_size)) {
+        (Ok(small), Ok(big)) => WindowIcons { small, big },
+        (Err(e), _) | (_, Err(e)) => {
+            log::warn!(error:% = e, dpi; "Could not load the settings window icon");
+            return None;
+        }
+    };
+    for (kind, icon) in [(ICON_SMALL, *icons.small), (ICON_BIG, *icons.big)] {
+        // SAFETY: `WM_SETICON` keeps the handle rather than a copy of the
+        // icon, so it must stay valid while the window shows it: `icons` owns
+        // both and goes back to the caller, which keeps it in the window state.
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(usize::try_from(kind).unwrap_or_default())),
+                Some(LPARAM(icon.0.expose_provenance().cast_signed())),
+            );
+        }
+    }
+    Some(icons)
+}
+
 /// Creates the window, its controls and fonts, positions everything, and
 /// populates it from `snapshot`. Returns the window's `HWND` once it is
 /// ready to pump messages.
@@ -2131,6 +2191,9 @@ fn create_settings_window(
     }
     .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))?;
 
+    // Before the window is first shown, so its caption never starts out with
+    // the generic icon.
+    let icons = set_window_icons(hwnd, dpi);
     let font_regular = build_font(dpi, FW_NORMAL);
     let font_bold = build_font(dpi, FW_BOLD);
 
@@ -2159,6 +2222,7 @@ fn create_settings_window(
         last_posted_inactivity: Cell::new(None),
         hotkey_status_key: Cell::new(None),
         hotkey_status_tone: Cell::new(HotkeyStatusTone::Error),
+        icons: Cell::new(icons),
     };
 
     create_controls(
@@ -2468,6 +2532,14 @@ impl SettingsSink for SettingsSinkImpl {
 mod tests {
     use super::super::layout::{ID_OSD_OPACITY_UPDOWN, ID_OSD_TIMEOUT_UPDOWN, ID_STEP_UPDOWN};
     use super::*;
+
+    #[test]
+    fn window_icons_take_the_system_icon_sizes_for_the_windows_dpi() {
+        // The test process is not per-monitor DPI aware, so a size read from
+        // the process-wide metrics would come back unscaled at 192 DPI.
+        assert_eq!(window_icon_sizes(96), (16, 32));
+        assert_eq!(window_icon_sizes(192), (32, 64));
+    }
 
     #[test]
     fn a_controller_notice_keeps_its_tone_apart_from_an_error() {
