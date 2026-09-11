@@ -34,7 +34,7 @@ Rust.
 
 ![The tray context menu: live per-monitor status, the current hotkeys, and Settings, Open Log Folder and Quit](docs/media/tray-menu.png)
 
-![The settings window: hotkey rebinding, brightness step, OSD timing, refresh intervals, logging and Start with Windows](docs/media/settings-window.png)
+![The settings window: language, Start with Windows, brightness step, hotkey rebinding, OSD timing, refresh intervals and logging](docs/media/settings-window.png)
 
 ## Download
 
