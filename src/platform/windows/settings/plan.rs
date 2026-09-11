@@ -337,6 +337,21 @@ fn control_run(col: Col, dpi: u32) -> i32 {
         .unwrap_or(0)
 }
 
+/// Width a capture field needs for the widest hotkey text `lang` can render,
+/// including the inset its painter keeps on either side. The fields stretch
+/// to the right margin, so this is a requirement on the window's width, not
+/// on the fields themselves.
+fn capture_text_requirement(lang: Lang, dpi: u32, m: &mut impl TextMeasure) -> i32 {
+    use super::super::hotkey::display_texts_with_every_modifier;
+    use super::capture::CAPTURE_TEXT_INSET;
+
+    let widest = display_texts_with_every_modifier(strings(lang))
+        .map(|text| m.text_width(&text, false))
+        .max()
+        .unwrap_or(0);
+    widest + 2 * scale_dimension(CAPTURE_TEXT_INSET, dpi)
+}
+
 /// Computes the whole layout for `lang` at `dpi`.
 #[must_use]
 pub(super) fn plan_layout(
@@ -367,7 +382,8 @@ pub(super) fn plan_layout(
     let capture_w = CONTROLS
         .iter()
         .find(|spec| matches!(spec.anchor, Anchor::ControlStretch(_)))
-        .map_or(0, |spec| scale_dimension(spec.w, dpi));
+        .map_or(0, |spec| scale_dimension(spec.w, dpi))
+        .max(capture_text_requirement(lang, dpi, m));
 
     let client_w = scale_dimension(BASE_WINDOW_WIDTH, dpi)
         .max(edge_a + capture_w + margin)
@@ -700,6 +716,27 @@ mod tests {
     }
 
     #[test]
+    fn a_capture_field_widens_the_window_to_hold_its_widest_hotkey_text() {
+        use super::super::capture::CAPTURE_TEXT_INSET;
+        // At 10 px a character the widest English hotkey text is far wider
+        // than the field's authored 218 px.
+        let mut m = FakeMeasure {
+            per_char: 10,
+            ..FakeMeasure::default()
+        };
+        let plan = plan_layout(Lang::English, 96, "v0.10.0", &mut m);
+        let longest = longest_hotkey_display_text(Lang::English, &mut m);
+        let needed = m.text_width(&longest, false);
+        for id in [ID_HK_UP, ID_HK_DOWN] {
+            let drawn = plan.get(id).unwrap().w - 2 * CAPTURE_TEXT_INSET;
+            assert!(
+                drawn >= needed,
+                "field {id} draws {drawn} px, {longest:?} needs {needed}"
+            );
+        }
+    }
+
+    #[test]
     fn every_control_appears_exactly_once_in_a_plan() {
         let mut m = FakeMeasure::default();
         let plan = plan_layout(Lang::English, 96, "0.10.0", &mut m);
@@ -750,7 +787,8 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Layout gate: the real fonts, every language, four scalings
+    // Layout gate: the real fonts, every language, four scalings, and both a
+    // development and a release version string
     // ─────────────────────────────────────────────────────────────────────
     //
     // What the gate can and cannot catch, because the planner derives most
@@ -758,19 +796,21 @@ mod tests {
     //
     // Exact fits by construction — a `Label`/`Checkbox` row (its slot is the
     // column maximum), `InlineLabel`, `CheckboxRun`, `FooterButton`,
-    // `FooterFill` and with it `ID_VERSION`. Their slot is sized from their
-    // own measured caption, so no translation can overflow one. Checking
-    // them is still worth the cycles: it is a consistency check that the
-    // planner's chrome budget (a checkbox's indicator, a button's padding)
-    // and the gate's `drawable` still agree, and it fails the moment one of
-    // them changes without the other.
+    // `FooterFill` and with it `ID_VERSION`, and the capture fields, which
+    // widen the window to their language's widest hotkey text. Their slot is
+    // sized from their own measured text, so no translation can overflow one.
+    // Checking them is still worth the cycles: it is a consistency check that
+    // the planner's chrome budget (a checkbox's indicator, a button's padding,
+    // a capture field's inset) and the gate's `drawable` still agree, and it
+    // fails the moment one of them changes without the other.
     //
     // Rows a longer translation really can break — `Stretch` rows, whose
     // width is the window's less an authored margin rather than their own
     // text; `AfterControl` unit labels, which keep an authored width beside
-    // a control; combo entries, which are not `CONTROLS` rows at all and so
-    // feed into no column; and the capture fields, whose contents come from
-    // the hotkey string table rather than from any caption.
+    // a control; and combo entries, which are not `CONTROLS` rows at all and
+    // so feed into no column. Each of these is checked in the narrower
+    // release window as well as the development one, since the version
+    // string is one of the inputs to the window's width.
 
     /// Logical-pixel bounds the derived layout must stay inside.
     ///
@@ -782,13 +822,30 @@ mod tests {
     const MAX_CLIENT_W: i32 = 560;
     const MAX_CLIENT_H: i32 = 700;
 
-    /// The widest realistic version string, which is what the footer must
-    /// hold — not whatever `git describe` happens to produce on the machine
-    /// running the test.
-    const WORST_CASE_VERSION: &str = "v0.10.0+999.gc4687e5.dirty (dev)";
+    /// The widest realistic version string — a development build's, which is
+    /// what the footer must hold — rather than whatever `git describe`
+    /// happens to produce on the machine running the test.
+    const LONGEST_DEV_VERSION: &str = "v0.10.0+999.gc4687e5.dirty (dev)";
+
+    /// The narrowest version string a release can carry. Where the version
+    /// decides the window's width, a release build's window is narrower than
+    /// a development build's, so a gate that planned only the longest string
+    /// would check a wider window than the one users receive.
+    const SHORTEST_RELEASE_VERSION: &str = "v1.0.0";
 
     /// The scalings the gate plans at: 100%, 125%, 150% and 200%.
     const GATE_DPIS: [u32; 4] = [96, 120, 144, 192];
+
+    /// Every language, scaling and version string the gate plans.
+    fn gate_cases() -> impl Iterator<Item = (Lang, u32, &'static str)> {
+        Lang::ALL.iter().flat_map(|&lang| {
+            GATE_DPIS.into_iter().flat_map(move |dpi| {
+                [LONGEST_DEV_VERSION, SHORTEST_RELEASE_VERSION]
+                    .into_iter()
+                    .map(move |version| (lang, dpi, version))
+            })
+        })
+    }
 
     /// The table row `id` came from.
     fn spec_of(id: u16) -> &'static ControlSpec {
@@ -807,12 +864,12 @@ mod tests {
         class == "COMBOBOX"
     }
 
-    /// The text a control actually draws in `lang`, with the worst-case
-    /// version string standing in for the build's own and `SysLink`'s
-    /// `<a>`/`</a>` anchor markup removed — that markup is the control's
-    /// hyperlink syntax, never glyphs on screen.
-    fn caption_for_gate(spec: &ControlSpec, lang: Lang) -> String {
-        let text = caption(spec, lang, WORST_CASE_VERSION);
+    /// The text a control actually draws in `lang`, with `version` standing
+    /// in for the build's own version string and `SysLink`'s `<a>`/`</a>`
+    /// anchor markup removed — that markup is the control's hyperlink
+    /// syntax, never glyphs on screen.
+    fn caption_for_gate(spec: &ControlSpec, lang: Lang, version: &str) -> String {
+        let text = caption(spec, lang, version);
         if spec.class == "SysLink" {
             text.replace("<a>", "").replace("</a>", "")
         } else {
@@ -869,42 +926,40 @@ mod tests {
     #[test]
     fn no_caption_overflows_its_slot_in_any_language_at_any_dpi() {
         let mut failures: Vec<String> = Vec::new();
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                for spec in CONTROLS {
-                    let placed = *plan.get(spec.id).expect("planned");
-                    let text = caption_for_gate(spec, lang);
-                    if text.is_empty() {
-                        continue;
-                    }
-                    if wraps(spec.id) {
-                        // Re-measures what the planner already grew this row
-                        // by, so no translation can fail it: what it guards
-                        // is a planner change that stops growing hints, not
-                        // a hint whose text got longer.
-                        let needed = m.wrapped_height(&text, false, placed.w);
-                        if needed > placed.h {
-                            failures.push(format!(
-                                "| {} | {dpi} | {} | {text} | h {} | needs {needed} |",
-                                lang.tag(),
-                                spec.id,
-                                placed.h
-                            ));
-                        }
-                        continue;
-                    }
-                    let available = drawable(spec, &placed, dpi, &mut m);
-                    let needed = m.text_width(&text, is_section_header(spec.id));
-                    if needed > available {
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            for spec in CONTROLS {
+                let placed = *plan.get(spec.id).expect("planned");
+                let text = caption_for_gate(spec, lang, version);
+                if text.is_empty() {
+                    continue;
+                }
+                if wraps(spec.id) {
+                    // Re-measures what the planner already grew this row
+                    // by, so no translation can fail it: what it guards
+                    // is a planner change that stops growing hints, not
+                    // a hint whose text got longer.
+                    let needed = m.wrapped_height(&text, false, placed.w);
+                    if needed > placed.h {
                         failures.push(format!(
-                            "| {} | {dpi} | {} | {text} | {available} | {needed} | +{} |",
+                            "| {} | {dpi} | {version} | {} | {text} | h {} | needs {needed} |",
                             lang.tag(),
                             spec.id,
-                            needed - available
+                            placed.h
                         ));
                     }
+                    continue;
+                }
+                let available = drawable(spec, &placed, dpi, &mut m);
+                let needed = m.text_width(&text, is_section_header(spec.id));
+                if needed > available {
+                    failures.push(format!(
+                        "| {} | {dpi} | {version} | {} | {text} | {available} | {needed} | +{} |",
+                        lang.tag(),
+                        spec.id,
+                        needed - available
+                    ));
                 }
             }
         }
@@ -917,35 +972,33 @@ mod tests {
         // slot that hangs off the window, which is what happens when a row
         // keeps an authored width or offset while the columns around it move.
         let mut failures: Vec<String> = Vec::new();
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                for placed in &plan.controls {
-                    if placed.x + placed.w > plan.client_w {
-                        failures.push(format!(
-                            "| {} | {dpi} | {} | right {} | client_w {} |",
-                            lang.tag(),
-                            placed.id,
-                            placed.x + placed.w,
-                            plan.client_w
-                        ));
-                    }
-                    // A combo's `h` is its dropped-down list's, so its
-                    // declared bottom legitimately falls outside the client
-                    // rect — the same quirk the overlap check exempts.
-                    if overlap_exempt(spec_of(placed.id).class) {
-                        continue;
-                    }
-                    if placed.y + placed.h > plan.client_h {
-                        failures.push(format!(
-                            "| {} | {dpi} | {} | bottom {} | client_h {} |",
-                            lang.tag(),
-                            placed.id,
-                            placed.y + placed.h,
-                            plan.client_h
-                        ));
-                    }
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            for placed in &plan.controls {
+                if placed.x + placed.w > plan.client_w {
+                    failures.push(format!(
+                        "| {} | {dpi} | {version} | {} | right {} | client_w {} |",
+                        lang.tag(),
+                        placed.id,
+                        placed.x + placed.w,
+                        plan.client_w
+                    ));
+                }
+                // A combo's `h` is its dropped-down list's, so its
+                // declared bottom legitimately falls outside the client
+                // rect — the same quirk the overlap check exempts.
+                if overlap_exempt(spec_of(placed.id).class) {
+                    continue;
+                }
+                if placed.y + placed.h > plan.client_h {
+                    failures.push(format!(
+                        "| {} | {dpi} | {version} | {} | bottom {} | client_h {} |",
+                        lang.tag(),
+                        placed.id,
+                        placed.y + placed.h,
+                        plan.client_h
+                    ));
                 }
             }
         }
@@ -956,21 +1009,19 @@ mod tests {
     fn no_combo_entry_overflows_its_combo_in_any_language_at_any_dpi() {
         // Combo entries are not CONTROLS rows, which is exactly why the
         // previous diagnostic never saw the log-level picker clip.
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                for (id, entries) in combo_entries_for_gate(lang) {
-                    let placed = *plan.get(id).expect("planned");
-                    let available = drawable(spec_of(id), &placed, dpi, &mut m);
-                    for entry in entries {
-                        let needed = m.text_width(entry, false);
-                        assert!(
-                            needed <= available,
-                            "{} combo {id} entry {entry:?} needs {needed} of {available} at {dpi} dpi",
-                            lang.tag()
-                        );
-                    }
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            for (id, entries) in combo_entries_for_gate(lang) {
+                let placed = *plan.get(id).expect("planned");
+                let available = drawable(spec_of(id), &placed, dpi, &mut m);
+                for entry in entries {
+                    let needed = m.text_width(entry, false);
+                    assert!(
+                        needed <= available,
+                        "{} combo {id} entry {entry:?} needs {needed} of {available} at {dpi} dpi with {version}",
+                        lang.tag()
+                    );
                 }
             }
         }
@@ -993,20 +1044,18 @@ mod tests {
         // break. Its text is set at run time, which is why the caption gate
         // above never sees it.
         let mut failures: Vec<String> = Vec::new();
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                let placed = *plan.get(ID_HK_ERROR).expect("planned");
-                for text in status_line_texts(lang) {
-                    let needed = m.text_width(text, false);
-                    if needed > placed.w {
-                        failures.push(format!(
-                            "| {} | {dpi} | {text} | {} | {needed} |",
-                            lang.tag(),
-                            placed.w
-                        ));
-                    }
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            let placed = *plan.get(ID_HK_ERROR).expect("planned");
+            for text in status_line_texts(lang) {
+                let needed = m.text_width(text, false);
+                if needed > placed.w {
+                    failures.push(format!(
+                        "| {} | {dpi} | {version} | {text} | {} | {needed} |",
+                        lang.tag(),
+                        placed.w
+                    ));
                 }
             }
         }
@@ -1015,37 +1064,31 @@ mod tests {
 
     #[test]
     fn no_two_planned_controls_overlap_in_any_language_at_any_dpi() {
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                for (i, a) in plan.controls.iter().enumerate() {
-                    for b in &plan.controls[i + 1..] {
-                        if overlap_exempt(spec_of(a.id).class)
-                            || overlap_exempt(spec_of(b.id).class)
-                        {
-                            continue;
-                        }
-                        let overlaps = a.x < b.x + b.w
-                            && b.x < a.x + a.w
-                            && a.y < b.y + b.h
-                            && b.y < a.y + a.h;
-                        assert!(
-                            !overlaps,
-                            "{} at {dpi} dpi: {} ({},{},{},{}) overlaps {} ({},{},{},{})",
-                            lang.tag(),
-                            a.id,
-                            a.x,
-                            a.y,
-                            a.w,
-                            a.h,
-                            b.id,
-                            b.x,
-                            b.y,
-                            b.w,
-                            b.h
-                        );
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            for (i, a) in plan.controls.iter().enumerate() {
+                for b in &plan.controls[i + 1..] {
+                    if overlap_exempt(spec_of(a.id).class) || overlap_exempt(spec_of(b.id).class) {
+                        continue;
                     }
+                    let overlaps =
+                        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+                    assert!(
+                        !overlaps,
+                        "{} at {dpi} dpi with {version}: {} ({},{},{},{}) overlaps {} ({},{},{},{})",
+                        lang.tag(),
+                        a.id,
+                        a.x,
+                        a.y,
+                        a.w,
+                        a.h,
+                        b.id,
+                        b.x,
+                        b.y,
+                        b.w,
+                        b.h
+                    );
                 }
             }
         }
@@ -1053,23 +1096,21 @@ mod tests {
 
     #[test]
     fn the_planned_window_stays_within_its_bounds_in_any_language() {
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                assert!(
-                    plan.client_w <= scale_dimension(MAX_CLIENT_W, dpi),
-                    "{} at {dpi} dpi: client_w {} exceeds the bound",
-                    lang.tag(),
-                    plan.client_w
-                );
-                assert!(
-                    plan.client_h <= scale_dimension(MAX_CLIENT_H, dpi),
-                    "{} at {dpi} dpi: client_h {} exceeds the bound",
-                    lang.tag(),
-                    plan.client_h
-                );
-            }
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            assert!(
+                plan.client_w <= scale_dimension(MAX_CLIENT_W, dpi),
+                "{} at {dpi} dpi with {version}: client_w {} exceeds the bound",
+                lang.tag(),
+                plan.client_w
+            );
+            assert!(
+                plan.client_h <= scale_dimension(MAX_CLIENT_H, dpi),
+                "{} at {dpi} dpi with {version}: client_h {} exceeds the bound",
+                lang.tag(),
+                plan.client_h
+            );
         }
     }
 
@@ -1077,22 +1118,23 @@ mod tests {
     fn a_capture_field_holds_the_longest_hotkey_text_its_language_can_produce() {
         // The same seam the tray's usage rows render through, so a modifier
         // name that outgrows this field outgrows the menu too.
-        for &lang in Lang::ALL {
-            for dpi in GATE_DPIS {
-                let mut m = gate_measure(dpi);
-                let plan = plan_layout(lang, dpi, WORST_CASE_VERSION, &mut m);
-                let longest = longest_hotkey_display_text(lang, &mut m);
-                for id in [ID_HK_UP, ID_HK_DOWN] {
-                    let placed = *plan.get(id).expect("planned");
-                    let available = drawable(spec_of(id), &placed, dpi, &mut m);
-                    let needed = m.text_width(&longest, false);
-                    assert!(
-                        needed <= available,
-                        "{} at {dpi} dpi: {longest:?} needs {needed} of {available}",
+        let mut failures: Vec<String> = Vec::new();
+        for (lang, dpi, version) in gate_cases() {
+            let mut m = gate_measure(dpi);
+            let plan = plan_layout(lang, dpi, version, &mut m);
+            let longest = longest_hotkey_display_text(lang, &mut m);
+            for id in [ID_HK_UP, ID_HK_DOWN] {
+                let placed = *plan.get(id).expect("planned");
+                let available = drawable(spec_of(id), &placed, dpi, &mut m);
+                let needed = m.text_width(&longest, false);
+                if needed > available {
+                    failures.push(format!(
+                        "| {} | {dpi} | {version} | {id} | {longest} | {available} | {needed} |",
                         lang.tag()
-                    );
+                    ));
                 }
             }
         }
+        assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 }

@@ -1323,6 +1323,16 @@ pub(crate) fn key_name(vk: VIRTUAL_KEY) -> Option<String> {
         .map(|(name, _)| name.clone())
 }
 
+/// What a capture field shows for every nameable key with all four
+/// modifiers held, in `s`'s language. Which of these renders widest depends
+/// on the font and the translation, so the settings layout measures them all
+/// rather than guessing at one.
+pub(crate) fn display_texts_with_every_modifier(s: &Strings) -> impl Iterator<Item = String> {
+    VK_TO_NAME.iter().map(move |(_, vk)| {
+        ParsedHotkey::new(MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN, *vk).display_text(s)
+    })
+}
+
 /// The display name of `vk` in `s`'s language for keys a translation may
 /// render differently; `None` for every other key (function keys, `Plus`,
 /// `Minus`, letters, digits), whose wire name is the display name.
