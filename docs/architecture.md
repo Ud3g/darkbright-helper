@@ -71,6 +71,25 @@ and the requested execution level are all things a manifest can set, and each
 changes how the app *behaves* rather than how a control is *painted* — they are
 separate changes with separate testing, not riders on this one.
 
+### C Runtime
+
+The C runtime is linked statically (`-C target-feature=+crt-static`, set for
+MSVC targets in `.cargo/config.toml`), so the binary imports only DLLs that ship
+with Windows. Rust's default for the MSVC target links it dynamically, and the
+executable then imports `VCRUNTIME140.dll`, which comes with the Visual C++
+Redistributable rather than with Windows. On a machine without it the program
+does not start: the loader fails before `main`, so no log line and no message
+box of the app's own can report it. Releases up to 0.11.0 were built that way.
+
+Static linking adds about 97 KiB (3.7 %) to a 2.6 MB binary. The hybrid
+variant — `vcruntime` static, the UCRT that Windows 10 ships left dynamic —
+adds about 21 KiB, but gets there by dropping a default library from the link
+and substituting another. That saving did not justify a mechanism a toolchain
+change could break without any build error.
+
+The check is `dumpbin /dependents` on a release build: the list must contain
+neither `VCRUNTIME140.dll` nor any `api-ms-win-crt-*` entry.
+
 ---
 
 ## Core Architecture

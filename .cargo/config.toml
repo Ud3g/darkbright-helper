@@ -1,0 +1,5 @@
+# Link the C runtime statically. The MSVC default links it dynamically, which
+# makes the binary import VCRUNTIME140.dll — shipped by the Visual C++
+# Redistributable, not by Windows. See docs/architecture.md, "C Runtime".
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
