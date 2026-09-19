@@ -5,6 +5,14 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Fixed
+
+- The program no longer needs the Microsoft Visual C++ Redistributable.
+  Releases up to 0.11.0 linked the C runtime dynamically, so on a Windows
+  installation without the Redistributable the program did not start at all
+  and Windows reported that `VCRUNTIME140.dll` was missing. The runtime is now
+  built into the executable, which grows by about 100 KiB.
+
 ## [0.11.0] — 2026-09-11
 
 ### Added
