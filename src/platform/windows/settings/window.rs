@@ -2615,6 +2615,7 @@ mod tests {
                 "English",
                 "Español",
                 "Français",
+                "Italiano",
                 "Português (Brasil)",
                 "Tiếng Việt",
                 "Türkçe",
