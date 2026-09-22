@@ -18,6 +18,7 @@
 
 mod cs;
 mod de;
+mod el;
 mod en;
 mod es;
 mod fr;
@@ -64,6 +65,8 @@ pub enum Lang {
     Polish,
     /// Czech.
     Czech,
+    /// Greek.
+    Greek,
 }
 
 impl Lang {
@@ -84,6 +87,7 @@ impl Lang {
         Lang::Vietnamese,
         Lang::Turkish,
         Lang::Czech,
+        Lang::Greek,
         Lang::Russian,
     ];
 
@@ -106,6 +110,7 @@ impl Lang {
             Lang::Dutch => "nl",
             Lang::Polish => "pl",
             Lang::Czech => "cs",
+            Lang::Greek => "el",
         }
     }
 
@@ -127,6 +132,7 @@ impl Lang {
             Lang::Dutch => "Nederlands",
             Lang::Polish => "Polski",
             Lang::Czech => "Čeština",
+            Lang::Greek => "Ελληνικά",
         }
     }
 
@@ -689,6 +695,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Dutch => &nl::DUTCH,
         Lang::Polish => &pl::POLISH,
         Lang::Czech => &cs::CZECH,
+        Lang::Greek => &el::GREEK,
     }
 }
 
