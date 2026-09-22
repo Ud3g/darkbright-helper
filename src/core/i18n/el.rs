@@ -114,7 +114,7 @@ pub(crate) const GREEK: Strings = Strings {
     button_close: "Κλείσιμο",
     window_title: "Ρυθμίσεις darkbright-helper",
 
-    capture_prompt: "Πατήστε συνδυασμό πλήκτρων… (Esc για ακύρωση)",
+    capture_prompt: "Πατήστε συνδυασμό… (Esc: ακύρωση)",
     capture_reject_no_modifier: "Προσθέστε Ctrl, Alt ή Win (μόνο το Shift δεν αρκεί)",
     capture_reject_unnameable_key: "Το πλήκτρο δεν υποστηρίζεται σε συντομεύσεις",
     capture_reject_duplicate: "Έχει ήδη αντιστοιχιστεί στην άλλη συντόμευση",

@@ -108,7 +108,7 @@ pub(crate) const POLISH: Strings = Strings {
     button_close: "Zamknij",
     window_title: "darkbright-helper — Ustawienia",
 
-    capture_prompt: "Naciśnij kombinację klawiszy… (Esc, aby anulować)",
+    capture_prompt: "Naciśnij klawisze… (Esc anuluje)",
     capture_reject_no_modifier: "Dodaj Ctrl, Alt lub Win (sam Shift nie wystarczy)",
     capture_reject_unnameable_key: "Tego klawisza nie można użyć jako skrótu",
     capture_reject_duplicate: "Ta kombinacja jest już przypisana do drugiego skrótu",

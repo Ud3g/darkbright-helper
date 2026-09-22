@@ -110,7 +110,7 @@ pub(crate) const ITALIAN: Strings = Strings {
     button_close: "Chiudi",
     window_title: "Impostazioni di darkbright-helper",
 
-    capture_prompt: "Premi una combinazione di tasti… (Esc per annullare)",
+    capture_prompt: "Premi i tasti… (Esc per annullare)",
     capture_reject_no_modifier: "Aggiungi Ctrl, Alt o Win (Maiusc da solo non basta)",
     capture_reject_unnameable_key: "Tasto non utilizzabile come scelta rapida",
     capture_reject_duplicate: "Combinazione già assegnata all’altra scelta rapida",
