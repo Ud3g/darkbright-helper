@@ -22,6 +22,7 @@ mod es;
 mod fr;
 mod id;
 mod it;
+mod nl;
 mod pt;
 mod ru;
 mod tr;
@@ -55,6 +56,8 @@ pub enum Lang {
     Vietnamese,
     /// Italian.
     Italian,
+    /// Dutch, as spoken in the Netherlands.
+    Dutch,
 }
 
 impl Lang {
@@ -69,6 +72,7 @@ impl Lang {
         Lang::Spanish,
         Lang::French,
         Lang::Italian,
+        Lang::Dutch,
         Lang::Portuguese,
         Lang::Vietnamese,
         Lang::Turkish,
@@ -91,6 +95,7 @@ impl Lang {
             Lang::Turkish => "tr",
             Lang::Vietnamese => "vi",
             Lang::Italian => "it",
+            Lang::Dutch => "nl",
         }
     }
 
@@ -109,6 +114,7 @@ impl Lang {
             Lang::Turkish => "Türkçe",
             Lang::Vietnamese => "Tiếng Việt",
             Lang::Italian => "Italiano",
+            Lang::Dutch => "Nederlands",
         }
     }
 
@@ -668,6 +674,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Turkish => &tr::TURKISH,
         Lang::Vietnamese => &vi::VIETNAMESE,
         Lang::Italian => &it::ITALIAN,
+        Lang::Dutch => &nl::DUTCH,
     }
 }
 
