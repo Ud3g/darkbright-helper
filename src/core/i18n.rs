@@ -16,6 +16,7 @@
 //! The product name `darkbright-helper` is not in here — a product name is not
 //! translated.
 
+mod cs;
 mod de;
 mod en;
 mod es;
@@ -61,6 +62,8 @@ pub enum Lang {
     Dutch,
     /// Polish.
     Polish,
+    /// Czech.
+    Czech,
 }
 
 impl Lang {
@@ -80,6 +83,7 @@ impl Lang {
         Lang::Portuguese,
         Lang::Vietnamese,
         Lang::Turkish,
+        Lang::Czech,
         Lang::Russian,
     ];
 
@@ -101,6 +105,7 @@ impl Lang {
             Lang::Italian => "it",
             Lang::Dutch => "nl",
             Lang::Polish => "pl",
+            Lang::Czech => "cs",
         }
     }
 
@@ -121,6 +126,7 @@ impl Lang {
             Lang::Italian => "Italiano",
             Lang::Dutch => "Nederlands",
             Lang::Polish => "Polski",
+            Lang::Czech => "Čeština",
         }
     }
 
@@ -682,6 +688,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Italian => &it::ITALIAN,
         Lang::Dutch => &nl::DUTCH,
         Lang::Polish => &pl::POLISH,
+        Lang::Czech => &cs::CZECH,
     }
 }
 

@@ -2621,6 +2621,7 @@ mod tests {
                 "Português (Brasil)",
                 "Tiếng Việt",
                 "Türkçe",
+                "Čeština",
                 "Русский"
             ]
         );

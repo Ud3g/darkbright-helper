@@ -22,6 +22,7 @@ fn every_language_variant_appears_in_all() {
         Lang::Italian,
         Lang::Dutch,
         Lang::Polish,
+        Lang::Czech,
     ] {
         let listed = match lang {
             Lang::English => Lang::ALL.contains(&Lang::English),
@@ -36,6 +37,7 @@ fn every_language_variant_appears_in_all() {
             Lang::Italian => Lang::ALL.contains(&Lang::Italian),
             Lang::Dutch => Lang::ALL.contains(&Lang::Dutch),
             Lang::Polish => Lang::ALL.contains(&Lang::Polish),
+            Lang::Czech => Lang::ALL.contains(&Lang::Czech),
         };
         assert!(listed, "{lang:?} is missing from Lang::ALL");
     }
@@ -288,6 +290,7 @@ fn each_language_has_its_tag_and_native_name() {
         (Lang::Italian, "it", "Italiano"),
         (Lang::Dutch, "nl", "Nederlands"),
         (Lang::Polish, "pl", "Polski"),
+        (Lang::Czech, "cs", "Čeština"),
     ] {
         assert_eq!(lang.tag(), tag);
         assert_eq!(lang.native_name(), name);
@@ -499,6 +502,26 @@ const POLISH_SAME_AS_ENGLISH: &[&str] = &[
     "msgbox_title_autostart",
 ];
 
+const CZECH_SAME_AS_ENGLISH: &[&str] = &[
+    "key_mod_ctrl",
+    "key_mod_alt",
+    "key_mod_shift",
+    "key_mod_win",
+    "key_separator",
+    "key_home",
+    "key_end",
+    "key_insert",
+    "key_delete",
+    "key_tab",
+    "key_enter",
+    "key_backspace",
+    "unit_percent_step",
+    "unit_milliseconds",
+    "unit_percent_opacity",
+    "unit_seconds_resync",
+    "unit_seconds_inactivity",
+];
+
 /// Fields a language deliberately leaves identical to English. A field that
 /// matches English without being listed here is most likely one nobody
 /// translated. The `match` has no wildcard arm, so a new language fails to
@@ -517,6 +540,7 @@ fn same_as_english(lang: Lang) -> &'static [&'static str] {
         Lang::Italian => ITALIAN_SAME_AS_ENGLISH,
         Lang::Dutch => DUTCH_SAME_AS_ENGLISH,
         Lang::Polish => POLISH_SAME_AS_ENGLISH,
+        Lang::Czech => CZECH_SAME_AS_ENGLISH,
     }
 }
 
