@@ -29,6 +29,7 @@ mod pl;
 mod pt;
 mod ru;
 mod tr;
+mod uk;
 mod vi;
 
 pub(crate) use de::GERMAN;
@@ -67,6 +68,8 @@ pub enum Lang {
     Czech,
     /// Greek.
     Greek,
+    /// Ukrainian.
+    Ukrainian,
 }
 
 impl Lang {
@@ -89,6 +92,7 @@ impl Lang {
         Lang::Czech,
         Lang::Greek,
         Lang::Russian,
+        Lang::Ukrainian,
     ];
 
     /// The BCP-47 tag identifying this language: what `config.json` stores
@@ -111,6 +115,7 @@ impl Lang {
             Lang::Polish => "pl",
             Lang::Czech => "cs",
             Lang::Greek => "el",
+            Lang::Ukrainian => "uk",
         }
     }
 
@@ -133,6 +138,7 @@ impl Lang {
             Lang::Polish => "Polski",
             Lang::Czech => "Čeština",
             Lang::Greek => "Ελληνικά",
+            Lang::Ukrainian => "Українська",
         }
     }
 
@@ -696,6 +702,7 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Polish => &pl::POLISH,
         Lang::Czech => &cs::CZECH,
         Lang::Greek => &el::GREEK,
+        Lang::Ukrainian => &uk::UKRAINIAN,
     }
 }
 
