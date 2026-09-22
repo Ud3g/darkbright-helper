@@ -15,7 +15,8 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
    `[X.Y.Z] — YYYY-MM-DD` and start a fresh `[Unreleased]` above it. The
    dated heading and the tag belong together — never commit a dated version
    heading without also tagging it.
-4. Commit (`chore: release X.Y.Z`), push, wait for CI to pass.
+4. Commit (`chore: release X.Y.Z`) on a branch and merge it into `main` through a
+   pull request (`main` is PR-only); wait for CI to pass on the merge.
 5. Tag that commit and push the tag. Tags are signed (`tag.gpgsign` is on),
    which makes them annotated — so a message is required and a bare
    `git tag X.Y.Z` fails with `fatal: no tag message?`:
@@ -32,8 +33,9 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
    accepted list fails the release), packages
    `darkbright-helper-X.Y.Z-windows-x64.zip` (exe + both `LICENSE-*` files +
    notices), attests build provenance, and creates the GitHub release with the
-   zip attached. Release notes point at the CHANGELOG and carry the zip's
-   SHA-256 plus the `gh attestation verify` command.
+   zip attached. The release notes are the version's `CHANGELOG.md` section,
+   copied verbatim (the workflow fails early if the tag has no section), followed
+   by the zip's SHA-256 and the `gh attestation verify` command.
 
 ## Notes
 

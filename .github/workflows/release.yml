@@ -33,13 +33,27 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # A tag that disagrees with the manifest would publish a mislabeled
-      # binary; fail fast instead.
-      - name: Verify tag matches Cargo.toml version
+      # binary; fail fast instead. The same step cuts the tag's section out of
+      # CHANGELOG.md for the release body, so a tag without a dated changelog
+      # heading fails here rather than after the build.
+      - name: Verify tag matches Cargo.toml version and has a changelog section
         run: |
           $version = (cargo metadata --no-deps --format-version 1 | ConvertFrom-Json).packages[0].version
           if ($version -ne $env:GITHUB_REF_NAME) {
             throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
           }
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $heading = [regex]::Escape("## [$env:GITHUB_REF_NAME]")
+          $match = [regex]::Match($changelog, "(?ms)^$heading[^\r\n]*\r?\n(.*?)(?=^## \[|\z)")
+          if (-not $match.Success) {
+            throw "CHANGELOG.md has no section for $env:GITHUB_REF_NAME"
+          }
+          $section = $match.Groups[1].Value.Trim()
+          if (-not $section) {
+            throw "The CHANGELOG.md section for $env:GITHUB_REF_NAME is empty"
+          }
+          Set-Content -Path changelog-section.md -Value $section -NoNewline
+          Get-Content changelog-section.md
 
       # The push that got tagged already passed CI on main, but nothing
       # enforces that the tag points at such a commit — re-run the suite on
@@ -80,16 +94,20 @@ jobs:
             ${{ env.ZIP_NAME }}
             target/release/darkbright-helper.exe
 
-      # The binary is unsigned, so a downloader has nothing to check it
-      # against. Publishing the hash in the release body at least makes
-      # tampering between GitHub and the disk detectable.
+      # The release body opens with the version's CHANGELOG.md section, copied
+      # verbatim by the verify step above, so the changelog stays the only
+      # place the notes are written. The binary is unsigned, so a downloader
+      # has nothing to check it against. Publishing the hash in the release
+      # body at least makes tampering between GitHub and the disk detectable.
       - name: Create GitHub release with zip attached
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $zip = $env:ZIP_NAME
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          $notes = "See CHANGELOG.md for the changes in this release.`n`n" +
+          $section = Get-Content changelog-section.md -Raw
+          $notes = "$section`n`n" +
+                   "See CHANGELOG.md for the full history.`n`n" +
                    "The zip contains the executable together with its license files and third-party notices.`n`n" +
                    "SHA-256 of $zip`n`n" +
                    "    $hash`n`n" +

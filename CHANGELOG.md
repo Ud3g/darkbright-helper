@@ -5,20 +5,19 @@ history lives in the git log.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-09-22
+
 ### Added
 
-- The interface is available in Italian, Dutch, Polish, Czech, Greek and
-  Ukrainian. Like the earlier translations, these were produced and reviewed
-  with LLMs, not by native speakers; corrections are welcome in GitHub
-  Discussions.
+- Six more interface languages: Italian, Dutch, Polish, Czech, Greek and
+  Ukrainian. LLM-translated and -reviewed, not read by native speakers;
+  corrections are welcome in GitHub Discussions.
 
 ### Fixed
 
-- The program no longer needs the Microsoft Visual C++ Redistributable.
-  Releases up to 0.11.0 linked the C runtime dynamically, so on a Windows
-  installation without the Redistributable the program did not start at all
-  and Windows reported that `VCRUNTIME140.dll` was missing. The runtime is now
-  built into the executable, which grows by about 100 KiB.
+- Starts without the Microsoft Visual C++ Redistributable: the C runtime is
+  now linked statically. Up to 0.11.0 the program failed to start with
+  `VCRUNTIME140.dll` missing. The executable grows by about 100 KiB.
 
 ## [0.11.0] — 2026-09-11
 
