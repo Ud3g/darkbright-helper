@@ -646,7 +646,7 @@ map's contents are exempt (its key format is not yet a contract).
 | `refresh.inactivity_seconds` | 0 - 600 | 30 |
 | `logging.file_enabled` | `true` / `false` | `false` |
 | `logging.file_level` | `error` / `warn` / `info` / `debug` / `trace` (case-insensitive) | `info` |
-| `language` | `system` or a shipped BCP-47 tag (`de`, `en`, `es`, `fr`, `id`, `pt`, `ru`, `tr`, `vi`; a regional tag such as `de-AT` or `pt-BR` resolves to its language; case-insensitive) | `system` |
+| `language` | `system` or a shipped BCP-47 tag (`cs`, `de`, `el`, `en`, `es`, `fr`, `id`, `it`, `nl`, `pl`, `pt`, `ru`, `tr`, `uk`, `vi`; a regional tag such as `de-AT` or `pt-BR` resolves to its language; case-insensitive) | `system` |
 
 These ranges are shared with, but enforced differently by, the settings window (§14): the
 loader above *substitutes the default* for an out-of-range value (a repair policy for
@@ -2155,7 +2155,7 @@ The controller's own logic (every `SettingChanged` variant, debounced save timin
 - Restore Defaults with a fixed English choice on a German OS: the window relabels to German after the values reset.
 - Start a second instance: the "already running" box is in the OS language regardless of the config's choice.
 - Hand-edit `"language": "ja"`, restart: the log shows the `Unparseable` repair, the UI follows the OS.
-- Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Where the OSD error row can be provoked (a monitor that refuses DDC/CI), check it too in each language for clipped diacritics (Vietnamese) and complete Cyrillic text (Russian). Note any text that ends in an ellipsis or is cut.
+- Cycle Settings → Language through every language. For each: no label shows a hollow box for a missing glyph, and no diacritic is clipped at the top of its control (Vietnamese has the tallest stacks); click a hotkey field, press Shift+F5, and read the rejection on the status line in full; press Esc; open the tray menu; click Restore defaults and answer Cancel. Where the OSD error row can be provoked (a monitor that refuses DDC/CI), check it too in each language for clipped diacritics (Vietnamese) and complete Cyrillic and Greek text (Russian, Ukrainian, Greek). Note any text that ends in an ellipsis or is cut.
 - Click a hotkey field, press Shift+F5 to show its rejection, then switch Settings → Language before it clears: the rejection reappears in the new language — never left showing the language it was first shown in.
 - Note any German label that still truncates: with the measured layout described in §14 in place, truncation here points at a bug in the planner or in one of `CONTROLS`' authored floors, not at a width that needs enlarging by hand.
 

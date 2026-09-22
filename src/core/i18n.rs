@@ -16,14 +16,20 @@
 //! The product name `darkbright-helper` is not in here — a product name is not
 //! translated.
 
+mod cs;
 mod de;
+mod el;
 mod en;
 mod es;
 mod fr;
 mod id;
+mod it;
+mod nl;
+mod pl;
 mod pt;
 mod ru;
 mod tr;
+mod uk;
 mod vi;
 
 pub(crate) use de::GERMAN;
@@ -52,6 +58,18 @@ pub enum Lang {
     Turkish,
     /// Vietnamese.
     Vietnamese,
+    /// Italian.
+    Italian,
+    /// Dutch, as spoken in the Netherlands.
+    Dutch,
+    /// Polish.
+    Polish,
+    /// Czech.
+    Czech,
+    /// Greek.
+    Greek,
+    /// Ukrainian.
+    Ukrainian,
 }
 
 impl Lang {
@@ -65,10 +83,16 @@ impl Lang {
         Lang::English,
         Lang::Spanish,
         Lang::French,
+        Lang::Italian,
+        Lang::Dutch,
+        Lang::Polish,
         Lang::Portuguese,
         Lang::Vietnamese,
         Lang::Turkish,
+        Lang::Czech,
+        Lang::Greek,
         Lang::Russian,
+        Lang::Ukrainian,
     ];
 
     /// The BCP-47 tag identifying this language: what `config.json` stores
@@ -86,6 +110,12 @@ impl Lang {
             Lang::Russian => "ru",
             Lang::Turkish => "tr",
             Lang::Vietnamese => "vi",
+            Lang::Italian => "it",
+            Lang::Dutch => "nl",
+            Lang::Polish => "pl",
+            Lang::Czech => "cs",
+            Lang::Greek => "el",
+            Lang::Ukrainian => "uk",
         }
     }
 
@@ -103,6 +133,12 @@ impl Lang {
             Lang::Russian => "Русский",
             Lang::Turkish => "Türkçe",
             Lang::Vietnamese => "Tiếng Việt",
+            Lang::Italian => "Italiano",
+            Lang::Dutch => "Nederlands",
+            Lang::Polish => "Polski",
+            Lang::Czech => "Čeština",
+            Lang::Greek => "Ελληνικά",
+            Lang::Ukrainian => "Українська",
         }
     }
 
@@ -661,6 +697,12 @@ pub fn strings(lang: Lang) -> &'static Strings {
         Lang::Russian => &ru::RUSSIAN,
         Lang::Turkish => &tr::TURKISH,
         Lang::Vietnamese => &vi::VIETNAMESE,
+        Lang::Italian => &it::ITALIAN,
+        Lang::Dutch => &nl::DUTCH,
+        Lang::Polish => &pl::POLISH,
+        Lang::Czech => &cs::CZECH,
+        Lang::Greek => &el::GREEK,
+        Lang::Ukrainian => &uk::UKRAINIAN,
     }
 }
 

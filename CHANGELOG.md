@@ -5,6 +5,13 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- The interface is available in Italian, Dutch, Polish, Czech, Greek and
+  Ukrainian. Like the earlier translations, these were produced and reviewed
+  with LLMs, not by native speakers; corrections are welcome in GitHub
+  Discussions.
+
 ### Fixed
 
 - The program no longer needs the Microsoft Visual C++ Redistributable.

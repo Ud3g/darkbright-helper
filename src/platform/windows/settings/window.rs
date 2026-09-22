@@ -2615,10 +2615,16 @@ mod tests {
                 "English",
                 "Español",
                 "Français",
+                "Italiano",
+                "Nederlands",
+                "Polski",
                 "Português (Brasil)",
                 "Tiếng Việt",
                 "Türkçe",
-                "Русский"
+                "Čeština",
+                "Ελληνικά",
+                "Русский",
+                "Українська"
             ]
         );
     }

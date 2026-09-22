@@ -147,9 +147,10 @@ Two things the settings window cannot show you:
 Valid ranges and defaults for every field are tabulated in
 [`docs/architecture.md`](docs/architecture.md) §4. An out-of-range value is logged as an
 error and replaced with the default — a bad config never stops the app from starting. The
-interface follows the Windows display language (English, French, German, Indonesian,
-Brazilian Portuguese, Russian, Spanish, Turkish or Vietnamese) and can be pinned to one
-language in Settings; the `language` field holds that choice.
+interface follows the Windows display language (Czech, Dutch, English, French, German, Greek,
+Indonesian, Italian, Polish, Brazilian Portuguese, Russian, Spanish, Turkish, Ukrainian or
+Vietnamese) and can be pinned to one language in Settings; the `language` field holds that
+choice.
 
 ## Logging
 
@@ -273,10 +274,9 @@ What that means in practice:
   meaningfully unit-tested.
 - **The commit history says so.** Most commits carry `Co-authored-by` trailers naming the
   model that produced them.
-- **The translations are LLM-generated too.** I checked the German one myself. French,
-  Spanish, Brazilian Portuguese, Russian, Indonesian, Turkish and Vietnamese went through a
-  multi-pass LLM review — a translation, a blind back-translation, an independent review —
-  but no native speaker has read them. If a wording is wrong or clumsy in your language,
+- **The translations are LLM-generated too.** I checked the German one myself. The other
+  thirteen languages went through a multi-pass LLM review — a translation, a blind
+  back-translation, an independent review — but no native speaker has read them. If a wording is wrong or clumsy in your language,
   please say so in
   [Discussions](https://github.com/Ud3g/darkbright-helper/discussions/categories/general).
 - **My support depth is limited by this.** I can reason about this codebase's design and
