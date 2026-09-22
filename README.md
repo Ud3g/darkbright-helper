@@ -36,22 +36,54 @@ Rust.
 
 ![The settings window: language, Start with Windows, brightness step, hotkey rebinding, OSD timing, refresh intervals and logging](docs/media/settings-window.png)
 
-## Download
+## Install
+
+### With winget
+
+[winget](https://learn.microsoft.com/windows/package-manager/winget/) is the Windows package
+manager; it comes with the App Installer that ships with Windows 11 and current versions of
+Windows 10. In a terminal:
+
+```powershell
+winget install darkbright-helper
+```
+
+winget downloads the release from GitHub, checks it against the SHA-256 recorded in the
+package manifest, and unpacks it. Later, `winget upgrade darkbright-helper` fetches a new
+version — quit the program from its tray menu first, since Windows cannot replace a running
+executable — and `winget uninstall darkbright-helper` removes it.
+
+The package is a *portable* one: winget adds a `darkbright-helper` command but no Start menu
+entry. Start the program by typing `darkbright-helper` in a new terminal window, and turn on
+"Start with Windows" in its Settings window if you want it running after every sign-in.
+
+### From GitHub Releases
 
 Prebuilt Windows binaries are published on
 [GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases)
 (releases after 0.8.0), as a zip bundling the executable with its license files and
-third-party notices.
+third-party notices. Unpack it anywhere and run `darkbright-helper.exe`.
 
 The binaries are not code-signed, so your browser warns on download and Windows warns the
 first time you run one. This is expected — see
 [Running an unsigned binary](#running-an-unsigned-binary) for what to expect, why it happens,
-and what you can verify. If you would rather not click past a warning, build from source
-instead (see [Build from source](#build-from-source)).
+and what you can verify.
+
+Releases up to 0.11.0 need the Microsoft Visual C++ Redistributable: if Windows reports that
+`VCRUNTIME140.dll` is missing, install the x64 package from
+[Microsoft's download page](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist).
+Later releases have the runtime built in, and winget installs it automatically wherever it
+is still needed.
+
+### From source
+
+See [Build from source](#build-from-source) — the way to go if you would rather not click
+past a warning for an unsigned binary.
 
 ## Quick start
 
-1. Run `darkbright-helper.exe`.
+1. Start the program: `darkbright-helper` in a terminal after a winget install, otherwise
+   `darkbright-helper.exe` from wherever you unpacked it.
 2. `Ctrl+Shift+Up` increases the brightness of the monitor under your mouse pointer.
 3. `Ctrl+Shift+Down` decreases it.
 4. Once brightness reaches 0 %, continuing to decrease activates the dimming overlay.
