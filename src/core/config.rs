@@ -1075,7 +1075,7 @@ mod tests {
     fn a_shipped_language_tag_passes_validation_unchanged() {
         let json = r#"{ "language": "de-AT" }"#;
         let mut config: Config = serde_json::from_str(json).unwrap();
-        assert!(config.validate_and_fix().is_empty());
+        assert_eq!(config.validate_and_fix(), []);
         assert_eq!(
             config.language, "de-AT",
             "the loader never rewrites the value"
@@ -1118,8 +1118,8 @@ mod tests {
     #[test]
     fn a_valid_config_raises_no_notices() {
         let mut config = Config::default();
-        assert!(config.validate_and_fix().is_empty());
-        assert!(config.repair_hotkeys(|_| true).is_empty());
+        assert_eq!(config.validate_and_fix(), []);
+        assert_eq!(config.repair_hotkeys(|_| true), []);
     }
 
     #[test]
@@ -1192,7 +1192,10 @@ mod tests {
     #[test]
     fn known_keys_produce_no_reports() {
         let file = serde_json::to_value(Config::default()).unwrap();
-        assert!(Config::unknown_keys(&file, &schema_value()).is_empty());
+        assert_eq!(
+            Config::unknown_keys(&file, &schema_value()),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -1202,7 +1205,10 @@ mod tests {
         let file: serde_json::Value =
             serde_json::from_str(r#"{ "monitors": { "DEL U2722D": { "future_setting": 1 } } }"#)
                 .unwrap();
-        assert!(Config::unknown_keys(&file, &schema_value()).is_empty());
+        assert_eq!(
+            Config::unknown_keys(&file, &schema_value()),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

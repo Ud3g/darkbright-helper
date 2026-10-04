@@ -506,7 +506,7 @@ fn refresh_keeps_overlay_at_hardware_floor() {
     deliver_refresh(&mut c, vec![(id.clone(), 0)], vec![id.clone()], base);
 
     assert_eq!(c.states[&id].overlay_opacity, 40);
-    assert!(c.overlay.removed.is_empty());
+    assert_eq!(c.overlay.removed, []);
 }
 
 #[test]
@@ -525,7 +525,7 @@ fn refresh_keeps_overlay_while_set_is_pending() {
     deliver_refresh(&mut c, vec![(id.clone(), 5)], vec![id.clone()], base);
 
     assert_eq!(c.states[&id].overlay_opacity, 40);
-    assert!(c.overlay.removed.is_empty());
+    assert_eq!(c.overlay.removed, []);
 }
 
 // ── Ghost pruning ────────────────────────────────────────────────────
@@ -934,7 +934,7 @@ fn set_result_confirms_updates_visible_osd_and_resets_hang_counter() {
     assert_eq!(state.cached_brightness, 60);
     assert!(state.pending.is_none());
     assert_eq!(c.consecutive_set_timeouts, 0);
-    assert!(!c.osd.updates.is_empty());
+    assert_ne!(c.osd.updates, Vec::<u8>::new());
 }
 
 #[test]
@@ -952,7 +952,7 @@ fn set_result_failure_reverts_and_shows_error() {
         50,
         "reverted to cache"
     );
-    assert!(!c.osd.error_updates.is_empty());
+    assert_ne!(c.osd.error_updates, Vec::<u8>::new());
 }
 
 #[test]
@@ -1553,7 +1553,7 @@ fn setting_changed_logging_fields_are_save_only() {
         c.osd.appearance_calls.is_empty(),
         "logging changes are restart-only; no live effect"
     );
-    assert!(c.settings.refreshed.is_empty());
+    assert_eq!(c.settings.refreshed, []);
 }
 
 #[test]
@@ -1893,9 +1893,9 @@ fn hotkey_rebind_result_with_no_pending_op_is_ignored() {
     .unwrap();
 
     assert!(!c.hotkeys_degraded);
-    assert!(c.settings.refreshed.is_empty());
-    assert!(c.settings.errors.is_empty());
-    assert!(c.settings.notices.is_empty());
+    assert_eq!(c.settings.refreshed, []);
+    assert_eq!(c.settings.errors, Vec::<String>::new());
+    assert_eq!(c.settings.notices, Vec::<String>::new());
 }
 
 #[test]
@@ -1928,9 +1928,9 @@ fn hotkey_rebind_result_for_a_different_op_than_pending_is_ignored() {
         "the mismatched ack must not clear the actually-pending op"
     );
     assert!(!c.hotkeys_degraded);
-    assert!(c.settings.refreshed.is_empty());
-    assert!(c.settings.errors.is_empty());
-    assert!(c.settings.notices.is_empty());
+    assert_eq!(c.settings.refreshed, []);
+    assert_eq!(c.settings.errors, Vec::<String>::new());
+    assert_eq!(c.settings.notices, Vec::<String>::new());
 }
 
 #[test]
@@ -2077,7 +2077,7 @@ fn hotkey_rebind_result_success_clears_pending_and_prev_hotkeys() {
     assert!(c.pending_hotkey_op.is_none());
     assert!(c.prev_hotkeys.is_none());
     assert!(!c.hotkeys_degraded);
-    assert!(c.settings.notices.is_empty());
+    assert_eq!(c.settings.notices, Vec::<String>::new());
 }
 
 #[test]
@@ -2234,7 +2234,7 @@ fn pending_hotkey_op_within_the_deadline_is_left_alone() {
     assert_eq!(c.config.hotkeys.brightness_up, "Alt+Up");
     assert!(!c.hotkeys_degraded);
     assert!(c.pending_hotkey_op.is_some());
-    assert!(c.settings.errors.is_empty());
+    assert_eq!(c.settings.errors, Vec::<String>::new());
 }
 
 #[test]
@@ -2889,8 +2889,8 @@ fn a_language_change_with_the_same_result_dirties_but_pushes_nothing() {
 
     assert_eq!(c.config.language, "de");
     assert!(c.dirty.language);
-    assert!(c.osd.languages.is_empty());
-    assert!(c.settings.languages.is_empty());
+    assert_eq!(c.osd.languages, []);
+    assert_eq!(c.settings.languages, []);
 }
 
 #[test]
@@ -2948,8 +2948,8 @@ fn restore_defaults_without_a_language_change_pushes_nothing() {
         base,
     )
     .unwrap();
-    assert!(c.settings.languages.is_empty());
-    assert!(c.osd.languages.is_empty());
+    assert_eq!(c.settings.languages, []);
+    assert_eq!(c.osd.languages, []);
 }
 
 #[test]
