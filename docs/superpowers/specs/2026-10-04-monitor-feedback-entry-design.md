@@ -383,3 +383,31 @@ Not adopted, with reasons:
   pass already in flight.** Both widen the scope without a demonstrated harm.
 - **Foreground handling and an error dialog when the browser does not open.** The concern is an
   inference, not an observation; it became a manual check and a listed risk.
+
+## Menu text per language
+
+Translated, back-translated blind and reviewed against the four criteria on 2026-10-04. The
+back-translation and "Reader expects" were made from the final text without sight of the
+English.
+
+| Language | Text | Blind back-translation | Reader expects | Criteria 1–4 |
+|---|---|---|---|---|
+| English (`en`) | Share monitor feedback… | — | — | source |
+| German (`de`) | Monitor-Rückmeldung geben… | — | — | agreed with the maintainer |
+| Czech (`cs`) | Napsat zpětnou vazbu k\u{a0}monitorům… | Write feedback on the monitors… | A form or web page opens to write feedback about the monitors | pass |
+| Greek (`el`) | Σχόλια για τις οθόνες… | Comments/feedback for the screens… | A place opens to submit comments or feedback about the monitors | pass |
+| Spanish (`es`) | Opinar sobre los monitores… | Give an opinion on the monitors… | A form or page opens to share an opinion about the monitors | pass |
+| French (`fr`) | Donner votre avis sur vos écrans… | Give your opinion on your screens… | A form or page opens to give an opinion about one's screens | pass |
+| Indonesian (`id`) | Beri masukan tentang monitor… | Give feedback about monitors… | A form or page opens to submit feedback about the monitors | pass |
+| Italian (`it`) | Lascia un parere sui monitor… | Leave an opinion on the monitors… | A form or page opens to leave an opinion about the monitors | pass |
+| Dutch (`nl`) | Feedback over uw beeldschermen geven… | Give feedback about your screens… | A form or page opens to give feedback about one's screens | pass |
+| Polish (`pl`) | Napisz opinię o monitorach… | Write an opinion about the monitors… | A form or page opens to write an opinion about the monitors | pass |
+| Portuguese (`pt`) | Dar opinião sobre os monitores… | Give an opinion about the monitors… | A form or page opens to give an opinion about the monitors | pass |
+| Russian (`ru`) | Оставить отзыв о мониторах… | Leave a review about the monitors… | A form or page opens to leave a review or feedback about the monitors | pass |
+| Turkish (`tr`) | Monitörler hakkında geri bildirim ver… | Give feedback about monitors… | A form or page opens to give feedback about the monitors | pass |
+| Ukrainian (`uk`) | Залишити відгук про монітори… | Leave a review about the monitors… | A form or page opens to leave a review or feedback about the monitors | pass |
+| Vietnamese (`vi`) | Nhận xét về màn hình… | Comments/reviews about the screens… | A form or page opens to leave comments or a review about the screens | pass |
+
+The Czech text is given as a Rust string literal: `\u{a0}` is the no-break space the Czech table
+puts after a one-letter preposition. The reviewer changed only the capitalisation of `id` and `pt`
+to sentence case, following the English source as those tables do for menu commands.
