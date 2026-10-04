@@ -19,7 +19,8 @@ Only the **latest release** receives fixes. There are no backports.
 This tool has a deliberately small attack surface: it performs **no network I/O**, runs
 without elevation, and talks only to local monitors (DDC/CI), the local config file, and
 the Win32 UI. The one thing it hands to the shell beyond its own files is the
-hardware-report link, built from EDID model names and percent-encoded. Things that would genuinely interest me:
+hardware-report link, built from EDID model names and percent-encoded. Things that would
+genuinely interest me:
 
 - Memory-safety issues in the FFI layer (`src/platform/windows/`) that are reachable from
   untrusted input — e.g. a malformed EDID blob from a monitor

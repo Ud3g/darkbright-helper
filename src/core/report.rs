@@ -15,7 +15,7 @@ pub(crate) struct ReportMonitor {
     /// Display name as the tray menu shows it (manufacturer code and model,
     /// `#N` for equal models).
     pub(crate) name: String,
-    /// Whether a brightness read has succeeded at least once in this session.
+    /// Whether a brightness read has succeeded at least once since the monitor was detected.
     pub(crate) brightness_read: bool,
 }
 
