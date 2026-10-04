@@ -224,10 +224,11 @@ from report, app version and optional Windows build to a link.
 
 **Length budget.** The whole link is limited to 2000 characters. The figure rests on an unverified
 recollection that opening a link through the Windows shell can fail near 2080 characters; the
-manual pass checks it with a deliberately long link, and the budget is one constant. By estimate it
-holds about five monitors with a full block. Beyond that the text is shortened by whole blocks,
-never inside one: the monitors first in tray-menu order keep their full block, the surplus ones
-appear as a single line "Also connected: …", and if that does not fit either, as "+ N more".
+manual pass checks it with a deliberately long link, and the budget is one constant. Measured on
+the agreed wording, it holds four monitors with a full block. Beyond that the text is shortened
+by whole blocks, never inside one: the monitors first in tray-menu order keep their full block,
+the surplus ones appear as a single line "Also connected: …", and if that does not fit either,
+as "+ N more".
 
 **Opening.** `main.rs` gets a sibling of `open_with_default_app` for links, sharing the same
 `ShellExecuteW` core.
