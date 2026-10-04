@@ -1549,7 +1549,10 @@ mod tests {
 
     #[test]
     fn menu_warning_lines_match_active_warnings() {
-        assert!(warning_menu_lines(&ENGLISH, HealthWarnings::default()).is_empty());
+        assert_eq!(
+            warning_menu_lines(&ENGLISH, HealthWarnings::default()),
+            Vec::<&str>::new()
+        );
 
         let all = HealthWarnings {
             ddc: DdcHealth::WorkerDead,
