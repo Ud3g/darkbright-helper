@@ -51,6 +51,7 @@ pub(crate) const UKRAINIAN: Strings = Strings {
     tray_usage_brighter: "Збільшити яскравість",
     tray_usage_dimmer: "Зменшити яскравість",
     tray_menu_settings: "Параметри",
+    tray_menu_share_feedback: "Залишити відгук про монітори…",
     tray_menu_open_log_folder: "Відкрити папку журналу",
     tray_menu_quit_fmt: "Закрити {name}",
 

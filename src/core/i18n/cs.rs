@@ -50,6 +50,7 @@ pub(crate) const CZECH: Strings = Strings {
     tray_usage_brighter: "Zvýšit jas",
     tray_usage_dimmer: "Snížit jas",
     tray_menu_settings: "Nastavení",
+    tray_menu_share_feedback: "Napsat zpětnou vazbu k\u{a0}monitorům…",
     tray_menu_open_log_folder: "Otevřít složku protokolů",
     tray_menu_quit_fmt: "Ukončit {name}",
 

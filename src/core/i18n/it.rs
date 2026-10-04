@@ -51,6 +51,7 @@ pub(crate) const ITALIAN: Strings = Strings {
     tray_usage_brighter: "Aumenta luminosità",
     tray_usage_dimmer: "Riduci luminosità",
     tray_menu_settings: "Impostazioni",
+    tray_menu_share_feedback: "Lascia un parere sui monitor…",
     tray_menu_open_log_folder: "Apri cartella dei registri",
     tray_menu_quit_fmt: "Esci da {name}",
 

@@ -73,7 +73,8 @@ fn every_field(s: &Strings) -> impl IntoIterator<Item = (&'static str, &'static 
         tray_tip_hotkeys_stopped, tray_tip_hotkey_change_failed, tray_tip_file_logging_off,
         tray_warn_ddc_unavailable, tray_warn_monitor_unresponsive, tray_warn_hotkeys_stopped,
         tray_warn_hotkey_change_failed, tray_warn_file_logging_failed, tray_usage_heading,
-        tray_usage_brighter, tray_usage_dimmer, tray_menu_settings, tray_menu_open_log_folder,
+        tray_usage_brighter, tray_usage_dimmer, tray_menu_settings, tray_menu_share_feedback,
+        tray_menu_open_log_folder,
         tray_menu_quit_fmt, key_mod_ctrl, key_mod_alt, key_mod_shift, key_mod_win,
         key_separator, key_up, key_down, key_left, key_right, key_page_up, key_page_down,
         key_home, key_end, key_insert, key_delete, key_space, key_tab, key_enter, key_escape,
@@ -108,6 +109,7 @@ fn every_field(s: &Strings) -> impl IntoIterator<Item = (&'static str, &'static 
         ("tray_usage_heading", tray_usage_heading),
         ("tray_usage_brighter", tray_usage_brighter), ("tray_usage_dimmer", tray_usage_dimmer),
         ("tray_menu_settings", tray_menu_settings),
+        ("tray_menu_share_feedback", tray_menu_share_feedback),
         ("tray_menu_open_log_folder", tray_menu_open_log_folder),
         ("tray_menu_quit_fmt", tray_menu_quit_fmt), ("key_mod_ctrl", key_mod_ctrl),
         ("key_mod_alt", key_mod_alt), ("key_mod_shift", key_mod_shift),
@@ -179,6 +181,17 @@ fn the_quit_command_keeps_its_product_name_placeholder() {
             strings(lang).tray_menu_quit_fmt.contains("{name}"),
             "{lang:?} dropped the {{name}} placeholder from the quit command"
         );
+    }
+}
+
+/// The command opens a page where the user still has to act, which a
+/// Windows menu marks with an ellipsis. A translation that drops it also
+/// drops the hint that nothing is submitted by the click alone.
+#[test]
+fn the_feedback_command_ends_in_an_ellipsis_in_every_language() {
+    for &lang in Lang::ALL {
+        let text = strings(lang).tray_menu_share_feedback;
+        assert!(text.ends_with('…'), "{}: {text:?}", lang.tag());
     }
 }
 

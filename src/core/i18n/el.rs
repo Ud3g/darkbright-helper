@@ -55,6 +55,7 @@ pub(crate) const GREEK: Strings = Strings {
     tray_usage_brighter: "Αύξηση φωτεινότητας",
     tray_usage_dimmer: "Μείωση φωτεινότητας",
     tray_menu_settings: "Ρυθμίσεις",
+    tray_menu_share_feedback: "Σχόλια για τις οθόνες…",
     tray_menu_open_log_folder: "Άνοιγμα φακέλου καταγραφής",
     tray_menu_quit_fmt: "Έξοδος από {name}",
 

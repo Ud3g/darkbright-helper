@@ -26,6 +26,7 @@ pub(crate) const GERMAN: Strings = Strings {
     tray_usage_brighter: "Heller",
     tray_usage_dimmer: "Dunkler",
     tray_menu_settings: "Einstellungen",
+    tray_menu_share_feedback: "Monitor-Rückmeldung geben…",
     tray_menu_open_log_folder: "Protokollordner öffnen",
     tray_menu_quit_fmt: "{name} beenden",
 

@@ -47,6 +47,7 @@ pub(crate) const VIETNAMESE: Strings = Strings {
     tray_usage_brighter: "Tăng độ sáng",
     tray_usage_dimmer: "Giảm độ sáng",
     tray_menu_settings: "Cài đặt",
+    tray_menu_share_feedback: "Nhận xét về màn hình…",
     tray_menu_open_log_folder: "Mở thư mục nhật ký",
     tray_menu_quit_fmt: "Thoát {name}",
 

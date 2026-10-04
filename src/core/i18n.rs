@@ -304,6 +304,10 @@ pub struct Strings {
     pub tray_usage_dimmer: &'static str,
     /// Menu command opening the settings window.
     pub tray_menu_settings: &'static str,
+    /// Menu command that opens a prefilled hardware report in the browser.
+    /// Names the monitor, invites good and bad news alike, and must not
+    /// suggest that the app itself sends anything. Ends in `…`.
+    pub tray_menu_share_feedback: &'static str,
     /// Menu command opening the log folder in Explorer.
     pub tray_menu_open_log_folder: &'static str,
     /// Menu command that exits the app. Takes the product name, so the

@@ -46,6 +46,7 @@ pub(crate) const INDONESIAN: Strings = Strings {
     tray_usage_brighter: "Naikkan kecerahan",
     tray_usage_dimmer: "Turunkan kecerahan",
     tray_menu_settings: "Pengaturan",
+    tray_menu_share_feedback: "Beri masukan tentang monitor…",
     tray_menu_open_log_folder: "Buka Folder Log",
     tray_menu_quit_fmt: "Keluar dari {name}",
 

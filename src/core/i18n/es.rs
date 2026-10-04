@@ -48,6 +48,7 @@ pub(crate) const SPANISH: Strings = Strings {
     tray_usage_brighter: "Subir brillo",
     tray_usage_dimmer: "Bajar brillo",
     tray_menu_settings: "Configuración",
+    tray_menu_share_feedback: "Opinar sobre los monitores…",
     tray_menu_open_log_folder: "Abrir carpeta de registros",
     tray_menu_quit_fmt: "Salir de {name}",
 

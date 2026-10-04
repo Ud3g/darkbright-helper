@@ -175,7 +175,7 @@ fn load_dark_mode_api() -> Option<DarkModeApi> {
 ///
 /// Returns `None` if the value is missing, longer than a build number has ever
 /// been, or not a number — each of which leaves the menus light.
-fn current_build_number() -> Option<u32> {
+pub(super) fn current_build_number() -> Option<u32> {
     const SUBKEY: PCWSTR = w!(r"SOFTWARE\Microsoft\Windows NT\CurrentVersion");
     const VALUE: PCWSTR = w!("CurrentBuildNumber");
 
