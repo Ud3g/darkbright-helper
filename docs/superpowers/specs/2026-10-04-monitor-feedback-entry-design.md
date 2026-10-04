@@ -411,3 +411,27 @@ English.
 The Czech text is given as a Rust string literal: `\u{a0}` is the no-break space the Czech table
 puts after a one-letter preposition. The reviewer changed only the capitalisation of `id` and `pt`
 to sentence case, following the English source as those tables do for menu commands.
+
+## Manual pass
+
+Run on 2026-10-04 on Windows build 26200, with one monitor connected (PHL 346B1C over
+DisplayPort, no serial number in its EDID).
+
+- Length budget: links of 2000, 2100, 3000 and 4000 characters, opened through the shell
+  (`Start-Process`) with real encoded report text, all opened the "Hardware reports" editor with
+  title and body intact and the end marker last. The shell limit lies above 4000 characters;
+  `MAX_URL_LEN` stays at 2000. (A first run of the probe showed empty bodies; the cause was an
+  unencoded `#` in the probe script itself, which ends the query. The app encodes `#` as `%23`.)
+- Hardware Report Test: the click logged "Hardware report requested from tray menu", then
+  "Requesting monitor refresh from DDC worker", then "Hardware report ready monitors=1
+  unidentified=0"; the link was 890 characters. The browser opened the category with the title
+  `PHL 346B1C`, one monitor block stating "has read … yes", the version line and the Windows
+  build. No serial number appeared. The entry showed in German ("Monitor-Rückmeldung geben…"),
+  the app's interface language on this machine.
+- Browser foreground: the browser came to the front on its own.
+- First report: https://github.com/Ud3g/darkbright-helper/discussions/55 — the HTML comment is
+  hidden in the rendered post, and both questions render as checkboxes.
+- Not checked: unplugging a monitor (only one was connected); the unidentified-display count (no
+  display without an EDID was available); several clicks while a report waits (a single fast
+  monitor finishes the pass before the menu can be reopened); switching the language in the
+  settings window.
