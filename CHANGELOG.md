@@ -5,6 +5,11 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Added
+
+- Tray menu entry "Share monitor feedback…": opens a prefilled hardware report on GitHub in
+  your browser. The app itself still sends nothing.
+
 ## [0.12.0] — 2026-09-22
 
 ### Added

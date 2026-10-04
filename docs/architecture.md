@@ -113,6 +113,7 @@ src/
 │   ├── logfile.rs        # Size-capped rolling file log sink
 │   ├── panic_hook.rs     # Logs panic payload/location/thread, flushes sinks before exit
 │   ├── reconcile.rs      # Refresh generations, respawn backoff, watchdog policies
+│   ├── report.rs         # Hardware report a user can post, and the GitHub link built from it
 │   ├── state.rs          # Application state, messages, DDC commands
 │   └── version.rs        # Build/version string shown in the tray and settings footer
 └── platform/
@@ -393,12 +394,13 @@ enum BrightnessMessage {
     Adjust { monitor_id: Option<MonitorId>, delta: i8 },       // None = monitor under cursor
     AdjustStep { direction: i8 },                              // One configured step, cursor monitor
     DdcSetResult { monitor_id, value, seq, success, error },    // DDC worker → main
-    DdcRefreshResult { generation, monitors, enumerated },      // DDC worker → main
+    DdcRefreshResult { generation, monitors, enumerated, unidentified }, // DDC worker → main
     Refresh,
     SystemResumed,                                             // Power thread → main
 
     // Tray thread → main
     TrayOpenSettings,
+    TrayShareMonitorFeedback,                                  // Starts a pass, then a hardware report (§13)
     TrayOpenLogFolder,
     TrayRequestQuit,
     TrayMenuOpening { reply_tx: Sender<TrayMenuData> },         // request/response
@@ -983,6 +985,7 @@ The application maintains cached brightness values for instant OSD response. The
 | **Inactivity** | 30s | `refresh.inactivity_seconds` | Resyncs before first adjustment after idle period |
 | **System Resume** | Always | (not configurable) | Monitors may reset brightness after sleep/hibernate |
 | **Display Change** | Always | (not configurable) | Topology changed: monitors added/removed, and handles may be reused for a different display |
+| **Feedback Request** | Always | (not configurable) | A hardware report describes the monitors as they are at the click, so the click starts a pass of its own |
 
 **Behavior:**
 
@@ -995,6 +998,8 @@ The application maintains cached brightness values for instant OSD response. The
 4. **Display Change**: The same listener handles `WM_DISPLAYCHANGE` and sends a plain `Refresh`. This is the only trigger that cannot be disabled or delayed by configuration, and it is the one that keeps handle→identity mapping honest: Windows may reuse a monitor handle for a different display across a topology change, so a stale `id_cache` entry could otherwise send an adjustment to the wrong monitor. Absence evidence is deliberately *not* reset — a monitor genuinely unplugged here should still age out and be pruned.
 
    The listener's window is therefore a hidden **top-level** window, not a message-only one: message-only windows are excluded from broadcast messages, and `WM_DISPLAYCHANGE` is broadcast. (This is the same trap that once cost this module its resume detection; a unit test now pins the window's parent to the desktop so the property cannot silently regress.)
+
+5. **Feedback Request**: The tray's "Share monitor feedback…" entry starts a refresh even while one is in flight — only a pass that began after the click is known to show the monitors as they are now. The superseded pass's result is discarded by the generation counter like any other stale one. Further clicks while that report is still waiting start nothing, so impatient clicking cannot queue passes in the worker. See §13, "Hardware Report".
 
 **Overlap Protection:**
 
@@ -1018,6 +1023,11 @@ discovered monitor's individual identity read failed. The distinction
 matters because "unreadable" is common and often transient — standby, an
 EDID-emulating KVM, a DDC hiccup surviving all 3 retries — while
 "unenumerated" is a much closer proxy for "not physically present."
+
+A third value travels with the two sets: `unidentified`, the number of displays the pass
+enumerated but could not identify because the EDID lookup failed. It is counted at that one
+failure and nowhere else, so a display is either in `enumerated` or in this count, never in
+both. Brightness control does not read it; it exists for the hardware report (§13).
 
 Unreadable-but-enumerated monitors stay *set-capable*: the worker keeps
 their freshly opened DDC handle even when the initial brightness read fails,
@@ -1155,11 +1165,17 @@ Set either to `0` to disable that trigger. System resume refresh cannot be disab
 struct MonitorState {
     cached_brightness: u8,          // Last confirmed DDC value
     brightness_known: bool,         // False while the value is a seed, not an observation
+    brightness_read: bool,          // True once a read has succeeded; a confirmed write does not set it
     pending: Option<PendingSet>,    // Optimistic value + seq + sent-at, awaiting confirmation
     overlay_opacity: u8,            // Current overlay dimming level
     missing_since: Option<Instant>, // First observed miss from the enumerated set; None while present
 }
 ```
+
+`brightness_known` and `brightness_read` differ on purpose. A confirmed write makes the value
+known — the tray drops its `~` — but it is not a read: a monitor that refuses reads and
+honours writes ends up known without ever having been read. The hardware report (§13) states
+`brightness_read`, because that difference is exactly what such a report is for.
 
 - Cache populated on startup via `DdcCommand::RefreshAll`
 - DDC worker owns all `DdcMonitor` instances
@@ -1313,6 +1329,7 @@ The application runs as a background process with a system tray icon for user in
 │ Dimmer                        Ctrl+Shift+Down   │
 │─────────────────────────────────────────────────│
 │ Settings                                        │  → Opens the settings window (§14)
+│ Share monitor feedback…                         │  → Opens a prefilled hardware report in the browser
 │ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
 │ Quit darkbright-helper                          │  → Graceful shutdown
 │─────────────────────────────────────────────────│
@@ -1485,6 +1502,61 @@ theming path of its own — dark mode included — is a large apparatus for one
 sentence the menu can simply hold. The rows cost none of that and cannot fall
 out of step with the menu around them. What went with the window is the option
 to leave the instructions on screen while trying the keys.
+
+**Hardware Report:**
+
+"Share monitor feedback…" opens the repository's "Hardware reports" discussion category in the
+default browser with a report already written: the app version, the Windows build number, one
+block per identified monitor, and the number of displays the app could not identify. The user
+ticks boxes, adds what they like and submits — or closes the tab.
+
+*The app sends nothing.* It hands a link to the shell; the browser does the rest, visibly, and
+only if the user submits. The link carries the app version, the Windows build number, each
+monitor's manufacturer code and model name, whether the app has read that monitor's
+brightness, and the number of displays it could not identify. It never carries a serial
+number: the report type in `core/report.rs` holds no `MonitorId`, only the display name, which
+is built from manufacturer and model alone. Nor does it carry a path, a user name or any
+configuration value.
+
+*One pass per report.* The report lists identified monitors and counts unidentified displays,
+and one display must not appear in both. Three things would put it there: counting a failure
+that happens after identification, when the monitor is already reported as identified; listing
+from state a monitor the latest pass failed to identify, since state outlives a miss by
+`PRUNE_ABSENCE_WINDOW`; and a pass that identifies nothing, which leaves all state in place.
+Summing counts across passes would be a fourth. So a report is built from exactly one
+enumeration pass: the list is what that pass identified, and the count is what the same pass
+could not identify. Windows hands out each display once per pass, and each lands in one of the
+two. The unit is a display as Windows sees it, not a device: a virtual display without an EDID
+is counted, and clone mode or two identical monitors without serial numbers still collapse
+into one entry, as they do everywhere else in the app. Names are generated from the monitors
+of that pass, so while a pruned-to-be twin is still in state the tray may show `#1` where the
+report shows no suffix.
+
+*Flow.* The click sends `TrayShareMonitorFeedback`. The controller starts a refresh — even
+with one in flight — and marks a report as waiting; a further click while it waits starts
+nothing. The next current-generation result fulfils the mark: the report is built from that
+pass and placed in an outbox, which the main loop empties once per iteration, building the
+link with `core::report::discussion_url` and opening it. The mark waits for the next valid
+result, not for one generation: any later refresh supersedes the requested one and began after
+the click just the same. When no refresh is left to wait for — the command could not be sent,
+or the watchdog aborted the pass after `REFRESH_TIMEOUT` — the next supervision pass builds
+the report from the last pass that carried information; if there has been none, it lists no
+monitors. That check runs after worker supervision, so a worker that had merely died is
+respawned and measured afresh rather than answered from the old pass. Either way the browser
+opens, at the latest one watchdog interval after `REFRESH_TIMEOUT`.
+
+"Has read" in the report is `brightness_read`, not `brightness_known`: at least one successful
+read since the monitor was detected. A monitor that happened to be in standby during the pass
+is therefore not reported as unreadable, and one whose value is known only from a confirmed
+write is not reported as read.
+
+*The link is a contract with shipped versions.* The category slug `hardware-reports` and the
+`category`, `title` and `body` query parameters are compiled into every release. GitHub
+answers an unknown slug with its category chooser rather than an error, so a renamed category
+degrades old versions to an empty editor instead of breaking them. The link is held to 2000
+characters (`MAX_URL_LEN`). When the full text does not fit, as many of the first monitors in
+menu order as fit keep their block and the rest are named in one line; if the names do not fit
+either, blocks give way to names and names to a count.
 
 ### 14. Settings Window
 
@@ -2014,6 +2086,7 @@ Key test areas:
 - **Brightness calculations**: Tests adjustment logic in `core/brightness.rs`
 - **State management**: Tests `MonitorState` transitions
 - **Controller orchestration**: `core/controller.rs` drives the optimistic-update, supervision, watchdog, refresh, and ghost-pruning sequences against fakes for all seven seams (`OsdSink`, `OverlaySink`, `DdcPort`, `MonitorLocator`, `SettingsSink`, `HotkeyPort`, `ConfigStore`) — the message-driven control flow is unit-tested on any host, no Windows target or physical monitor required
+- **Hardware report**: `core/report.rs` tests the link (encoding, wording, the length budget for any number of monitors); the controller tests cover the request flow — a result fulfils it, a stale one does not, an abort or a failed start falls back to the last pass, a confirmed write does not count as a read, and no serial number reaches the link
 
 ### Integration Testing (Manual)
 
@@ -2109,6 +2182,20 @@ release history, not in a table here.
 3. **Expected**: The monitor's tray row persists — it is still enumerable, just momentarily unreadable — and no ghost pruning occurs
 4. Wake the monitor
 5. **Expected**: DDC reads resume on the next refresh with no special recovery needed
+
+#### Hardware Report Test
+1. Start the application with `RUST_LOG=debug`
+2. Tray → "Share monitor feedback…"
+3. **Expected**: the browser comes to the front with the "Hardware reports" discussion category; the title names the connected monitors and the text has one block per monitor. The log shows "Hardware report requested from tray menu", then "Requesting monitor refresh from DDC worker", then "Hardware report ready"
+4. Click the entry several times in quick succession
+5. **Expected**: one browser tab; the log shows "Hardware report already waiting; request ignored" for the extra clicks
+6. With at least two monitors connected, unplug one and click the entry again right away
+7. **Expected**: the unplugged monitor is not in the report, although its row may stay in the tray menu until it is pruned
+8. Switch the language in the settings window and reopen the tray menu
+9. **Expected**: the entry is shown in that language
+10. Where the hardware allows — a display whose EDID cannot be read, such as some virtual displays — click the entry
+11. **Expected**: that display is counted under "more display(s) Windows reports that the app could not identify" and is not listed by name; the log shows "Could not identify display"
+12. Do not submit a report from a test run unless it is meant to be posted
 
 #### File Logging Test
 1. Set `logging.file_enabled` to `true` in config
