@@ -29,8 +29,8 @@ pub struct HardwareReport {
 }
 
 /// Longest link handed to the shell. Opening a link through the shell is
-/// assumed to become unreliable somewhat above this; see the manual
-/// procedure in `docs/architecture.md`.
+/// assumed to become unreliable somewhat above this; see the Hardware Report
+/// Test in `docs/architecture.md`.
 const MAX_URL_LEN: usize = 2000;
 
 /// Longest discussion title, in characters, before encoding.

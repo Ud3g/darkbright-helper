@@ -754,8 +754,9 @@ fn main() {
         controller.supervise_and_watchdog(now);
 
         // A report becomes ready in the watchdog pass above, or with a refresh
-        // result handled further down. The latter is picked up here on the
-        // next iteration, at most one receive timeout later.
+        // result handled further down. The latter is picked up here at the top
+        // of the next iteration, which follows the handled message without
+        // waiting.
         if let Some(report) = controller.take_pending_report() {
             open_hardware_report(&report);
         }

@@ -119,7 +119,7 @@ src/
 └── platform/
     ├── mod.rs            # Gates the platform submodule (Windows-only today)
     └── windows/          # #[cfg(windows)]
-        ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes
+        ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes, Windows build number
         ├── autostart.rs  # "Start with Windows" via HKCU\Run
         ├── config_store.rs # ConfigStore seam: atomic save with merge-on-external-edit
         ├── ddc.rs        # DDC/CI communication (monitor handles)
@@ -136,7 +136,7 @@ src/
         │   ├── layout.rs # Declarative CONTROLS/RANGE_SPECS tables, DPI scaling
         │   └── window.rs # Window creation, wiring, SettingsSinkImpl
         ├── single_instance.rs # Per-session named-mutex single-instance guard
-        ├── theme.rs      # Dark-mode opt-in (tray menu, settings window)
+        ├── theme.rs      # Dark-mode opt-in (tray menu, settings window); Windows build number
         └── tray.rs       # System tray icon and menu
 ```
 
@@ -1003,13 +1003,16 @@ The application maintains cached brightness values for instant OSD response. The
 
 **Overlap Protection:**
 
-A `RefreshTracker` prevents overlapping refresh requests and correlates each
-refresh to its result by a generation counter, so a late result from a
-superseded refresh cannot clear the in-progress state of a newer one. This
-avoids DDC bus congestion when multiple triggers fire simultaneously (e.g.,
-resume + periodic + inactivity at once). If a refresh result never returns
-(hung or dead worker), a watchdog aborts it after `REFRESH_TIMEOUT` so
-refreshes are never permanently suppressed.
+A `RefreshTracker` correlates each refresh to its result by a generation
+counter, so a late result from a superseded refresh cannot clear the
+in-progress state of a newer one. The cadence triggers (periodic, inactivity,
+the activity retry and the unknown-monitor recovery) start nothing while a
+refresh is in flight, which avoids DDC bus congestion when several of them
+fire at once. Resume, display change, a worker respawn and a feedback request
+start a pass of their own regardless, and the pass they supersede is discarded
+as stale. If a refresh result never returns (hung or dead worker), a watchdog
+aborts it after `REFRESH_TIMEOUT` so refreshes are never permanently
+suppressed.
 
 **Enumerated vs. Readable Monitors:**
 
@@ -1107,7 +1110,7 @@ recovery works regardless of which other monitors are still readable.
 }
 ```
 
-Set either to `0` to disable that trigger. System resume refresh cannot be disabled.
+Set either to `0` to disable that trigger. System resume, display change and feedback-request refreshes cannot be disabled.
 
 ### 10. DDC/CI Retry Strategy
 
@@ -1543,7 +1546,9 @@ or the watchdog aborted the pass after `REFRESH_TIMEOUT` — the next supervisio
 the report from the last pass that carried information; if there has been none, it lists no
 monitors. That check runs after worker supervision, so a worker that had merely died is
 respawned and measured afresh rather than answered from the old pass. Either way the browser
-opens, at the latest one watchdog interval after `REFRESH_TIMEOUT`.
+opens at the latest `REFRESH_TIMEOUT` plus one watchdog interval (250 ms) after
+the most recent refresh began; a pass started meanwhile, for example after a
+worker respawn, restarts that clock.
 
 "Has read" in the report is `brightness_read`, not `brightness_known`: at least one successful
 read since the monitor was detected. A monitor that happened to be in standby during the pass
@@ -2090,7 +2095,7 @@ Key test areas:
 
 ### Integration Testing (Manual)
 
-Controller orchestration is unit-tested (see above); what remains hardware-dependent and must be tested manually is DDC/CI I/O against real monitors, the DDC worker's EDID enumeration (including the `enumerated` set it reports), and topology changes:
+Controller orchestration is unit-tested (see above); what remains hardware-dependent and must be tested manually is DDC/CI I/O against real monitors, the DDC worker's EDID enumeration (including the `enumerated` set and the `unidentified` count it reports), and topology changes:
 
 **Keeping these procedures true.** For DDC, the OSD, the overlay, the tray and power events
 these procedures are the whole verification story, because CI cannot run any of them. So
@@ -2187,15 +2192,17 @@ release history, not in a table here.
 1. Start the application with `RUST_LOG=debug`
 2. Tray → "Share monitor feedback…"
 3. **Expected**: the browser comes to the front with the "Hardware reports" discussion category; the title names the connected monitors and the text has one block per monitor. The log shows "Hardware report requested from tray menu", then "Requesting monitor refresh from DDC worker", then "Hardware report ready"
-4. Click the entry several times in quick succession
-5. **Expected**: one browser tab; the log shows "Hardware report already waiting; request ignored" for the extra clicks
+4. Click the entry, then reopen the menu and click it again before the browser appears (easiest with a monitor whose DDC read retries, so the pass takes longer)
+5. **Expected**: a click that lands while a report is still waiting opens no extra tab, and the log shows "Hardware report already waiting; request ignored" for it; a click after the browser opened starts a new report, as intended
 6. With at least two monitors connected, unplug one and click the entry again right away
 7. **Expected**: the unplugged monitor is not in the report, although its row may stay in the tray menu until it is pruned
-8. Switch the language in the settings window and reopen the tray menu
-9. **Expected**: the entry is shown in that language
-10. Where the hardware allows — a display whose EDID cannot be read, such as some virtual displays — click the entry
-11. **Expected**: that display is counted under "more display(s) Windows reports that the app could not identify" and is not listed by name; the log shows "Could not identify display"
-12. Do not submit a report from a test run unless it is meant to be posted
+8. With as many monitors connected as available, click the entry
+9. **Expected**: the browser opens the full prefilled text, and the log line "Opening hardware report in the browser" shows a `length` of at most 2000
+10. Switch the language in the settings window and reopen the tray menu
+11. **Expected**: the entry is shown in that language
+12. Where the hardware allows — a display whose EDID cannot be read, such as some virtual displays — click the entry
+13. **Expected**: that display is counted under "more display(s) Windows reports that the app could not identify" and is not listed by name; the log shows "Could not identify display"
+14. Do not submit a report from a test run unless it is meant to be posted
 
 #### File Logging Test
 1. Set `logging.file_enabled` to `true` in config
