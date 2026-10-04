@@ -16,6 +16,7 @@ use crate::core::reconcile::{
     HUNG_TIMEOUT_LIMIT, PRUNE_ABSENCE_WINDOW, REBIND_TIMEOUT, REFRESH_TIMEOUT, RefreshTracker,
     RespawnOutcome, SAVE_DEBOUNCE, SET_TIMEOUT,
 };
+use crate::core::report::{HardwareReport, ReportMonitor};
 use crate::core::state::{
     BrightnessMessage, DdcCommand, DdcHealth, HealthWarnings, HotkeyOp, MonitorId, MonitorState,
     SetOutcome, SettingChange, SettingsSnapshot, TrayMenuData, TrayMonitorInfo,
@@ -207,6 +208,17 @@ enum SaveFailureStage {
     GaveUp(u32),
 }
 
+/// What one enumeration pass saw. Every display Windows handed out in that
+/// pass is in exactly one of the two, which is what keeps a hardware report
+/// from stating one display twice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Topology {
+    /// The monitors the pass identified, each once.
+    identified: Vec<MonitorId>,
+    /// Displays the pass enumerated but could not identify.
+    unidentified: usize,
+}
+
 /// Main controller for brightness management.
 ///
 /// Owns all `MonitorState` and drives OSD/overlay/DDC through the seams.
@@ -293,6 +305,15 @@ pub struct Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store> {
     hotkeys_degraded: bool,
     /// Hotkey bindings/intercept setting to revert to if a rebind fails.
     prev_hotkeys: Option<(String, String, bool)>,
+    /// The latest enumeration pass that carried information; what a
+    /// hardware report is built from. `None` until one has completed.
+    last_topology: Option<Topology>,
+    /// A hardware report was requested and waits for the next refresh
+    /// result. Not tied to one generation: any later refresh supersedes the
+    /// requested one and began after the request just the same.
+    report_waiting: bool,
+    /// A finished hardware report, until the binary's loop takes it.
+    pending_report: Option<HardwareReport>,
 }
 
 impl<Osd, Ovl, Ddc, Loc, Set, Hk, Store> Controller<Osd, Ovl, Ddc, Loc, Set, Hk, Store>
@@ -351,6 +372,9 @@ where
             pending_hotkey_op: None,
             hotkeys_degraded: false,
             prev_hotkeys: None,
+            last_topology: None,
+            report_waiting: false,
+            pending_report: None,
         }
     }
 
@@ -390,6 +414,14 @@ where
     #[must_use]
     pub fn lang(&self) -> Lang {
         self.lang
+    }
+
+    /// Takes the finished hardware report, if one is ready.
+    ///
+    /// Opening it is a shell side effect, so the binary's loop polls for it
+    /// the way it polls for the language and the health warnings.
+    pub fn take_pending_report(&mut self) -> Option<HardwareReport> {
+        self.pending_report.take()
     }
 
     /// Re-resolves the language from the config and pushes it to the OSD and
@@ -952,6 +984,7 @@ where
         generation: u64,
         monitors: Vec<(MonitorId, u8)>,
         enumerated: Vec<MonitorId>,
+        unidentified: usize,
         now: Instant,
     ) {
         self.note_worker_alive();
@@ -1021,6 +1054,95 @@ where
         // empty enumerated set must not stamp or prune anything.
         if current && !enumerated.is_empty() {
             self.apply_absence_evidence(&enumerated, now);
+        }
+
+        if current {
+            self.record_topology(&enumerated, unidentified);
+            if self.report_waiting {
+                self.fulfil_report();
+            }
+        }
+    }
+
+    /// Remembers what a current-generation pass saw.
+    ///
+    /// A pass that saw nothing at all leaves the previous one standing: the
+    /// enumeration itself failed, which says nothing about the monitors.
+    fn record_topology(&mut self, enumerated: &[MonitorId], unidentified: usize) {
+        if enumerated.is_empty() && unidentified == 0 {
+            return;
+        }
+        // Two identical monitors without serial numbers share one identity;
+        // state holds them once, and so does the report.
+        let mut identified: Vec<MonitorId> = Vec::with_capacity(enumerated.len());
+        for id in enumerated {
+            if !identified.contains(id) {
+                identified.push(id.clone());
+            }
+        }
+        self.last_topology = Some(Topology {
+            identified,
+            unidentified,
+        });
+    }
+
+    /// Starts the pass a hardware report will be built from.
+    fn request_hardware_report(&mut self, now: Instant) {
+        if self.report_waiting {
+            // The pass already under way began after the first click. A
+            // further one would only queue behind it in the worker and push
+            // the result out.
+            log::debug!("Hardware report already waiting; request ignored");
+            return;
+        }
+        log::debug!("Hardware report requested from tray menu");
+        self.report_waiting = true;
+        // A pass of its own, even with one in flight: only a pass that began
+        // after the click is known to show the monitors as they are now. If
+        // the command cannot be sent, the next supervision pass decides —
+        // after it has had the chance to respawn a dead worker.
+        self.handle_refresh(now);
+    }
+
+    /// Builds the waiting hardware report from the last recorded pass and
+    /// puts it in the outbox. See `docs/architecture.md` §13, "Hardware
+    /// Report", for why one pass and not current state.
+    fn fulfil_report(&mut self) {
+        self.report_waiting = false;
+        let nothing: &[MonitorId] = &[];
+        let (identified, unidentified) = self
+            .last_topology
+            .as_ref()
+            .map_or((nothing, 0), |topology| {
+                (topology.identified.as_slice(), topology.unidentified)
+            });
+        let names = generate_display_names(identified);
+        let mut monitors: Vec<ReportMonitor> = identified
+            .iter()
+            .map(|id| ReportMonitor {
+                name: names
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| id.base_display_name()),
+                brightness_read: self
+                    .states
+                    .get(id)
+                    .is_some_and(|state| state.brightness_read),
+            })
+            .collect();
+        monitors.sort_by(|a, b| a.name.cmp(&b.name));
+        log::info!(monitors = monitors.len(), unidentified = unidentified; "Hardware report ready");
+        self.pending_report = Some(HardwareReport {
+            monitors,
+            unidentified,
+        });
+    }
+
+    /// Fulfils a waiting hardware report from the last recorded pass when no
+    /// refresh is in flight that could still deliver a fresher one.
+    fn settle_report_without_refresh(&mut self) {
+        if self.report_waiting && !self.refresh.in_progress() {
+            self.fulfil_report();
         }
     }
 
@@ -1466,6 +1588,11 @@ where
             self.pending_hotkey_op = None;
             self.fail_hotkey_op(op, strings(self.lang).hotkey_status_no_response, now);
         }
+
+        // No refresh left to wait for — it could not be sent, or was just
+        // aborted above. This runs after worker supervision, so a worker
+        // that had merely died has been respawned and is refreshing again.
+        self.settle_report_without_refresh();
     }
 
     /// Force-reverts every pending set (used after a worker respawn).
@@ -1522,6 +1649,7 @@ where
                 let snapshot = self.settings_snapshot();
                 self.settings.open(&snapshot);
             }
+            BrightnessMessage::TrayShareMonitorFeedback => self.request_hardware_report(now),
             // ── Settings Dialog Messages ─────────────────────────────────
             BrightnessMessage::SettingChanged(change) => {
                 self.handle_setting_changed(change, now);
@@ -1583,8 +1711,9 @@ where
                 generation,
                 monitors,
                 enumerated,
+                unidentified,
             } => {
-                self.handle_ddc_refresh_result(generation, monitors, enumerated, now);
+                self.handle_ddc_refresh_result(generation, monitors, enumerated, unidentified, now);
             }
             BrightnessMessage::Shutdown => {
                 self.flush_pending_settings(now);

@@ -251,6 +251,12 @@ pub struct MonitorState {
     pub(crate) cached_brightness: u8,
     /// Whether `cached_brightness` came from the hardware rather than a seed.
     pub(crate) brightness_known: bool,
+    /// Whether a brightness *read* has succeeded since this state was created.
+    ///
+    /// Narrower than `brightness_known`, which a confirmed write sets as
+    /// well: a monitor that refuses reads but honours writes becomes known
+    /// without ever having been read. Read only by the hardware report.
+    pub(crate) brightness_read: bool,
     /// Optimistic brightness set awaiting DDC confirmation.
     pub(crate) pending: Option<PendingSet>,
     /// Current overlay opacity (0-100, where 0 = invisible).
@@ -270,6 +276,7 @@ impl MonitorState {
         Self {
             cached_brightness: initial_brightness.min(100),
             brightness_known: true,
+            brightness_read: true,
             pending: None,
             overlay_opacity: 0,
             missing_since: None,
@@ -288,6 +295,7 @@ impl MonitorState {
         Self {
             cached_brightness: UNREAD_BRIGHTNESS_SEED,
             brightness_known: false,
+            brightness_read: false,
             pending: None,
             overlay_opacity: 0,
             missing_since: None,
@@ -368,6 +376,7 @@ impl MonitorState {
     pub(crate) fn update_from_ddc(&mut self, value: u8) {
         self.cached_brightness = value.min(100);
         self.brightness_known = true;
+        self.brightness_read = true;
     }
 }
 
@@ -733,6 +742,11 @@ pub enum BrightnessMessage {
         /// not. Superset of `monitors`' ids; empty when enumeration itself
         /// failed. Presence proof for absence-based pruning.
         enumerated: Vec<MonitorId>,
+        /// Displays this pass enumerated whose identification failed.
+        /// Counted at that one failure, so a display is either in
+        /// `enumerated` or counted here, never both. Read only by the
+        /// hardware report.
+        unidentified: usize,
     },
     /// Adjust brightness by a relative delta.
     Adjust {
@@ -769,6 +783,12 @@ pub enum BrightnessMessage {
     /// Routed to the controller, which opens the settings window with the
     /// current config values.
     TrayOpenSettings,
+
+    /// User clicked "Share monitor feedback…" in the tray menu.
+    ///
+    /// The controller starts a refresh and builds a hardware report from
+    /// its result; the binary's loop then opens it in the browser.
+    TrayShareMonitorFeedback,
 
     /// User clicked the "Open Log Folder" menu item in the tray menu.
     ///
@@ -832,6 +852,24 @@ mod pending_reconcile_tests {
 
     fn state() -> MonitorState {
         MonitorState::new(50)
+    }
+
+    #[test]
+    fn a_confirmed_set_is_not_a_read() {
+        let mut s = MonitorState::unread();
+        s.set_pending(70, 1, Instant::now());
+        assert_eq!(s.apply_set_result(1, 70, true), SetOutcome::Confirmed);
+        assert!(s.brightness_known, "the value is known now");
+        assert!(!s.brightness_read, "but nothing was ever read");
+
+        s.update_from_ddc(65);
+        assert!(s.brightness_read);
+    }
+
+    #[test]
+    fn a_state_created_from_a_read_counts_as_read() {
+        assert!(MonitorState::new(50).brightness_read);
+        assert!(!MonitorState::unread().brightness_read);
     }
 
     #[test]
