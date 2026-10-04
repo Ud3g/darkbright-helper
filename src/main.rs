@@ -31,6 +31,7 @@ use darkbright_helper::core::panic_hook;
 use darkbright_helper::core::reconcile::{
     RESPAWN_MAX, RESPAWN_WINDOW, RespawnDecision, RespawnGate,
 };
+use darkbright_helper::core::report::{HardwareReport, discussion_url};
 use darkbright_helper::core::state::{BrightnessMessage, HealthWarnings};
 use darkbright_helper::core::version::version_string;
 use darkbright_helper::platform::windows::CursorLocator;
@@ -44,7 +45,9 @@ use darkbright_helper::platform::windows::{
     DdcSupervisor, PowerEventListener, SettingsSinkImpl, TrayIcon, TrayStatusHandle,
     WindowsConfigStore, WindowsLanguageSource,
 };
-use darkbright_helper::platform::windows::{show_error_message_box, show_info_message_box};
+use darkbright_helper::platform::windows::{
+    show_error_message_box, show_info_message_box, windows_build_number,
+};
 use darkbright_helper::{BrightnessError, Result};
 
 /// Channel to the main loop, published so the console control handler can
@@ -58,32 +61,20 @@ static SHUTDOWN_SENDER: LazyLock<Mutex<Option<mpsc::Sender<BrightnessMessage>>>>
 /// the bound only exists so a hung spawn cannot freeze the main loop.
 const HOTKEY_START_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Opens a file with the system's default application.
+/// Hands `target`, a path or a link, to the shell's "open" verb.
 ///
-/// Uses `ShellExecuteW` with the "open" verb to launch the default handler
-/// for the file type (e.g., Notepad or VS Code for `.json` files).
-///
-/// # Arguments
-///
-/// * `path` - Path to the file to open.
-///
-/// # Errors
-///
-/// Returns `BrightnessError::ConfigFileOpen` if the shell operation fails.
-fn open_with_default_app(path: &std::path::Path) -> Result<()> {
+/// Returns the shell's error code on failure.
+fn shell_open(target: &str) -> std::result::Result<(), i32> {
     use windows::core::w;
 
-    let path_wide: Vec<u16> = path
-        .to_string_lossy()
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let target_wide: Vec<u16> = target.encode_utf16().chain(std::iter::once(0)).collect();
 
+    // SAFETY: `target_wide` is NUL-terminated and outlives the call.
     let result = unsafe {
         ShellExecuteW(
             None,
             w!("open"),
-            windows::core::PCWSTR(path_wide.as_ptr()),
+            windows::core::PCWSTR(target_wide.as_ptr()),
             None,
             None,
             SW_SHOWNORMAL,
@@ -92,26 +83,50 @@ fn open_with_default_app(path: &std::path::Path) -> Result<()> {
 
     let result_value = result.0.expose_provenance();
 
-    // ShellExecuteW returns a value > 32 on success.
-    // Values <= 32 indicate various error conditions.
+    // ShellExecuteW returns a value > 32 on success; a lower value doubles
+    // as the error code. Failure values are always <= 32, so the conversion
+    // never truncates; the fallback only keeps it free of an `as` cast.
     if result_value > 32 {
-        log::debug!(path:% = path.display(); "Opened file with default application");
         Ok(())
     } else {
-        // The return value doubles as an error code for low values.
-        // Failure values are always <= 32, so this never truncates; the
-        // fallback just keeps the conversion infallible without an `as` cast.
-        let error_code = i32::try_from(result_value).unwrap_or(i32::MAX);
-        log::debug!(path:% = path.display(); "ShellExecuteW failed for file");
-        // The error ends up in error-level logs; embed only the file name,
-        // since the absolute path contains the user name.
-        Err(BrightnessError::config_file_open(
-            path.file_name().map_or_else(
-                || path.display().to_string(),
-                |n| n.to_string_lossy().into_owned(),
-            ),
-            std::io::Error::from_raw_os_error(error_code),
-        ))
+        Err(i32::try_from(result_value).unwrap_or(i32::MAX))
+    }
+}
+
+/// Opens a file with the system's default application.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::ConfigFileOpen` if the shell operation fails.
+fn open_with_default_app(path: &std::path::Path) -> Result<()> {
+    match shell_open(&path.to_string_lossy()) {
+        Ok(()) => {
+            log::debug!(path:% = path.display(); "Opened file with default application");
+            Ok(())
+        }
+        Err(error_code) => {
+            log::debug!(path:% = path.display(); "ShellExecuteW failed for file");
+            // The error ends up in error-level logs; embed only the file name,
+            // since the absolute path contains the user name.
+            Err(BrightnessError::config_file_open(
+                path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |n| n.to_string_lossy().into_owned(),
+                ),
+                std::io::Error::from_raw_os_error(error_code),
+            ))
+        }
+    }
+}
+
+/// Opens the prefilled hardware report in the default browser (shell side
+/// effect). The app sends nothing itself: the link goes to the shell, and
+/// the browser shows a page the user may or may not submit.
+fn open_hardware_report(report: &HardwareReport) {
+    let url = discussion_url(report, version_string(), windows_build_number());
+    log::debug!(length = url.len(); "Opening hardware report in the browser");
+    if let Err(error_code) = shell_open(&url) {
+        log::error!(error_code = error_code; "Failed to open hardware report in the browser");
     }
 }
 
@@ -737,6 +752,14 @@ fn main() {
         controller.check_periodic_refresh(now);
         controller.check_pending_save(now);
         controller.supervise_and_watchdog(now);
+
+        // A report becomes ready in the watchdog pass above, or with a refresh
+        // result handled further down. The latter is picked up here at the top
+        // of the next iteration, which follows the handled message without
+        // waiting.
+        if let Some(report) = controller.take_pending_report() {
+            open_hardware_report(&report);
+        }
 
         if hotkey_handle.is_finished() {
             match hotkey_gate.on_death(now) {

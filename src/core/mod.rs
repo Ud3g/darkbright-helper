@@ -10,6 +10,7 @@
 //! - [`logfile`] - Size-capped rolling file sink for diagnostic logging
 //! - [`panic_hook`] - Process-wide panic logging hook
 //! - [`reconcile`] - Refresh/respawn tracking and reconciliation policies
+//! - [`report`] - The hardware report a user can post, and the link built from it
 //! - [`state`] - Application state and inter-thread messages
 //! - [`version`] - The user-facing version string, git-describe aware
 
@@ -25,5 +26,6 @@ pub mod i18n;
 pub mod logfile;
 pub mod panic_hook;
 pub mod reconcile;
+pub mod report;
 pub mod state;
 pub mod version;

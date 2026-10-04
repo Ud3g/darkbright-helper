@@ -5,6 +5,7 @@ use crate::core::config::{
     DEFAULT_STEP_PERCENT,
 };
 use crate::core::i18n::{Lang, LanguageSetting};
+use crate::core::report::discussion_url;
 use std::sync::mpsc;
 
 // ── Fakes ────────────────────────────────────────────────────────────
@@ -279,7 +280,7 @@ fn deliver_refresh(
     now: Instant,
 ) {
     let generation = c.refresh.begin(now);
-    c.handle_ddc_refresh_result(generation, readable, enumerated, now);
+    c.handle_ddc_refresh_result(generation, readable, enumerated, 0, now);
 }
 
 // ── Refresh lifecycle ────────────────────────────────────────────────
@@ -313,7 +314,7 @@ fn refresh_result_applies_ground_truth_even_when_stale() {
     seed(&mut c, test_id(), 50);
     let stale = c.refresh.begin(base);
     let _current = c.refresh.begin(base);
-    c.handle_ddc_refresh_result(stale, vec![(test_id(), 42)], vec![test_id()], base);
+    c.handle_ddc_refresh_result(stale, vec![(test_id(), 42)], vec![test_id()], 0, base);
     assert_eq!(c.states[&test_id()].cached_brightness, 42);
     assert!(
         c.refresh.in_progress(),
@@ -622,7 +623,7 @@ fn stale_result_does_not_advance_absence_evidence() {
 
     let stale = c.refresh.begin(base);
     let _newer = c.refresh.begin(base);
-    c.handle_ddc_refresh_result(stale, vec![], vec![other_id()], base);
+    c.handle_ddc_refresh_result(stale, vec![], vec![other_id()], 0, base);
     assert!(c.states[&id].missing_since.is_none());
 }
 
@@ -1400,6 +1401,7 @@ fn refresh_result_message_routes_with_enumerated_set() {
             generation,
             monitors: vec![(test_id(), 33)],
             enumerated: vec![test_id()],
+            unidentified: 0,
         },
         base,
     )
@@ -3001,4 +3003,441 @@ fn a_failed_rebind_without_a_restore_error_shows_the_error_alone() {
     )
     .unwrap();
     assert_eq!(c.settings.errors, vec!["boom".to_string()]);
+}
+
+// ── Hardware report ──────────────────────────────────────────────────
+
+fn request_report(c: &mut TestController, now: Instant) {
+    c.handle_message(BrightnessMessage::TrayShareMonitorFeedback, now)
+        .unwrap();
+}
+
+/// Generation of the most recently sent refresh command.
+fn last_refresh_generation(c: &TestController) -> u64 {
+    c.ddc
+        .sent
+        .iter()
+        .rev()
+        .find_map(|cmd| match cmd {
+            DdcCommand::RefreshAll { generation } => Some(*generation),
+            _ => None,
+        })
+        .expect("a refresh was sent")
+}
+
+/// Delivers a refresh result through the message path.
+fn deliver_result(
+    c: &mut TestController,
+    generation: u64,
+    readable: Vec<(MonitorId, u8)>,
+    enumerated: Vec<MonitorId>,
+    unidentified: usize,
+    now: Instant,
+) {
+    c.handle_message(
+        BrightnessMessage::DdcRefreshResult {
+            generation,
+            monitors: readable,
+            enumerated,
+            unidentified,
+        },
+        now,
+    )
+    .unwrap();
+}
+
+fn listed(name: &str, brightness_read: bool) -> ReportMonitor {
+    ReportMonitor {
+        name: name.to_string(),
+        brightness_read,
+    }
+}
+
+/// The supervision pass after the 250 ms throttle has elapsed.
+fn next_watchdog_pass(c: &mut TestController, base: Instant) {
+    c.supervise_and_watchdog(base + Duration::from_millis(300));
+}
+
+#[test]
+fn feedback_request_starts_a_refresh_and_waits_for_it() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    request_report(&mut c, base);
+    assert_eq!(sent_refresh_count(&c), 1);
+    assert_eq!(c.take_pending_report(), None);
+}
+
+#[test]
+fn refresh_result_fulfils_the_waiting_report_from_that_pass() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+
+    // Handed over in reverse name order: the report sorts.
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(test_id(), 40)],
+        vec![other_id(), test_id()],
+        1,
+        base,
+    );
+
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true), listed("PHL 346B1C", false)],
+            unidentified: 1,
+        })
+    );
+    assert_eq!(c.take_pending_report(), None, "a report is handed out once");
+}
+
+#[test]
+fn a_refresh_without_a_request_produces_no_report() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    assert_eq!(c.take_pending_report(), None);
+}
+
+#[test]
+fn a_stale_result_leaves_the_report_waiting_for_the_newer_pass() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    request_report(&mut c, base);
+    let first = last_refresh_generation(&c);
+    c.handle_refresh(base);
+    let second = last_refresh_generation(&c);
+
+    deliver_result(
+        &mut c,
+        first,
+        vec![(test_id(), 40)],
+        vec![test_id()],
+        0,
+        base,
+    );
+    assert_eq!(c.take_pending_report(), None, "superseded pass");
+
+    deliver_result(
+        &mut c,
+        second,
+        vec![(test_id(), 40)],
+        vec![test_id()],
+        0,
+        base,
+    );
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn a_stale_result_does_not_replace_the_recorded_topology() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    let stale = c.refresh.begin(base);
+    let _current = c.refresh.begin(base);
+
+    c.handle_ddc_refresh_result(stale, vec![], vec![other_id()], 2, base);
+
+    let topology = c
+        .last_topology
+        .as_ref()
+        .expect("the first pass was recorded");
+    assert_eq!(topology.identified, vec![test_id()]);
+    assert_eq!(topology.unidentified, 0);
+}
+
+#[test]
+fn a_refresh_that_cannot_start_reports_the_last_topology() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    c.ddc.fail_send = true;
+
+    request_report(&mut c, base);
+    assert_eq!(
+        c.take_pending_report(),
+        None,
+        "the next supervision pass decides, so a dead worker can be respawned first"
+    );
+
+    next_watchdog_pass(&mut c, base);
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn no_topology_yet_gives_an_empty_report() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    c.ddc.fail_send = true;
+    request_report(&mut c, base);
+    next_watchdog_pass(&mut c, base);
+    assert_eq!(c.take_pending_report(), Some(HardwareReport::default()));
+}
+
+#[test]
+fn refresh_timeout_reports_the_last_topology() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    request_report(&mut c, base);
+    assert_eq!(c.take_pending_report(), None);
+
+    c.supervise_and_watchdog(base + REFRESH_TIMEOUT);
+
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn a_dead_worker_is_respawned_and_the_report_waits_for_its_pass() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    // The worker has died unnoticed: its channel is closed.
+    c.ddc.alive = false;
+    c.ddc.fail_send = true;
+    request_report(&mut c, base);
+    assert_eq!(sent_refresh_count(&c), 0);
+
+    // The respawned worker accepts commands again.
+    c.ddc.fail_send = false;
+    next_watchdog_pass(&mut c, base);
+    assert_eq!(sent_refresh_count(&c), 1, "the respawn started a refresh");
+    assert_eq!(c.take_pending_report(), None, "no fallback to the old pass");
+
+    let generation = last_refresh_generation(&c);
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(test_id(), 40), (other_id(), 60)],
+        vec![test_id(), other_id()],
+        0,
+        base,
+    );
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true), listed("PHL 346B1C", true)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn a_second_request_while_one_waits_starts_nothing() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    request_report(&mut c, base);
+    request_report(&mut c, base);
+    assert_eq!(
+        sent_refresh_count(&c),
+        1,
+        "impatient clicks must not queue passes"
+    );
+
+    let generation = last_refresh_generation(&c);
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(test_id(), 40)],
+        vec![test_id()],
+        0,
+        base,
+    );
+    assert!(c.take_pending_report().is_some());
+    assert_eq!(c.take_pending_report(), None, "two clicks, one report");
+}
+
+#[test]
+fn a_request_after_a_report_was_taken_starts_a_new_pass() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(test_id(), 40)],
+        vec![test_id()],
+        0,
+        base,
+    );
+    assert!(c.take_pending_report().is_some());
+
+    request_report(&mut c, base);
+    assert_eq!(sent_refresh_count(&c), 2);
+}
+
+#[test]
+fn a_monitor_missing_from_the_latest_pass_is_not_listed() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(
+        &mut c,
+        vec![(test_id(), 40), (other_id(), 60)],
+        vec![test_id(), other_id()],
+        base,
+    );
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+
+    // The second monitor's identification failed this time: it is counted,
+    // and although its state is still there it must not also be listed.
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(test_id(), 40)],
+        vec![test_id()],
+        1,
+        base,
+    );
+
+    assert!(
+        c.states.contains_key(&other_id()),
+        "state outlives one miss"
+    );
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true)],
+            unidentified: 1,
+        })
+    );
+}
+
+#[test]
+fn a_pass_that_only_counts_unidentified_displays_replaces_the_topology() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+
+    // For example a remote session: one display, and it has no EDID.
+    deliver_result(&mut c, generation, vec![], vec![], 1, base);
+
+    assert!(c.states.contains_key(&test_id()), "state is left alone");
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![],
+            unidentified: 1,
+        })
+    );
+}
+
+#[test]
+fn a_pass_without_information_does_not_replace_the_topology() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    deliver_refresh(&mut c, vec![(test_id(), 40)], vec![test_id()], base);
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+
+    deliver_result(&mut c, generation, vec![], vec![], 0, base);
+
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn an_identity_seen_twice_in_one_pass_is_listed_once() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    let twin = MonitorId::new("DEL", "U2722D", None);
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(twin.clone(), 40)],
+        vec![twin.clone(), twin],
+        0,
+        base,
+    );
+
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", true)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn a_confirmed_write_does_not_make_a_monitor_count_as_read() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    let mut state = MonitorState::unread();
+    state.set_pending(70, 1, base);
+    assert_eq!(state.apply_set_result(1, 70, true), SetOutcome::Confirmed);
+    c.states.insert(test_id(), state);
+
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+    deliver_result(&mut c, generation, vec![], vec![test_id()], 0, base);
+
+    assert!(
+        c.states[&test_id()].brightness_known,
+        "the write made it known"
+    );
+    assert_eq!(
+        c.take_pending_report(),
+        Some(HardwareReport {
+            monitors: vec![listed("DEL U2722D", false)],
+            unidentified: 0,
+        })
+    );
+}
+
+#[test]
+fn a_report_never_carries_a_serial_number() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    request_report(&mut c, base);
+    let generation = last_refresh_generation(&c);
+    // `test_id` and `other_id` carry the serials SN123 and SN456.
+    deliver_result(
+        &mut c,
+        generation,
+        vec![(test_id(), 40), (other_id(), 60)],
+        vec![test_id(), other_id()],
+        0,
+        base,
+    );
+
+    let report = c.take_pending_report().expect("report ready");
+    let url = discussion_url(&report, "1.0.0", Some(26200));
+    for serial in ["SN123", "SN456"] {
+        assert!(!url.contains(serial), "serial in link: {url}");
+        assert!(!format!("{report:?}").contains(serial), "serial in report");
+    }
 }

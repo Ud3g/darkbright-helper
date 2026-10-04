@@ -7,7 +7,12 @@ contact_links:
       a laptop's internal panel not responding, SmartScreen or Defender warnings — these
       are documented behaviour rather than bugs. Ask here and skip the bug report.
   - name: Which monitors work?
+    url: https://github.com/Ud3g/darkbright-helper/discussions/categories/hardware-reports
+    about: >-
+      Report how the tool behaves on your monitors — working setups included. Easiest
+      from the tool itself: tray menu → "Share monitor feedback…" fills in your monitor
+      models for you. DDC/CI implementations vary wildly, so these reports are useful.
+  - name: Something else?
     url: https://github.com/Ud3g/darkbright-helper/discussions/categories/general
     about: >-
-      Report how the tool behaves on your monitors, or anything that does not fit the
-      other categories. DDC/CI implementations vary wildly, so these reports are useful.
+      Ideas and anything that does not fit the other categories.

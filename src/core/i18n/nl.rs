@@ -53,6 +53,7 @@ pub(crate) const DUTCH: Strings = Strings {
     tray_usage_brighter: "Helderheid verhogen",
     tray_usage_dimmer: "Helderheid verlagen",
     tray_menu_settings: "Instellingen",
+    tray_menu_share_feedback: "Feedback over uw beeldschermen geven…",
     tray_menu_open_log_folder: "Logboekmap openen",
     tray_menu_quit_fmt: "{name} afsluiten",
 

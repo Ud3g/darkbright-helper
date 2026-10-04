@@ -49,6 +49,7 @@ pub(crate) const POLISH: Strings = Strings {
     tray_usage_brighter: "Zwiększ jasność",
     tray_usage_dimmer: "Zmniejsz jasność",
     tray_menu_settings: "Ustawienia",
+    tray_menu_share_feedback: "Napisz opinię o monitorach…",
     tray_menu_open_log_folder: "Otwórz folder dziennika",
     tray_menu_quit_fmt: "Zakończ {name}",
 

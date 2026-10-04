@@ -48,6 +48,7 @@ pub(crate) const RUSSIAN: Strings = Strings {
     tray_usage_brighter: "Увеличить яркость",
     tray_usage_dimmer: "Уменьшить яркость",
     tray_menu_settings: "Параметры",
+    tray_menu_share_feedback: "Оставить отзыв о мониторах…",
     tray_menu_open_log_folder: "Открыть папку журналов",
     tray_menu_quit_fmt: "Закрыть {name}",
 

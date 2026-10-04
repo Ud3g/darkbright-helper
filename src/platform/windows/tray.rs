@@ -81,6 +81,9 @@ const MENU_ID_VERSION: u32 = 1003;
 /// Menu item ID for the "Open Log Folder" option.
 const MENU_ID_OPEN_LOGS: u32 = 1004;
 
+/// Menu item ID for the "Share monitor feedback…" option.
+const MENU_ID_SHARE_FEEDBACK: u32 = 1005;
+
 /// Base ID for monitor info rows (non-clickable).
 /// Each monitor uses `MENU_ID_MONITOR_BASE` + index.
 const MENU_ID_MONITOR_BASE: u32 = 2000;
@@ -976,6 +979,12 @@ fn show_context_menu(hwnd: HWND) {
         append_menu_item(
             hmenu,
             MF_STRING,
+            MENU_ID_SHARE_FEEDBACK,
+            s.tray_menu_share_feedback,
+        );
+        append_menu_item(
+            hmenu,
+            MF_STRING,
             MENU_ID_OPEN_LOGS,
             s.tray_menu_open_log_folder,
         );
@@ -1068,6 +1077,14 @@ fn handle_menu_selection(cmd: u32) {
             with_tray_sender(|sender| {
                 if let Err(e) = sender.send(BrightnessMessage::TrayOpenSettings) {
                     log::error!(error:% = e; "Failed to send TrayOpenSettings");
+                }
+            });
+        }
+        MENU_ID_SHARE_FEEDBACK => {
+            log::debug!("Share monitor feedback menu item clicked");
+            with_tray_sender(|sender| {
+                if let Err(e) = sender.send(BrightnessMessage::TrayShareMonitorFeedback) {
+                    log::error!(error:% = e; "Failed to send TrayShareMonitorFeedback");
                 }
             });
         }

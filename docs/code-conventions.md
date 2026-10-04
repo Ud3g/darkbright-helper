@@ -459,6 +459,8 @@ frequencies: a count is a fact about today that nothing keeps true.
 | `path` | A **file name only** — never a full path above `debug!`, see below |
 | `hotkey_id` | A registration id (1-4) |
 | `elapsed_seconds` | The one timing field in use |
+| `monitors` / `unidentified` | Counts of identified monitors and unidentified displays (hardware report) |
+| `length` | A string's length in bytes (the hardware-report link) |
 
 One inconsistency worth resolving on contact rather than propagating: the DDC retry path
 uses `attempt` / `max_attempts` while a few other statements use `attempts`.

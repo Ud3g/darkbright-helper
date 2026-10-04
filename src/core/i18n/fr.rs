@@ -47,6 +47,7 @@ pub(crate) const FRENCH: Strings = Strings {
     tray_usage_brighter: "Augmenter la luminosité",
     tray_usage_dimmer: "Diminuer la luminosité",
     tray_menu_settings: "Paramètres",
+    tray_menu_share_feedback: "Donner votre avis sur vos écrans…",
     tray_menu_open_log_folder: "Ouvrir le dossier des journaux",
     tray_menu_quit_fmt: "Quitter {name}",
 

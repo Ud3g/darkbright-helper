@@ -49,6 +49,7 @@ pub(crate) const TURKISH: Strings = Strings {
     tray_usage_brighter: "Parlaklığı artır",
     tray_usage_dimmer: "Parlaklığı azalt",
     tray_menu_settings: "Ayarlar",
+    tray_menu_share_feedback: "Monitörler hakkında geri bildirim ver…",
     tray_menu_open_log_folder: "Günlük klasörünü aç",
     tray_menu_quit_fmt: "{name} uygulamasından çık",
 

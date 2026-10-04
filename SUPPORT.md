@@ -25,9 +25,12 @@ not the issue tracker.
 [Q&A](https://github.com/Ud3g/darkbright-helper/discussions/categories/q-a) rather than
 here.** An issue says the tool deviates from documented behaviour, and the bug report asks
 for a debug log to prove it. A question does not need either. Reports on how the tool
-behaves on your particular monitors are welcome in
-[General](https://github.com/Ud3g/darkbright-helper/discussions/categories/general) —
-DDC/CI implementations vary wildly, so that information is genuinely useful to me.
+behaves on your particular monitors — working setups included — are welcome in
+[Hardware reports](https://github.com/Ud3g/darkbright-helper/discussions/categories/hardware-reports).
+The easiest way is from the tool itself: tray menu → "Share monitor feedback…" fills in your
+monitor models for you. DDC/CI implementations vary wildly, so that information is genuinely
+useful to me. Anything that fits neither there nor in Q&A goes to
+[General](https://github.com/Ud3g/darkbright-helper/discussions/categories/general).
 
 ## How to report a problem so I can actually investigate it
 

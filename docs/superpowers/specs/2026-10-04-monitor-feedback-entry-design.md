@@ -1,0 +1,437 @@
+# Design: A tray entry that opens a prefilled hardware report
+
+_Date: 2026-10-04_
+
+_Revised 2026-10-04 after a cold adversarial review — see "Review amendments" at the end._
+
+## Problem
+
+The tool is listed on winget and AlternativeTo, and it has received no user feedback at all. Reach
+is the main cause, but the path back is also missing: someone who uses the tool has to find the
+repository on their own, and once there neither the bug form (a satisfied user has no bug) nor an
+empty "General" category invites a report.
+
+Reports on working hardware are wanted as much as reports on broken hardware. DDC/CI behaves
+differently per manufacturer, and a spread of monitor models is the reason the tool was published.
+
+## Goal
+
+One click in the tray menu opens a GitHub page in the browser with everything the app already knows
+filled in. The user ticks boxes, optionally adds text, and submits.
+
+Success is a handful of hardware reports, positive ones included, and a page that later promotion
+can point at.
+
+## Scope
+
+**In scope:**
+
+- A new tray menu entry, localized in all 15 interface languages.
+- A fresh monitor enumeration when the entry is clicked, and a report built from that one pass.
+- A count of displays the app could not identify.
+- A flag in the monitor state that tells a successful read from a confirmed write.
+- A pure, host-testable function that turns the report into a GitHub link.
+- A new Discussions category and the repository files that route hardware reports to it.
+- Documentation, including a consistency review of the existing documents.
+
+**Out of scope (non-goals):**
+
+- **A link in the settings window.** The tray is the surface every user knows. A third footer link
+  would have to pass the layout tests in 15 languages at four DPIs; it can follow later without
+  changing anything designed here.
+- **A list of verified monitors in the README.** The reports are meant to feed one eventually.
+- **A GitHub discussion form.** Forms are static and cannot hold one block per monitor.
+- **Naming unidentified displays.** The app knows how many there are, not what they are.
+- **Identical monitors without serial numbers, and clone mode.** Both already collapse to one entry
+  in the app's model; this design inherits that and does not change it.
+
+## Hard rules
+
+- **No serial number in the link, ever.** The report type holds no `MonitorId`, only a display name
+  built from manufacturer and model.
+- **No paths, no user name, no configuration content in the link.**
+- **The app sends nothing.** It opens a link. Submission happens in the browser, visibly and by the
+  user's choice. The README's statement that the tool performs no network I/O stays true.
+
+## Checks made before designing
+
+| Question | Result |
+|---|---|
+| Does `discussions/new?category=…&title=…&body=…` prefill a category without a form? | **Yes.** Checked by hand against the "General" category: category, title and body arrived, including `%`, `[ ]` and line breaks |
+| What does an unknown category slug do? | **No 404.** GitHub shows a banner and the category chooser at `/discussions/new/choose`. The address carries no query any more, so title and body are presumably lost |
+| Can individual discussion-form fields be prefilled by URL? | **Not documented.** GitHub documents it for issue forms only. Not tested, because the design does not use a form |
+
+The second result bounds the cost of the permanent contract below: a renamed category degrades old
+versions to an empty editor, it does not break them.
+
+## Design
+
+### The GitHub side
+
+A new Discussions category **"Hardware reports"**, slug `hardware-reports`, format "Open-ended
+discussion", with no form attached. Suggested description, in the style of the existing ones:
+"Which monitors work, and how. One post per setup." The description of "General" loses its mention
+of hardware reports and becomes "Ideas, everything else."
+
+Categories are created by hand in the web interface. The category has to exist before a release
+carrying the link ships.
+
+In the repository:
+
+- `.github/ISSUE_TEMPLATE/config.yml`: the "Which monitors work?" contact link points at the new
+  category and names the tray entry as the easiest way in. A third link, "Something else?", keeps
+  the route to "General" that the old wording carried.
+- `SUPPORT.md`: the sentence on hardware reports points at the new category.
+- `README.md`: the menu description, the quick start and the support section name the entry. The
+  tray screenshot and its alt text stay as they are until the picture is retaken from a release
+  build after the next release.
+
+**The slug is a permanent contract.** Every shipped version has it compiled in.
+
+The first report is the maintainer's own, produced with the new tray entry. It is the end-to-end
+acceptance test, and it keeps the category from being empty when someone is pointed at it.
+
+### What a report looks like
+
+The text is English, like the rest of the GitHub side. Example for two monitors and one
+unidentified display:
+
+Title: `DEL U2722D + GSM LG ULTRAFINE`
+
+```markdown
+<!-- Filled in by darkbright-helper. Put an x in the brackets that
+     apply ([x]), add anything you like, then press "Start discussion". -->
+
+darkbright-helper 0.13.0 · Windows build 26200
+
+### DEL U2722D
+The app has read this monitor's brightness: yes
+Connection (HDMI / DisplayPort / USB-C / dock):
+
+Changing brightness with the hotkeys (1–100 %):
+- [ ] works
+- [ ] does not work
+
+### GSM LG ULTRAFINE
+The app has read this monitor's brightness: no
+Connection (HDMI / DisplayPort / USB-C / dock):
+
+Changing brightness with the hotkeys (1–100 %):
+- [ ] works
+- [ ] does not work
+
+### 1 more display Windows reports that the app could not identify
+It may be a virtual display. Model, if you know it:
+
+### Dimming below 0 % (dark overlay)
+- [ ] works
+- [ ] does not work
+
+### Anything else?
+```
+
+Decisions in this text:
+
+- **Two boxes per question.** GitHub renders a task box only at the start of a list line, never
+  side by side or inside a table. Two boxes make "does not work" an explicit answer, and both empty
+  means "not tried".
+- **What the app knows is a statement, not a box.** Per monitor the report states whether a
+  brightness read has succeeded. The existing `brightness_known` cannot answer that: a confirmed
+  write sets it as well, so a monitor that refuses reads but honours writes would count as read
+  after one hotkey press — the very quirk these reports should expose. `MonitorState` therefore
+  gains a flag `brightness_read` that only a successful read sets. Whether the hotkeys work stays
+  the user's answer: a confirmed write proves the monitor accepted a command, not that the
+  picture changed.
+- **"Has read" means at least once since the monitor was detected**, not in the latest pass. A
+  monitor in standby during the pass must not be reported as unreadable.
+- **The overlay is asked about once.** It is a window and does not depend on the monitor model.
+- **The connection type is asked.** The app does not know it.
+- **The unidentified section appears only when the count is above zero**, with singular and plural.
+- **No identified monitor at all** produces a report that says so, with the title "Hardware
+  report". That is still a useful report.
+
+### One enumeration pass, so that nothing is counted twice
+
+The report lists identified monitors and counts unidentified displays. Three situations would put
+one display into both:
+
+1. **The wrong counting point.** `process_monitor` can fail at identification or later, when the
+   DDC handle is opened. In the later case the monitor has already been reported as identified.
+   Counting every failure would list it and count it.
+2. **A transient identification failure.** A monitor identified earlier keeps its state for 90 s
+   of absence (`PRUNE_ABSENCE_WINDOW`). If its EDID read fails once, it would still be listed from
+   state and also be counted.
+3. **A pass that identifies nothing.** The controller deliberately leaves all state untouched
+   then. In a Remote Desktop session the report would list the physical monitors and count the
+   virtual display beside them.
+
+Summing counts across passes would be a fourth.
+
+**Rule: a report is built from exactly one enumeration pass.** The list is the set of monitors
+identified in that pass. The count is the number of displays in that same pass whose identification
+failed, counted at that one failure site in the worker. Windows hands out each display once per
+pass and each lands in exactly one of the two, so double counting is impossible by construction.
+
+What remains:
+
+- **The unit is a display as Windows sees it, not a device.** A virtual display without an EDID is
+  counted. The wording therefore stays neutral and mentions the possibility.
+- **Under-counting is possible.** Clone mode shows the app only the first device per image, and
+  identical monitors without serial numbers share one identity. Both are existing limits.
+
+### Flow
+
+**DDC worker.** `handle_refresh_all` counts the displays for which `get_monitor_id` fails, and only
+those. `DdcRefreshResult` gains a field `unidentified: usize`.
+
+**Controller.**
+
+- Keeps the topology of the last valid pass: the identified monitors and the unidentified count.
+  A current-generation result replaces it. A result that carries no information (nothing
+  identified and nothing counted) leaves it alone.
+- A new message from the tray (working name `TrayShareMonitorFeedback`) starts a refresh and sets a
+  flag that a report is waiting.
+- The next current-generation refresh result fulfils the flag: the report is built from that pass
+  and placed in an outbox. If that result carries no information, the report is built from the
+  last valid topology instead.
+- If no refresh is left to wait for — the command could not be sent, or the watchdog aborted the
+  pass after `REFRESH_TIMEOUT` — the next supervision pass fulfils the flag from the last valid
+  topology. If there has never been one, the report has no monitors. That check runs after worker
+  supervision, so a worker that had merely died is respawned and measured afresh instead of being
+  answered from the old pass.
+- A further click while a report is waiting starts nothing. The pass under way already began
+  after the first click; more passes would only queue behind it in the worker and push the result
+  out. One report results.
+
+The flag waits for the *next valid result*, not for one particular generation. Another refresh can
+begin in between (resume, a hotkey after inactivity) and would make the first generation stale; a
+flag tied to it would never be fulfilled. Any later generation also began after the click, so it
+serves the purpose equally.
+
+The first click starts a new refresh even when one is in flight: only then is the pass known to
+have begun after the click.
+
+**Main loop.** Once per iteration it takes the report out of the outbox, builds the link with the
+app version and the Windows build, and opens it. This follows the existing pattern in which the
+loop polls the controller for the language and the health warnings.
+
+**Why an outbox.** The report comes into being inside the controller, later than the click, so the
+existing interception of shell messages in `main.rs` cannot serve. An outbox keeps shell side
+effects in `main.rs`, keeps the app version and the Windows build out of the controller, and needs
+no new seam.
+
+### Report data and link building
+
+A new module in `core/` (working name `core/report.rs`) holds the report type and one pure function
+from report, app version and optional Windows build to a link.
+
+- **Report type:** per monitor a display name and whether its brightness has been read; plus the
+  unidentified count. The display name is built the way the tray menu builds its rows
+  (manufacturer code and model, with `#1`, `#2` for equal models), from the monitors of the pass.
+  The type holds no `MonitorId`, and that name function never includes the serial number.
+- **Base address:** the `repository` value from `Cargo.toml`, plus
+  `/discussions/new?category=hardware-reports&title=…&body=…`.
+- **Percent-encoding:** a small function of its own, no new dependency. Everything except ASCII
+  letters, digits and `- . _ ~` is encoded, as UTF-8.
+- **Title:** the display names joined by " + ", in the order of the tray menu's rows. It is limited
+  to 100 characters before encoding; names that do not fit are replaced by "+ N more".
+- **Windows build:** from the registry read that `theme.rs` already performs. If it is unavailable
+  the build is left out.
+
+**Length budget.** The whole link is limited to 2000 characters. The figure rests on an unverified
+recollection that opening a link through the Windows shell can fail near 2080 characters; the
+manual pass checks it with a deliberately long link, and the budget is one constant. Measured on
+the agreed wording, it holds four monitors with a full block for a release build with short model
+names, and three once a development version string or the unidentified section is added. Beyond
+that the text is shortened by whole blocks, never inside one: as many of the first monitors in
+tray-menu order as fit keep their full block and the surplus ones appear as a single line
+"Also connected: …". If the names do not fit either, blocks give way to names and names to
+"+ N more".
+
+**Opening.** `main.rs` gets a sibling of `open_with_default_app` for links, sharing the same
+`ShellExecuteW` core.
+
+### Tray entry and languages
+
+The entry sits directly below "Settings", before "Open Log Folder".
+
+English: **"Share monitor feedback…"**. German: **"Monitor-Rückmeldung geben…"**.
+
+Every language's text has to meet four criteria:
+
+1. It names the hardware: the word for "monitor" is in it.
+2. It invites good and bad news alike.
+3. It carries no overtone of a complaint or a fault report.
+4. It uses no verb that, in that language, suggests the app itself transmits something. That would
+   seem to contradict "the app sends nothing".
+
+The other 13 texts come from the translation chain used for the earlier language batches, in
+reduced form: translator, blind back-translation, reviewer, with the four criteria as the review
+standard. Every text that ships is back-translated blind in its final form. The result is added
+to this document before the strings are merged: per language the text, its blind
+back-translation and the verdict on the criteria. A language the chain cannot settle goes to the
+maintainer with both candidates.
+
+`Strings` gains one field. The existing i18n tests apply unchanged: no field empty, and equality
+with English only as a declared decision. The menu sizes itself, so there is no layout risk.
+
+## Rejected alternatives
+
+- **An issue form.** Prefilling is documented there, but positive reports would sit in the bug
+  tracker, and a form cannot hold a block per monitor.
+- **A discussion form.** Field prefilling is undocumented, and the same static-form limit applies.
+- **A pinned collection thread.** Replies cannot be prefilled at all.
+- **The existing "General" category.** Reports would mix with everything else, and there would be
+  no page to point at.
+- **One-box questions.** An empty box would mean both "does not work" and "not answered".
+- **Building the report from current state without a refresh.** The state can be up to a refresh
+  interval old, and it mixes passes, which is what makes double counting possible.
+- **A new seam as an eighth type parameter of the controller.** It would run through every
+  signature and test setup for one method.
+- **The controller posting a message to its own channel.** It would need a sender into its own
+  inbox, a seam in disguise.
+
+## Verification
+
+**Unit tests, link function:** special characters and non-ASCII in model names; singular and
+plural; no monitors; the budget holds for any number of monitors.
+
+**Unit tests, state:** a confirmed write does not count as a read.
+
+**Unit tests, controller:** a click starts a refresh; the result fulfils the report, sorted; a
+stale result does not, and does not replace the stored topology; a later generation does; an
+abort and a failed start fulfil from the last topology; a dead worker is respawned first; a second
+click while one waits starts nothing; a monitor known from earlier but missing from the latest
+pass is not listed; a pass that only counts unidentified displays replaces the topology; a result
+without information does not; a serial-bearing identity never shows up in the link.
+
+**Manual, hardware-dependent:**
+
+- The click brings the browser to the front with the right monitors, in the right category.
+- Unplug a monitor, click: it is not listed.
+- Deliberately long links with real encoded content and an end marker open in full (checks the
+  length budget).
+- The count in the worker, as far as available hardware allows.
+- The maintainer's own first report, submitted; the hidden comment and the boxes render as meant.
+
+## Documentation impact
+
+`docs/architecture.md` is the source of truth for behavior and gets thorough treatment:
+
+- A description of the flow and of the one-pass rule with its reason.
+- The statement on network freedom: the app opens a link and sends nothing.
+- The refresh strategy gains a trigger; the passage on enumerated versus readable monitors gains
+  the count; the tray section gains the entry and its message.
+- The message list and the `MonitorState` listing gain the new variant, the new field of the
+  refresh result, and `brightness_read` with the reason it is not `brightness_known`.
+- A new manual procedure under "Integration Testing".
+
+`README.md` (pointer to the entry; the privacy section says what the link contains) and
+`SUPPORT.md` are updated. The entries in `CHANGELOG.md` and in the module map of `CLAUDE.md` are
+kept brief.
+
+**Consistency review.** After the documentation is written, a separate reviewer with no prior
+context reads `docs/architecture.md`, `README.md`, `SUPPORT.md` and `CLAUDE.md` against the change
+and reports every statement the change has made false or contradictory. All findings are resolved
+before the pull request is opened.
+
+## Risks
+
+- **The length figure is an assumption.** Mitigated by the manual check and a single constant.
+- **A GitHub account is required to submit.** Accepted; there is no other channel that keeps the
+  app off the network.
+- **GitHub may change its query parameters.** They are not in the official documentation for
+  discussions. The app would then open an empty editor.
+- **The wait before the browser opens.** Usually the duration of one refresh, at most
+  `REFRESH_TIMEOUT` (5 s) plus one watchdog interval (250 ms), with no visible progress.
+- **The browser may open in the background.** The link is opened up to that long after the click,
+  by which time Windows may no longer grant the app the foreground. Not verified either way; the
+  manual pass checks it, and "Open Log Folder" takes the same route today.
+- **Translation quality.** The texts are machine-translated and machine-reviewed, like the rest of
+  the interface.
+
+## Review amendments
+
+A cold adversarial review of this document and its implementation plan (2026-10-04, a reviewer
+with no prior context) led to these changes. Each finding was checked against the source before
+it was accepted.
+
+- **`brightness_known` is not "has read".** `apply_set_result` sets it on a confirmed write too.
+  The earlier text claimed the app keeps no per-monitor record of write success; that was false.
+  The report now states a new flag, `brightness_read`.
+- **A further click while a report waits starts nothing.** The earlier text had every click start
+  a refresh, which lets impatient clicking queue passes in the worker and push the result out.
+- **A failed start is settled by the next supervision pass**, not at once, so that a worker that
+  has just died is respawned and measured afresh.
+- **The issue chooser keeps a route to "General"**, and the README's tray screenshot waits for
+  the next release instead of being described as something it does not show.
+- **Translations:** every final text is back-translated blind, and a language the chain cannot
+  settle goes to the maintainer.
+- **Wording:** the report type "holds no `MonitorId`" rather than "has no field for a serial"; the
+  display name is built like the tray's, not identical to it in every transient state; the number
+  of monitors that fit the budget depends on the version string and the unidentified section;
+  the wait is bounded by `REFRESH_TIMEOUT` plus one watchdog interval.
+- **Tests added:** a stale result does not replace the stored topology; the report is sorted; a
+  pass that only counts unidentified displays replaces the topology.
+
+Not adopted, with reasons:
+
+- **A mechanical test that the text contains the table's word for "monitor".** Inflecting
+  languages use another form of the word than the reference line does; the test would fail on
+  correct texts. The reviewer in the translation chain checks it instead.
+- **A click reviving a worker that supervision has given up on, and a first click waiting for a
+  pass already in flight.** Both widen the scope without a demonstrated harm.
+- **Foreground handling and an error dialog when the browser does not open.** The concern is an
+  inference, not an observation; it became a manual check and a listed risk.
+
+## Menu text per language
+
+Translated, back-translated blind and reviewed against the four criteria on 2026-10-04. The
+back-translation and "Reader expects" were made from the final text without sight of the
+English.
+
+| Language | Text | Blind back-translation | Reader expects | Criteria 1–4 |
+|---|---|---|---|---|
+| English (`en`) | Share monitor feedback… | — | — | source |
+| German (`de`) | Monitor-Rückmeldung geben… | — | — | agreed with the maintainer |
+| Czech (`cs`) | Napsat zpětnou vazbu k\u{a0}monitorům… | Write feedback on the monitors… | A form or web page opens to write feedback about the monitors | pass |
+| Greek (`el`) | Σχόλια για τις οθόνες… | Comments/feedback for the screens… | A place opens to submit comments or feedback about the monitors | pass |
+| Spanish (`es`) | Opinar sobre los monitores… | Give an opinion on the monitors… | A form or page opens to share an opinion about the monitors | pass |
+| French (`fr`) | Donner votre avis sur vos écrans… | Give your opinion on your screens… | A form or page opens to give an opinion about one's screens | pass |
+| Indonesian (`id`) | Beri masukan tentang monitor… | Give feedback about monitors… | A form or page opens to submit feedback about the monitors | pass |
+| Italian (`it`) | Lascia un parere sui monitor… | Leave an opinion on the monitors… | A form or page opens to leave an opinion about the monitors | pass |
+| Dutch (`nl`) | Feedback over uw beeldschermen geven… | Give feedback about your screens… | A form or page opens to give feedback about one's screens | pass |
+| Polish (`pl`) | Napisz opinię o monitorach… | Write an opinion about the monitors… | A form or page opens to write an opinion about the monitors | pass |
+| Portuguese (`pt`) | Dar opinião sobre os monitores… | Give an opinion about the monitors… | A form or page opens to give an opinion about the monitors | pass |
+| Russian (`ru`) | Оставить отзыв о мониторах… | Leave a review about the monitors… | A form or page opens to leave a review or feedback about the monitors | pass |
+| Turkish (`tr`) | Monitörler hakkında geri bildirim ver… | Give feedback about monitors… | A form or page opens to give feedback about the monitors | pass |
+| Ukrainian (`uk`) | Залишити відгук про монітори… | Leave a review about the monitors… | A form or page opens to leave a review or feedback about the monitors | pass |
+| Vietnamese (`vi`) | Nhận xét về màn hình… | Comments/reviews about the screens… | A form or page opens to leave comments or a review about the screens | pass |
+
+The Czech text is given as a Rust string literal: `\u{a0}` is the no-break space the Czech table
+puts after a one-letter preposition. The reviewer changed only the capitalisation of `id` and `pt`
+to sentence case, following the English source as those tables do for menu commands.
+
+## Manual pass
+
+Run on 2026-10-04 on Windows build 26200, with one monitor connected (PHL 346B1C over
+DisplayPort, no serial number in its EDID).
+
+- Length budget: links of 2000, 2100, 3000 and 4000 characters, opened through the shell
+  (`Start-Process`) with real encoded report text, all opened the "Hardware reports" editor with
+  title and body intact and the end marker last. The shell limit lies above 4000 characters;
+  `MAX_URL_LEN` stays at 2000. (A first run of the probe showed empty bodies; the cause was an
+  unencoded `#` in the probe script itself, which ends the query. The app encodes `#` as `%23`.)
+- Hardware Report Test: the click logged "Hardware report requested from tray menu", then
+  "Requesting monitor refresh from DDC worker", then "Hardware report ready monitors=1
+  unidentified=0"; the link was 890 characters. The browser opened the category with the title
+  `PHL 346B1C`, one monitor block stating "has read … yes", the version line and the Windows
+  build. No serial number appeared. The entry showed in German ("Monitor-Rückmeldung geben…"),
+  the app's interface language on this machine.
+- Browser foreground: the browser came to the front on its own.
+- First report: https://github.com/Ud3g/darkbright-helper/discussions/55 — the HTML comment is
+  hidden in the rendered post, and both questions render as checkboxes.
+- Not checked: unplugging a monitor (only one was connected); the unidentified-display count (no
+  display without an EDID was available); several clicks while a report waits (a single fast
+  monitor finishes the pass before the menu can be reopened); switching the language in the
+  settings window.

@@ -136,33 +136,48 @@ impl DdcWorker {
 
         let mut results: Vec<(MonitorId, u8)> = Vec::new();
         let mut enumerated: Vec<MonitorId> = Vec::new();
+        let mut unidentified: usize = 0;
 
         let hmonitors = match enumerate_monitors() {
             Ok(h) => h,
             Err(e) => {
                 log::error!(error:% = e; "Failed to enumerate monitors");
-                self.send_refresh_result(generation, results, enumerated);
+                self.send_refresh_result(generation, results, enumerated, unidentified);
                 return;
             }
         };
 
         for hmonitor in hmonitors {
-            if let Err(e) = self.process_monitor(hmonitor, &mut results, &mut enumerated) {
+            // Identification is the one failure that keeps a display out of
+            // `enumerated`, so it is the one place such a display is counted.
+            // A later failure belongs to a monitor already reported as
+            // identified and must not count it a second time.
+            let monitor_id = match get_monitor_id(hmonitor) {
+                Ok(id) => id,
+                Err(e) => {
+                    unidentified += 1;
+                    log::warn!(error:% = e; "Could not identify display");
+                    continue;
+                }
+            };
+            if let Err(e) =
+                self.process_monitor(hmonitor, &monitor_id, &mut results, &mut enumerated)
+            {
                 log::warn!(error:% = e; "Failed to process monitor");
             }
         }
 
-        self.send_refresh_result(generation, results, enumerated);
+        self.send_refresh_result(generation, results, enumerated, unidentified);
     }
 
-    /// Processes a single monitor during refresh.
+    /// Processes a single identified monitor during refresh.
     fn process_monitor(
         &mut self,
         hmonitor: HMONITOR,
+        monitor_id: &MonitorId,
         results: &mut Vec<(MonitorId, u8)>,
         enumerated: &mut Vec<MonitorId>,
     ) -> crate::Result<()> {
-        let monitor_id = get_monitor_id(hmonitor)?;
         // Identified ⇒ physically present. Push before opening the physical
         // handle: a handle-open or brightness-read failure below must count
         // as unreadable, not as absent from the topology.
@@ -204,11 +219,13 @@ impl DdcWorker {
         generation: u64,
         monitors: Vec<(MonitorId, u8)>,
         enumerated: Vec<MonitorId>,
+        unidentified: usize,
     ) {
         let msg = BrightnessMessage::DdcRefreshResult {
             generation,
             monitors,
             enumerated,
+            unidentified,
         };
 
         if let Err(e) = self.resp_tx.send(msg) {

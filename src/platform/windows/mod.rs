@@ -293,6 +293,13 @@ pub fn show_info_message_box(title: &str, message: &str) {
     show_message_box(title, message, MB_OK | MB_ICONINFORMATION);
 }
 
+/// The running Windows build number (for example `26200`), or `None` when
+/// the registry does not yield one.
+#[must_use]
+pub fn windows_build_number() -> Option<u32> {
+    theme::current_build_number()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
