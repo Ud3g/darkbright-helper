@@ -167,6 +167,6 @@ mod tests {
             *b = 0xEE;
         }
         let id = parse_edid(&edid).expect("invalid text must not reject the EDID");
-        assert!(!id.model_name.is_empty());
+        assert_ne!(id.model_name, "");
     }
 }
