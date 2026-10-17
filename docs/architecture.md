@@ -1413,7 +1413,7 @@ Three details are easy to break:
 │ Dimmer                        Ctrl+Shift+Down   │
 │─────────────────────────────────────────────────│
 │ Settings                                        │  → Opens the settings window (§14)
-│ Share monitor feedback…                         │  → Opens a prefilled hardware report in the browser
+│ Share monitor feedback on GitHub…               │  → Opens a prefilled hardware report in the browser
 │ Open Log Folder                                 │  → Opens %APPDATA%\BrightnessControl in Explorer
 │ Quit darkbright-helper                          │  → Graceful shutdown
 │─────────────────────────────────────────────────│
@@ -1660,8 +1660,8 @@ to leave the instructions on screen while trying the keys.
 
 **Hardware Report:**
 
-"Share monitor feedback…" opens the repository's "Hardware reports" discussion category in the
-default browser with a report already written: the app version, the Windows build number, one
+"Share monitor feedback on GitHub…" opens the repository's "Hardware reports" discussion category
+in the default browser with a report already written: the app version, the Windows build number, one
 block per identified monitor, and the number of displays the app could not identify. The user
 ticks boxes, adds what they like and submits — or closes the tab.
 
@@ -2342,7 +2342,7 @@ release history, not in a table here.
 
 #### Hardware Report Test
 1. Start the application with `RUST_LOG=debug`
-2. Tray → "Share monitor feedback…"
+2. Tray → "Share monitor feedback on GitHub…"
 3. **Expected**: the browser comes to the front with the "Hardware reports" discussion category; the title names the connected monitors and the text has one block per monitor. The log shows "Hardware report requested from tray menu", then "Requesting monitor refresh from DDC worker", then "Hardware report ready"
 4. Click the entry, then reopen the menu and click it again before the browser appears (easiest with a monitor whose DDC read retries, so the pass takes longer)
 5. **Expected**: a click that lands while a report is still waiting opens no extra tab, and the log shows "Hardware report already waiting; request ignored" for it; a click after the browser opened starts a new report, as intended

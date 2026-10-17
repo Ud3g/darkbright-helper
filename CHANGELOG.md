@@ -7,8 +7,8 @@ history lives in the git log.
 
 ### Added
 
-- Tray menu entry "Share monitor feedback…": opens a prefilled hardware report on GitHub in
-  your browser. The app itself still sends nothing.
+- Tray menu entry "Share monitor feedback on GitHub…": opens a prefilled hardware report on
+  GitHub in your browser; posting it needs a GitHub account. The app itself still sends nothing.
 
 ### Changed
 
