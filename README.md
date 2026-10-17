@@ -32,7 +32,7 @@ Rust.
   applying instantly. An optional "Start with Windows" toggle lives there too. The config
   file stays a fully supported escape hatch, one click away from the window's footer.
 
-![The tray context menu: live per-monitor status, the current hotkeys, and Settings, Open Log Folder and Quit](docs/media/tray-menu.png)
+![The tray context menu: live per-monitor status, the current hotkeys, and Settings, Share monitor feedback on GitHub, Open Log Folder and Quit](docs/media/tray-menu.png)
 
 ![The settings window: language, Start with Windows, brightness step, hotkey rebinding, OSD timing, refresh intervals and logging](docs/media/settings-window.png)
 
