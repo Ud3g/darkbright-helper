@@ -5,34 +5,30 @@ history lives in the git log.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-10-17
+
 ### Added
 
-- Tray menu entry "Share monitor feedback on GitHub…": opens a prefilled hardware report on
-  GitHub in your browser; posting it needs a GitHub account. The app itself still sends nothing.
+- Tray menu entry "Share monitor feedback on GitHub…": opens a prefilled
+  hardware report on GitHub; posting it needs a GitHub account. The app itself
+  sends nothing.
 
 ### Changed
 
-- A left click on the tray icon opens the menu, like a right click. Windows 11
-  reports Enter on the icon as a left click, so this is what makes Enter work.
+- A left click on the tray icon opens the menu. This also makes Enter work on
+  Windows 11.
 
 ### Fixed
 
-- The tray icon survives a restart of Windows Explorer (after a crash, some
-  Windows updates, or a restart from Task Manager). Until now it vanished for
-  good, taking the menu — settings, Quit, the warnings — with it. A standing
-  warning comes back with its badge.
-- Quitting removes the tray icon at once instead of leaving it behind until
-  the mouse passes over it.
-- `taskkill` without `/f` now ends the app cleanly, like Quit. It used to
-  close just one of the app's hidden windows per call — the brightness
-  indicator first — and leave the app running without it.
-- The tray menu closes when you click outside it.
-- The tray menu opens above the icon instead of covering part of it, and
-  follows Windows' left-/right-handed menu setting.
-- Opened from the keyboard (Win+B, the arrow keys to the icon, then Shift+F10,
-  the menu key, Enter or Space), the tray menu appears at the icon rather than
-  wherever the mouse pointer happens to be, and Escape hands the focus back to
-  the notification area.
+- The tray icon survives an Explorer restart. It used to vanish for good,
+  taking the menu with it.
+- Quit removes the tray icon immediately.
+- `taskkill` without `/f` ends the app cleanly, like Quit.
+- The tray menu closes on a click outside it.
+- The tray menu opens above the icon and follows Windows' left-/right-handed
+  menu setting.
+- Opened from the keyboard, the tray menu appears at the icon instead of at the
+  mouse pointer; Escape returns focus to the notification area.
 
 ## [0.12.0] — 2026-09-22
 
