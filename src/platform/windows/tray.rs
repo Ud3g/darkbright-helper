@@ -382,8 +382,8 @@ struct MenuSession {
 
 thread_local! {
     /// The open menu, or `None` when none is open. Doubles as the re-entrancy
-    /// guard: the shell can post a second right-click callback that the modal
-    /// loop dispatches, and a nested menu would take over this slot.
+    /// guard: the shell can send a second menu request that the modal loop
+    /// dispatches, and a nested menu would take over this slot.
     static MENU_SESSION: RefCell<Option<MenuSession>> = const { RefCell::new(None) };
 }
 
@@ -1179,11 +1179,8 @@ fn show_context_menu(hwnd: HWND, anchor: POINT) {
             );
         }
 
-        // Every anchor lies on the icon itself — for the keyboard about its
-        // centre (measured on Windows 11), not the corner the reference
-        // promises — so a menu ending at the anchor would cover half the
-        // icon. Excluding the icon's rectangle makes Windows lift the menu
-        // clear of it; without the rectangle it ends at the anchor as before.
+        // Every anchor lies on the icon, so its rectangle is excluded to lift
+        // the menu clear of it (`architecture.md`, "Callback Protocol").
         let params = icon_rect(hwnd).map(|rect| TPMPARAMS {
             cbSize: u32::try_from(std::mem::size_of::<TPMPARAMS>()).unwrap_or(0),
             rcExclude: rect,
@@ -1521,8 +1518,8 @@ fn handle_tray_callback(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
 /// Manages the system tray icon and its context menu.
 ///
 /// The `TrayIcon` creates a hidden top-level window to receive tray icon
-/// notifications and handles the popup menu when the user right-clicks the
-/// icon.
+/// notifications and handles the popup menu when the user clicks the icon or
+/// calls it up from the keyboard.
 ///
 /// Deliberately has no `Drop`: the tray thread spends its life blocked in
 /// `run_message_loop`, so a destructor would only run after the window it
