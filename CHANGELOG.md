@@ -10,6 +10,11 @@ history lives in the git log.
 - Tray menu entry "Share monitor feedback…": opens a prefilled hardware report on GitHub in
   your browser. The app itself still sends nothing.
 
+### Changed
+
+- A left click on the tray icon opens the menu, like a right click. Windows 11
+  reports Enter on the icon as a left click, so this is what makes Enter work.
+
 ### Fixed
 
 - The tray icon survives a restart of Windows Explorer (after a crash, some
@@ -22,6 +27,12 @@ history lives in the git log.
   close just one of the app's hidden windows per call — the brightness
   indicator first — and leave the app running without it.
 - The tray menu closes when you click outside it.
+- The tray menu opens above the icon instead of covering part of it, and
+  follows Windows' left-/right-handed menu setting.
+- Opened from the keyboard (Win+B, the arrow keys to the icon, then Shift+F10,
+  the menu key, Enter or Space), the tray menu appears at the icon rather than
+  wherever the mouse pointer happens to be, and Escape hands the focus back to
+  the notification area.
 
 ## [0.12.0] — 2026-09-22
 

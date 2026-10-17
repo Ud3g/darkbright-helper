@@ -87,7 +87,7 @@ past a warning for an unsigned binary.
 2. `Ctrl+Shift+Up` increases the brightness of the monitor under your mouse pointer.
 3. `Ctrl+Shift+Down` decreases it.
 4. Once brightness reaches 0 %, continuing to decrease activates the dimming overlay.
-5. Right-click the tray icon for per-monitor status, a reminder of your hotkeys, Settings,
+5. Click the tray icon for per-monitor status, a reminder of your hotkeys, Settings,
    "Share monitor feedback…", the log folder, or Quit.
 
 Hotkeys:
