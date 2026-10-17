@@ -10,6 +10,19 @@ history lives in the git log.
 - Tray menu entry "Share monitor feedback…": opens a prefilled hardware report on GitHub in
   your browser. The app itself still sends nothing.
 
+### Fixed
+
+- The tray icon survives a restart of Windows Explorer (after a crash, some
+  Windows updates, or a restart from Task Manager). Until now it vanished for
+  good, taking the menu — settings, Quit, the warnings — with it. A standing
+  warning comes back with its badge.
+- Quitting removes the tray icon at once instead of leaving it behind until
+  the mouse passes over it.
+- `taskkill` without `/f` now ends the app cleanly, like Quit. It used to
+  close just one of the app's hidden windows per call — the brightness
+  indicator first — and leave the app running without it.
+- The tray menu closes when you click outside it.
+
 ## [0.12.0] — 2026-09-22
 
 ### Added

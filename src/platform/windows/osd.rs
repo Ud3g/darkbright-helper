@@ -30,7 +30,7 @@ use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, GetClientRect,
     HWND_TOPMOST, KillTimer, LWA_ALPHA, RegisterClassExW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE,
-    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, WM_PAINT, WM_TIMER,
+    SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow, WM_CLOSE, WM_PAINT, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, w};
@@ -210,6 +210,8 @@ unsafe extern "system" fn wnd_proc(
                 }
                 LRESULT(0)
             }
+            // Topmost, so this is the window a polite `taskkill` picks.
+            WM_CLOSE => super::handle_close_request("osd"),
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
     }
@@ -675,5 +677,15 @@ impl crate::core::controller::OsdSink for OsdWindow {
     }
     fn set_language(&mut self, lang: Lang) {
         OsdWindow::set_language(self, lang);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_window() {
+        crate::platform::windows::assert_close_request_shuts_down(wnd_proc);
     }
 }

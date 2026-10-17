@@ -389,6 +389,9 @@ impl HotkeyManager {
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
+                // Message-only on purpose, unlike the tray and power windows:
+                // WM_HOTKEY and the rebind commands are addressed to this
+                // thread or window directly, and nothing it needs is broadcast.
                 Some(HWND_MESSAGE),
                 None,
                 Some(hinstance.into()),

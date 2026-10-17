@@ -107,6 +107,24 @@ one-line comment saying so, because the two cases now look identical in the sour
 
 Fixing this also subsumes row 10 (`SetForegroundWindow` on a message-only window).
 
+**✅ RESOLVED** — 2026-10-17, PR #60. Direction taken as written,
+plus three things the review did not name. The tray window is a hidden top-level `WS_POPUP` +
+`WS_EX_TOOLWINDOW`, pinned by `tray_window_is_top_level_so_broadcasts_arrive` (the `power.rs`
+`GA_PARENT` assertion, verified to fail against an `HWND_MESSAGE` parent); `"TaskbarCreated"` is
+registered once and every icon write — startup, status, language, recreated taskbar — goes through
+one `push_icon_state`, which rebuilds icon and tooltip from the tray thread's own record of the
+warnings and language. Beyond the direction: (1) Windows 10 is documented to rebroadcast
+`"TaskbarCreated"` on a primary-display DPI change with the icon still present (Windows 11 build
+26200 was observed not to), so an add falls back to a modify and vice versa; (2) `ChangeWindowMessageFilterEx` lets the broadcast past UIPI in an elevated run; (3) a
+top-level window receives `WM_CLOSE` from `taskkill` without `/f`, which `DefWindowProcW` would have
+turned into exactly this finding's half-dead state — it is now the same `Shutdown` Ctrl+C sends. The
+manual pass showed `taskkill` picks only the topmost window per call (the OSD), so the same handling
+went into the OSD, overlay and power windows too; before, each polite `taskkill` silently destroyed
+one window and the process never exited. The
+`hotkey.rs` window carries the one-line comment saying why it is message-only on purpose. Row 10 is
+resolved with it. Recorded in `architecture.md`, "Surviving an Explorer Restart", with a manual
+"Explorer Restart Test".
+
 ### Important
 
 **I1. `TrayIcon::drop` — and the `NIM_DELETE` inside it — is unreachable on every exit path.**
@@ -134,6 +152,15 @@ short bounded join. If that is judged not worth it at this project's calibration
 power and hotkey threads, whose handles the OS reclaims anyway), then say so at each `Drop` and
 replace the tray one with an explicit `remove_tray_icon` call on the shutdown path, so the icon still
 goes away. What should not survive is three RAII impls that only look like they run.
+
+**✅ RESOLVED (tray half)** — 2026-10-17, PR #60. **Open decision
+settled for the tray: explicit teardown, `Drop` deleted.** `main`'s cleanup calls
+`TrayStatusHandle::shutdown` before stopping the DDC worker — a `SendMessageTimeoutW` (1 s bound,
+above the tray's 500 ms menu-data wait) on which the tray thread runs `NIM_DELETE` and destroys its
+own window, ending its loop. Synchronous, so the icon is gone before the process exits. `TrayIcon`
+now holds a bare `HWND`, its `Drop` and the "kept alive" `icon_handle` are gone, and its doc comment
+says why it has no destructor. **Still open:** the `PowerEventListener` and `HotkeyManager` halves —
+no user-visible effect, deliberately left out of this change.
 
 **I2. The usage window ignores DPI in a process that declares per-monitor DPI awareness v2.**
 `src/platform/windows/usage.rs:25-30`, `:151-172`, `:198-234`; `src/main.rs:515-519`.
@@ -248,6 +275,13 @@ not.
   tray menus not dismissing on an outside click — but it is documented to fail on a message-only
   window, so the workaround is not actually in effect. **Subsumed by C1**: the window becoming
   top-level fixes it. _Unverified — the symptom is a UI behaviour not reproducible from source._
+- **✅ RESOLVED (TRAY-2, TRAY-3)** — 2026-10-17, with C1. TRAY-2: the AND mask is no longer
+  zero-filled but derived from the colour bitmap's alpha (`and_mask_from_alpha`, set bit = fully
+  transparent, rows word-padded), so a non-alpha render path keeps the icon's outline instead of a
+  black square. TRAY-3: the window is top-level now. **TRAY-1 stays open by decision:** not the
+  one-line flag removal but the real fix — `NIM_SETVERSION(NOTIFYICON_VERSION_4)`, re-sent after
+  every add including the `TaskbarCreated` re-add, with the click handling moved to
+  `WM_CONTEXTMENU` — as a separate change; `NIF_SHOWTIP` stays because it takes effect there.
 
 **Hotkeys** _(HK-1)_
 - `impl Display for ParsedHotkey` (`hotkey.rs:439-465`) resolves key names from `VK_TO_NAME`
@@ -289,16 +323,16 @@ should be one pass over that module even though they are separate defects.
 
 | #  | ID     | Issue (anchor)                                                                | Severity  | Cx   | Clarity        | Open decision |
 |----|--------|-------------------------------------------------------------------------------|-----------|------|----------------|---------------|
-| 1  | C1     | Top-level tray window + handle `TaskbarCreated`; re-add icon **and** warning state (`tray.rs:920`) | Critical  | M    | Mostly clear   | — |
+| 1  | C1     | Top-level tray window + handle `TaskbarCreated`; re-add icon **and** warning state (`tray.rs:920`) | Critical  | M    | Mostly clear   | ✅ resolved 2026-10-17 — plus DPI rebroadcast, UIPI filter, `WM_CLOSE` → shutdown |
 | 2  | I3     | Let the owner destroy the usage window, not its own wnd_proc (`usage.rs:95`)   | Important | S    | Mostly clear   | — |
 | 3  | I2     | Scale the usage window for DPI; set a font; centre on the cursor's monitor (`usage.rs:151`) | Important | S    | Mostly clear   | Which monitor to centre on |
 | 4  | I4     | Daisy-chained physical monitors collapse onto one `MonitorId` (`ddc_worker.rs:178`) | Important | XS–M | Needs decision | Log-and-document vs. represent it in `MonitorId` |
-| 5  | I1     | `TrayIcon`/`PowerEventListener` `Drop` unreachable on every exit (`tray.rs:1033`) | Important | S    | Needs decision | Shutdown handshake vs. explicit teardown + delete the `Drop`s |
+| 5  | I1     | `TrayIcon`/`PowerEventListener` `Drop` unreachable on every exit (`tray.rs:1033`) | Important | S    | Needs decision | Shutdown handshake vs. explicit teardown + delete the `Drop`s — ✅ tray half resolved 2026-10-17 (explicit teardown); power/hotkey halves open |
 | 6  | HYG-1  | `cargo fmt --check` fails on a stray blank line (`config.rs:1099`)             | Cosmetic  | XS   | Clear          | — |
 | 7  | DOC-6  | Mark rows 18/19 resolved in the 2026-07-26 review                             | Cosmetic  | XS   | Clear          | — |
-| 8  | TRAY-1 | `NIM_SETVERSION` missing, so `NIF_SHOWTIP` is inert (`tray.rs:556`)            | Cosmetic  | XS   | Clear          | — |
-| 9  | TRAY-2 | Icon AND mask built from undefined `CreateBitmap` bits (`tray.rs:454`)         | Cosmetic  | XS   | Clear          | — |
-| 10 | TRAY-3 | `SetForegroundWindow` on a message-only window (`tray.rs:679`)                 | Cosmetic  | XS   | Clear          | Subsumed by row 1 |
+| 8  | TRAY-1 | `NIM_SETVERSION` missing, so `NIF_SHOWTIP` is inert (`tray.rs:556`)            | Cosmetic  | XS   | Clear          | Open by decision — real `NOTIFYICON_VERSION_4` fix as a separate change |
+| 9  | TRAY-2 | Icon AND mask built from undefined `CreateBitmap` bits (`tray.rs:454`)         | Cosmetic  | XS   | Clear          | ✅ resolved 2026-10-17 — mask derived from alpha |
+| 10 | TRAY-3 | `SetForegroundWindow` on a message-only window (`tray.rs:679`)                 | Cosmetic  | XS   | Clear          | Subsumed by row 1 — ✅ resolved with it |
 | 11 | HK-1   | `Display for ParsedHotkey` renders letters/digits as "Unknown" (`hotkey.rs:457`) | Cosmetic  | XS   | Clear          | — |
 | 12 | DEP-4  | Trim `env_logger` default features; drops the regex chain (`Cargo.toml:46`)    | Cosmetic  | S    | Mostly clear   | Accept the `RUST_LOG` regex-filter loss |
 | 13 | DOC-2  | _(carried)_ Reconcile the `monitors` round-trip claim with `MonitorConfig`     | Cosmetic  | S    | Mostly clear   | Loosen the type vs. soften the doc |

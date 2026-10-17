@@ -46,7 +46,7 @@ use darkbright_helper::platform::windows::{
     WindowsConfigStore, WindowsLanguageSource,
 };
 use darkbright_helper::platform::windows::{
-    show_error_message_box, show_info_message_box, windows_build_number,
+    route_close_requests_to, show_error_message_box, show_info_message_box, windows_build_number,
 };
 use darkbright_helper::{BrightnessError, Result};
 
@@ -437,7 +437,8 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// Spawns the system tray icon thread.
 ///
 /// The tray icon provides a menu for accessing settings and quitting the application.
-/// The thread runs until the application shuts down (tray icon is cleaned up via RAII).
+/// The thread runs until the application shuts down, when `main` takes the icon
+/// down through `TrayStatusHandle::shutdown`.
 ///
 /// # Arguments
 ///
@@ -626,6 +627,9 @@ fn main() {
 
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();
+    // The OSD and overlay windows live on this thread; a polite close request
+    // landing on one of them must end the app, not just that window.
+    route_close_requests_to(tx.clone());
 
     // Spawn the supervised DDC worker. It is the only path to the hardware, so
     // a refusal here ends startup — but it ends it with an explanation, the way
@@ -878,6 +882,13 @@ fn main() {
 
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), false);
+    }
+
+    // First, so the icon disappears the moment Quit is clicked rather than
+    // after the DDC worker's last transaction. The handle may still be in
+    // flight if the tray came up during the final loop iteration.
+    if let Some(handle) = tray_status.or_else(|| tray_status_rx.try_recv().ok()) {
+        handle.shutdown();
     }
 
     log::debug!("Sending shutdown command to DDC worker");

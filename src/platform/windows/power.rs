@@ -15,7 +15,7 @@ use windows::Win32::System::Power::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DEVICE_NOTIFY_WINDOW_HANDLE, DefWindowProcW, DestroyWindow,
     DispatchMessageW, GetMessageW, MSG, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND,
-    RegisterClassW, TranslateMessage, WM_DISPLAYCHANGE, WM_POWERBROADCAST, WNDCLASSW,
+    RegisterClassW, TranslateMessage, WM_CLOSE, WM_DISPLAYCHANGE, WM_POWERBROADCAST, WNDCLASSW,
     WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::w;
@@ -75,6 +75,7 @@ unsafe extern "system" fn power_wnd_proc(
             // Zero: message processed, per the WM_DISPLAYCHANGE contract
             return LRESULT(0);
         }
+        WM_CLOSE => return super::handle_close_request("power"),
         _ => {}
     }
     // In Rust 2024, unsafe fn body still requires explicit unsafe block
@@ -155,6 +156,7 @@ impl PowerEventListener {
     ///
     /// Panics if the current process module handle cannot be retrieved.
     pub fn new(sender: Sender<BrightnessMessage>) -> Result<Self> {
+        super::route_close_requests_to(sender.clone());
         install_wndproc_sender(sender);
 
         let hinstance = unsafe {
@@ -346,6 +348,11 @@ mod tests {
             LRESULT(0),
             "WM_DISPLAYCHANGE should be reported as handled (zero)"
         );
+    }
+
+    #[test]
+    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_window() {
+        crate::platform::windows::assert_close_request_shuts_down(power_wnd_proc);
     }
 
     // Broadcast messages — WM_DISPLAYCHANGE among them — are never delivered
