@@ -1339,10 +1339,15 @@ The application runs as a background process with a system tray icon for user in
 
 | Action | Result |
 |--------|--------|
-| Right-click | Opens context menu |
-| Keyboard: Shift+F10 or the menu key on the focused icon (Win+B, arrow keys) | Opens context menu |
-| Keyboard: Enter or Space on the focused icon | Opens context menu |
-| Left-click | No action (intentional) |
+| Right-click or left-click | Opens context menu |
+| Keyboard: Win+B, arrow keys to the icon, then Shift+F10, the menu key, Enter or Space | Opens context menu |
+
+Every way of reaching the icon opens the same menu: the app has no main
+window, and the menu — monitor rows, warnings, the hotkeys — is its only view
+of its own state. Left-click used to do nothing on purpose; it opens the menu
+now because Windows 11 reports Enter and Space on the focused icon as the very
+same event as a left click (below), and leaving Enter dead for keyboard users
+was the worse trade.
 
 **Callback Protocol:**
 
@@ -1350,17 +1355,29 @@ The icon speaks `NOTIFYICON_VERSION_4`, selected with `NIM_SETVERSION`. Without
 that call the shell falls back to the Windows 95 protocol, in which a keyboard
 request arrives disguised as a right-button click and `NIF_SHOWTIP` means
 nothing. Under version 4 every request names itself: the menu comes as
-`WM_CONTEXTMENU` — from the mouse and the keyboard alike — and Enter or Space
-as `NIN_KEYSELECT`; a left click is `NIN_SELECT`, and the button messages that
-still arrive alongside are ignored, so a right-click opens the menu exactly
-once. The callback's `wparam` carries the anchor as two *signed* words (the
-click point, or the icon's top-left corner for the keyboard); a monitor left
-of or above the primary has negative coordinates, which an unsigned read —
-the one Microsoft's own sample uses — would throw across the desktop. The
+`WM_CONTEXTMENU` — from the right mouse button and the keyboard alike — and an
+activation as `NIN_SELECT`; the button messages that still arrive alongside
+are ignored, so one click opens the menu exactly once. The reference has the
+keyboard's Enter and Space arrive as `NIN_KEYSELECT`, but Windows 11 (build
+26200) was measured sending `NIN_SELECT` for them, indistinguishable from a
+left click; both open the menu, and `NIN_KEYSELECT` is handled for shells
+that do send it.
+
+The callback's `wparam` carries an anchor as two *signed* words; a monitor
+left of or above the primary has negative coordinates, which an unsigned read
+— the one Microsoft's own sample uses — would throw across the desktop. The
 reference leaves `wparam` undefined for `WM_CONTEXTMENU`, but Microsoft's
-sample, Windows Terminal and Qt all position the menu from it. The menu drops
-upward from the anchor (`TPM_BOTTOMALIGN`), and to the left or right of it as
-the user's handedness setting (`SM_MENUDROPALIGNMENT`) says.
+sample, Windows Terminal and Qt all position the menu from it. For the mouse
+the anchor is the click point; for the keyboard the reference promises the
+icon's top-left corner, but Windows 11 was measured sending the icon's exact
+centre. Either way it lies on the icon, so a menu that simply ended at the
+anchor would cover part of it — by half for the keyboard. The menu therefore
+goes through `TrackPopupMenuEx` with the icon's rectangle
+(`Shell_NotifyIconGetRect`) as the excluded area and `TPM_VERTICAL`, and
+Windows lifts it clear above the icon; should the rectangle be unavailable,
+the menu ends at the anchor instead. Horizontally it drops to the left or
+right of the anchor as the user's handedness setting
+(`SM_MENUDROPALIGNMENT`) says.
 
 Three details are easy to break:
 
@@ -2365,11 +2382,11 @@ release history, not in a table here.
 3. Hover the icon
 4. **Expected**: the plain tooltip appears ("darkbright-helper", plus any active warnings)
 5. Right-click the icon
-6. **Expected**: the menu opens once at the pointer, above it; the log shows exactly one "Tray menu requested" for the click, with the pointer's screen coordinates. If a monitor sits left of the primary and the taskbar is extended onto it, repeat there: the coordinates are negative and the menu still opens at the pointer
+6. **Expected**: the menu opens once, its bottom edge just above the icon rather than over it; the log shows exactly one "Tray menu requested" for the click, with the pointer's screen coordinates, followed by "Tray icon rectangle" with the icon's bounds. If a monitor sits left of the primary and the taskbar is extended onto it, repeat there: the coordinates are negative and the menu still opens above that icon
 7. Left-click the icon
-8. **Expected**: nothing opens; the log shows "Tray icon left-clicked (no action)"
+8. **Expected**: the same menu opens once, above the icon; the log shows "Tray icon activated"
 9. Press Win+B, move to the icon with the arrow keys (it may sit behind the overflow chevron: Enter on the chevron, then the arrows), press Shift+F10
-10. **Expected**: the menu opens just above the icon, not at wherever the mouse pointer happens to be, and the arrow keys move through its items. Repeat with the menu key, and with Enter, then Space, on the focused icon: each opens the menu exactly once
+10. **Expected**: the menu opens entirely above the icon, not at wherever the mouse pointer happens to be, and the arrow keys move through its items; the logged anchor is the centre of the logged icon rectangle. Repeat with the menu key, and with Enter, then Space, on the focused icon: each opens the menu exactly once ("Tray icon activated" for Enter and Space)
 11. With a keyboard-opened menu, press Escape
 12. **Expected**: the menu closes, the log shows "Keyboard focus returned to the notification area", and the arrow keys move between notification-area icons again
 13. Open the menu by right-click and dismiss it by clicking into another application's window

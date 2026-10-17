@@ -283,9 +283,11 @@ not.
   the icon now selects `NOTIFYICON_VERSION_4` with `NIM_SETVERSION`, sent from `push_icon_state`
   after whichever operation turned out to be the add — startup, the `TaskbarCreated` re-add and a
   modify that fell back to an add alike. The menu opens on `WM_CONTEXTMENU` (mouse and keyboard)
-  and on `NIN_KEYSELECT`, anchored at the callback's signed `wParam` coordinates; a left click stays
-  a no-op. `NIF_SHOWTIP` stays and is now what keeps the plain tooltip, and a menu cancelled with
-  Escape returns the focus with `NIM_SETFOCUS`. Details in `architecture.md`, "Callback Protocol".
+  and on `NIN_SELECT`/`NIN_KEYSELECT`, anchored at the callback's signed `wParam` coordinates and
+  kept clear of the icon's rectangle. A left click opens it too now: Windows 11 reports Enter and
+  Space as the same `NIN_SELECT` a left click produces. `NIF_SHOWTIP` stays and is now what keeps
+  the plain tooltip, and a menu cancelled with Escape returns the focus with `NIM_SETFOCUS`.
+  Details in `architecture.md`, "Callback Protocol".
 
 **Hotkeys** _(HK-1)_
 - `impl Display for ParsedHotkey` (`hotkey.rs:439-465`) resolves key names from `VK_TO_NAME`

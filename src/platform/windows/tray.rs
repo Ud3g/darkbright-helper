@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, TRUE, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, TRUE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateBitmap, CreateCompatibleDC, CreateDIBSection,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, GdiFlush, GetDC, HBITMAP, HDC, HGDIOBJ, ReleaseDC,
@@ -24,7 +24,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETFOCUS,
     NIM_SETVERSION, NIN_SELECT, NINF_KEY, NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4,
-    NOTIFYICONDATAW, NOTIFYICONDATAW_0, Shell_NotifyIconW,
+    NOTIFYICONDATAW, NOTIFYICONDATAW_0, NOTIFYICONIDENTIFIER, Shell_NotifyIconGetRect,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
@@ -34,9 +35,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MENUITEMINFOW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MIIM_STRING, MSG, MSGFLT_ALLOW,
     PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_MENUDROPALIGNMENT,
     SMTO_ABORTIFHUNG, SendMessageTimeoutW, SetForegroundWindow, SetMenuItemInfoW, SetTimer,
-    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_TIMER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_POPUP,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPM_VERTICAL,
+    TPMPARAMS, TrackPopupMenuEx, TranslateMessage, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL,
+    WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -856,6 +857,29 @@ fn select_icon_version(hwnd: HWND) {
     }
 }
 
+/// The icon's rectangle on screen, or `None` if the shell cannot say.
+fn icon_rect(hwnd: HWND) -> Option<RECT> {
+    let identifier = NOTIFYICONIDENTIFIER {
+        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONIDENTIFIER>()).unwrap_or(0),
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        ..Default::default()
+    };
+    match unsafe { Shell_NotifyIconGetRect(&raw const identifier) } {
+        Ok(rect) => {
+            log::debug!(
+                left = rect.left, top = rect.top, right = rect.right, bottom = rect.bottom;
+                "Tray icon rectangle"
+            );
+            Some(rect)
+        }
+        Err(e) => {
+            log::debug!(error:% = e; "Tray icon rectangle unavailable; the menu may cover the icon");
+            None
+        }
+    }
+}
+
 /// Hands the keyboard focus back to the notification area, the shell's
 /// documented courtesy after an icon's own UI is cancelled.
 fn return_focus_to_notification_area(hwnd: HWND) {
@@ -1015,7 +1039,7 @@ fn append_separator(hmenu: HMENU) {
 ///
 /// * `hwnd` - Window handle for menu ownership and message routing.
 /// * `anchor` - Screen point the shell reported with the request: where the
-///   mouse clicked, or the icon's top-left corner when the keyboard asked.
+///   mouse clicked, or a point on the icon when the keyboard asked.
 // Building the menu is one straight-line sequence of rows in display order;
 // splitting it into helpers would only scatter that order.
 #[expect(clippy::too_many_lines)]
@@ -1155,14 +1179,22 @@ fn show_context_menu(hwnd: HWND, anchor: POINT) {
             );
         }
 
-        let cmd = TrackPopupMenu(
+        // Every anchor lies on the icon itself — for the keyboard about its
+        // centre (measured on Windows 11), not the corner the reference
+        // promises — so a menu ending at the anchor would cover half the
+        // icon. Excluding the icon's rectangle makes Windows lift the menu
+        // clear of it; without the rectangle it ends at the anchor as before.
+        let params = icon_rect(hwnd).map(|rect| TPMPARAMS {
+            cbSize: u32::try_from(std::mem::size_of::<TPMPARAMS>()).unwrap_or(0),
+            rcExclude: rect,
+        });
+        let cmd = TrackPopupMenuEx(
             hmenu,
-            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | horizontal | TPM_RETURNCMD,
+            (TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_VERTICAL | horizontal | TPM_RETURNCMD).0,
             anchor.x,
             anchor.y,
-            None,
             hwnd,
-            None,
+            params.as_ref().map(std::ptr::from_ref),
         );
 
         // Order matters. `KillTimer` does not purge WM_TIMER messages that are
@@ -1421,13 +1453,12 @@ unsafe extern "system" fn tray_wnd_proc(
 /// `NOTIFYICON_VERSION_4` parameters.
 #[derive(Debug, PartialEq)]
 enum TrayEvent {
-    /// The menu was asked for: right-click, Shift+F10 or the menu key. Anchored
-    /// at the click, or at the icon's top-left corner for the keyboard.
+    /// The menu was asked for: right-click, Shift+F10 or the menu key.
     ContextMenu(POINT),
-    /// The keyboard-focused icon was activated with Enter or Space.
-    KeySelect(POINT),
-    /// The icon was left-clicked.
-    Select,
+    /// The icon was activated: a left click, or Enter or Space on the focused
+    /// icon. Windows 11 reports both as `NIN_SELECT`, so they cannot be told
+    /// apart; older shells send `NIN_KEYSELECT` for the keyboard.
+    Select(POINT),
     /// Anything else: pointer moves and button transitions, the hover popup's
     /// open and close, and any callback that names a different icon.
     Other,
@@ -1455,8 +1486,7 @@ fn decode_tray_callback(wparam: WPARAM, lparam: LPARAM) -> TrayEvent {
     };
     match u32::from(event) {
         WM_CONTEXTMENU => TrayEvent::ContextMenu(anchor),
-        NIN_KEYSELECT => TrayEvent::KeySelect(anchor),
-        NIN_SELECT => TrayEvent::Select,
+        NIN_SELECT | NIN_KEYSELECT => TrayEvent::Select(anchor),
         _ => TrayEvent::Other,
     }
 }
@@ -1473,13 +1503,13 @@ fn handle_tray_callback(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
             log::debug!(x = anchor.x, y = anchor.y; "Tray menu requested");
             show_context_menu(hwnd, anchor);
         }
-        // Enter is the first key a keyboard user tries on the icon, and the
-        // menu is the only thing it could mean.
-        TrayEvent::KeySelect(anchor) => {
-            log::debug!(x = anchor.x, y = anchor.y; "Tray icon activated from the keyboard");
+        // The menu is this app's only window onto its state, so activating
+        // the icon shows it too — which is also what Enter does, as it
+        // cannot be told from a left click.
+        TrayEvent::Select(anchor) => {
+            log::debug!(x = anchor.x, y = anchor.y; "Tray icon activated");
             show_context_menu(hwnd, anchor);
         }
-        TrayEvent::Select => log::debug!("Tray icon left-clicked (no action)"),
         TrayEvent::Other => {}
     }
 }
@@ -2047,12 +2077,16 @@ mod tests {
     }
 
     #[test]
-    fn keyboard_and_mouse_selection_are_told_apart() {
-        assert_eq!(
-            callback(NIN_KEYSELECT, 1800, 1400),
-            TrayEvent::KeySelect(POINT { x: 1800, y: 1400 })
-        );
-        assert_eq!(callback(NIN_SELECT, 1800, 1400), TrayEvent::Select);
+    fn mouse_and_keyboard_selection_are_one_event() {
+        // Windows 11 reports Enter and Space as NIN_SELECT, like a left
+        // click; older shells send NIN_KEYSELECT for the keyboard.
+        for event in [NIN_SELECT, NIN_KEYSELECT] {
+            assert_eq!(
+                callback(event, 1800, 1400),
+                TrayEvent::Select(POINT { x: 1800, y: 1400 }),
+                "event {event:#x}"
+            );
+        }
     }
 
     #[test]
