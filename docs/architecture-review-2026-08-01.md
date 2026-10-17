@@ -122,7 +122,7 @@ manual pass showed `taskkill` picks only the topmost window per call (the OSD), 
 went into the OSD, overlay and power windows too; before, each polite `taskkill` silently destroyed
 one window and the process never exited. The
 `hotkey.rs` window carries the one-line comment saying why it is message-only on purpose. Row 10 is
-resolved with it. Recorded in `architecture.md` §13, "Surviving an Explorer Restart", with a manual
+resolved with it. Recorded in `architecture.md`, "Surviving an Explorer Restart", with a manual
 "Explorer Restart Test".
 
 ### Important
@@ -155,7 +155,7 @@ goes away. What should not survive is three RAII impls that only look like they 
 
 **✅ RESOLVED (tray half)** — 2026-10-17, PR #60. **Open decision
 settled for the tray: explicit teardown, `Drop` deleted.** `main`'s cleanup calls
-`TrayStatusHandle::shut_down` before stopping the DDC worker — a `SendMessageTimeoutW` (1 s bound,
+`TrayStatusHandle::shutdown` before stopping the DDC worker — a `SendMessageTimeoutW` (1 s bound,
 above the tray's 500 ms menu-data wait) on which the tray thread runs `NIM_DELETE` and destroys its
 own window, ending its loop. Synchronous, so the icon is gone before the process exits. `TrayIcon`
 now holds a bare `HWND`, its `Drop` and the "kept alive" `icon_handle` are gone, and its doc comment

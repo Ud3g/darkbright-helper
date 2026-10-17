@@ -41,8 +41,6 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     if msg == WM_CLOSE {
-        // Topmost like the OSD; destroyed, a sub-zero overlay would vanish
-        // while the app still believed the monitor dimmed.
         return super::handle_close_request("overlay");
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
@@ -380,16 +378,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_overlay() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        crate::platform::windows::route_close_requests_to(tx);
-
-        let result = unsafe { wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(crate::core::state::BrightnessMessage::Shutdown)
-        ));
-        assert_eq!(result, LRESULT(0));
+    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_window() {
+        crate::platform::windows::assert_close_request_shuts_down(wnd_proc);
     }
 }

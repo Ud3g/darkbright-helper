@@ -325,7 +325,7 @@ invariant, that one gets its own documented policy rather than changing this one
 **Worker threads are never joined.** There is no `.join()` in `src/`, deliberately: process
 exit is the join. Only the DDC worker is asked to stop (`Controller::shutdown_worker`, so a
 DDC transaction in flight is not cut mid-write), and the tray thread is asked to take its icon
-down first (`TrayStatusHandle::shut_down`, a bounded synchronous send — §13, "Removing the Icon
+down first (`TrayStatusHandle::shutdown`, a bounded synchronous send — "Removing the Icon
 at Exit"); the hotkey, power and settings threads are simply left to die with the process, and
 the tray thread too once its window is gone. A thread blocked in `GetMessageW` would make a join
 a deadlock, and one hotkey spawn is already abandoned on purpose when it fails to report in
@@ -361,10 +361,10 @@ messages, and the values live in three files today:
 | `WM_APP_HOTKEY_WAKE` | `WM_APP + 10` | hotkey | none — see below | **`PostThreadMessageW` to the thread** |
 | `WM_TRAY_CALLBACK` / `WM_TRAY_STATUS` | `WM_APP + 100` / `+ 101` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
 | `WM_TRAY_LANG` | `WM_APP + 102` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
-| `WM_TRAY_SHUTDOWN` | `WM_APP + 103` | tray | `BrightnessControlTrayWindow` | **`SendMessageTimeoutW`** to the window, at exit (§13) |
+| `WM_TRAY_SHUTDOWN` | `WM_APP + 103` | tray | `BrightnessControlTrayWindow` | **`SendMessageTimeoutW`** to the window, at exit ("Removing the Icon at Exit") |
 
 The tray window also handles one message outside the `WM_APP` range: the shell's registered
-`"TaskbarCreated"` (`RegisterWindowMessageW`, so its value is assigned at runtime), see §13,
+`"TaskbarCreated"` (`RegisterWindowMessageW`, so its value is assigned at runtime), see
 "Surviving an Explorer Restart".
 
 For a window-addressed message, `WM_APP + n` only has to be unique among the messages that
@@ -1292,7 +1292,7 @@ non-fatal conveniences. One release-build consequence is worth knowing: with
 the console hidden there is no Ctrl+C, so the *graceful* shutdown paths are the
 tray menu's Quit and a polite close request (`taskkill` without `/f`). If the
 tray thread dies, Quit goes with it; an Explorer restart is not such a death —
-the tray thread keeps running and re-adds its icon (§13, "Surviving an Explorer
+the tray thread keeps running and re-adds its icon ("Surviving an Explorer
 Restart"). Accepted: a hard kill loses nothing (settings live in the config
 file, brightness in the hardware, overlay windows die with the process).
 
@@ -1508,7 +1508,7 @@ folder, the monitor rows and every health warning hang off it.
   not a message-only window: broadcasts skip message-only windows, and an
   earlier message-only version lost its icon for good on the first Explorer
   restart. A unit test pins the window's `GA_PARENT` to the desktop, the same
-  pin the power listener carries (§9) — the property, not the module, is what
+  pin the power listener carries ("Display Change") — the property, not the module, is what
   needs protecting. The hotkey thread's window, by contrast, is message-only on
   purpose: nothing it needs is broadcast.
 - **One write path.** Startup, a status or language change and a recreated
@@ -1541,7 +1541,7 @@ folder, the monitor rows and every health warning hang off it.
   from `taskkill` without `/f`. Left to `DefWindowProcW`, that would destroy
   the window and end the tray thread while the rest of the app ran on without
   an icon, so the tray — like every other top-level window of the app — turns
-  it into the same `Shutdown` request Ctrl+C sends (§12, "Close requests"). And
+  it into the same `Shutdown` request Ctrl+C sends ("Close requests"). And
   the `SetForegroundWindow` call before `TrackPopupMenu`, which is what makes
   the menu close on a click outside it, is documented not to work for a
   message-only window — it now takes effect.
@@ -1552,7 +1552,7 @@ The tray thread spends its life blocked in `GetMessageW`, and process exit does
 not unwind it, so no destructor of the tray's could ever remove the icon — it
 lingered as a dead entry until the mouse next passed over it. Instead, on every
 exit path through the main loop (Quit, Ctrl+C, `WM_CLOSE`) `main` calls
-`TrayStatusHandle::shut_down` first, before stopping the DDC worker: a
+`TrayStatusHandle::shutdown` first, before stopping the DDC worker: a
 `SendMessageTimeoutW(WM_TRAY_SHUTDOWN)` on which the tray thread deletes the
 icon (`NIM_DELETE`) and destroys its window, which ends its loop. The send is
 synchronous, so the icon is gone before the process exits. It is bounded by one

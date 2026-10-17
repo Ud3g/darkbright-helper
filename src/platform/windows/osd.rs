@@ -210,8 +210,7 @@ unsafe extern "system" fn wnd_proc(
                 }
                 LRESULT(0)
             }
-            // Topmost, so the window a polite `taskkill` picks first;
-            // destroyed, it would leave hotkeys adjusting without feedback.
+            // Topmost, so this is the window a polite `taskkill` picks.
             WM_CLOSE => super::handle_close_request("osd"),
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
         }
@@ -686,16 +685,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_osd() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        crate::platform::windows::route_close_requests_to(tx);
-
-        let result = unsafe { wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(crate::core::state::BrightnessMessage::Shutdown)
-        ));
-        assert_eq!(result, LRESULT(0));
+    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_window() {
+        crate::platform::windows::assert_close_request_shuts_down(wnd_proc);
     }
 }

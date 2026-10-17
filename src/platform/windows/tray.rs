@@ -9,6 +9,7 @@
 //! with the main thread via `BrightnessMessage` channels.
 
 use std::cell::{Cell, RefCell};
+use std::num::NonZeroU32;
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
@@ -22,7 +23,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
@@ -699,10 +700,7 @@ fn handle_language_update(hwnd: HWND, wparam: WPARAM) {
 
 /// Swaps the tray icon and tooltip to match the given warnings.
 fn apply_status(hwnd: HWND, warnings: HealthWarnings) {
-    // A modify that fails means the shell no longer knows the icon, so
-    // `push_icon_state` falls back to adding it — a second chance should the
-    // `TaskbarCreated` broadcast ever be missed.
-    if let Err(e) = push_icon_state(hwnd, warnings, NIM_MODIFY) {
+    if let Err(e) = push_icon_state(hwnd, warnings, IconWrite::Modify) {
         log::warn!(error:% = e; "Failed to update tray status");
         return;
     }
@@ -713,13 +711,10 @@ fn apply_status(hwnd: HWND, warnings: HealthWarnings) {
     );
 }
 
-/// Puts the icon back after the shell announced a new taskbar.
-///
-/// The icon and tooltip are rebuilt from this thread's own record of the
-/// warnings and language, so a standing warning comes back with its badge
-/// instead of a healthy-looking icon.
-fn restore_after_taskbar_created(hwnd: HWND) {
-    match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), NIM_ADD) {
+/// Puts the icon back after the shell announced a new taskbar, badge and
+/// tooltip included, from this thread's own record of the warnings.
+fn handle_taskbar_created(hwnd: HWND) {
+    match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), IconWrite::Add) {
         Ok(()) => log::info!("Taskbar recreated; tray icon restored"),
         Err(e) => {
             log::warn!(error:% = e; "Taskbar recreated, but the tray icon could not be restored");
@@ -738,18 +733,14 @@ fn restore_after_taskbar_created(hwnd: HWND) {
 /// * `hwnd` - Window handle for receiving tray messages.
 /// * `icon` - Icon handle to display in the tray.
 /// * `tooltip` - Tooltip text (truncated to the fixed `szTip` capacity).
-/// * `flags` - Which fields are valid in the structure.
-fn create_notify_icon_data(
-    hwnd: HWND,
-    icon: HICON,
-    tooltip: &str,
-    flags: NOTIFY_ICON_DATA_FLAGS,
-) -> NOTIFYICONDATAW {
+fn create_notify_icon_data(hwnd: HWND, icon: HICON, tooltip: &str) -> NOTIFYICONDATAW {
     let mut nid = NOTIFYICONDATAW {
         cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
         hWnd: hwnd,
         uID: TRAY_ICON_ID,
-        uFlags: flags,
+        // NIF_MESSAGE on a modify rewrites the callback id with the same
+        // value; an add cannot do without it, and one struct serves both.
+        uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
         uCallbackMessage: WM_TRAY_CALLBACK,
         hIcon: icon,
         ..Default::default()
@@ -765,21 +756,35 @@ fn create_notify_icon_data(
     nid
 }
 
-/// Shows the icon and tooltip that `warnings` call for, trying `first`
-/// (`NIM_ADD` or `NIM_MODIFY`) and falling back to the other.
-///
-/// The one path every icon write goes through — startup, a status or language
-/// change, and a recreated taskbar — so none of them can show a state the
-/// others would not. The fallback covers both directions the shell's view can
-/// drift from ours: Windows 10 documents a `TaskbarCreated` after a DPI change
-/// of the primary display, when the icon still exists and an add fails, and a
-/// missed broadcast leaves no icon for a modify to find.
+/// Which `Shell_NotifyIconW` operation [`push_icon_state`] tries first; the
+/// other one is its fallback.
+#[derive(Clone, Copy)]
+enum IconWrite {
+    /// The shell should not know the icon yet: startup, a recreated taskbar.
+    Add,
+    /// The shell should already show the icon: a status or language change.
+    Modify,
+}
+
+impl IconWrite {
+    /// The operation to try first and the one to fall back on.
+    fn order(self) -> [NOTIFY_ICON_MESSAGE; 2] {
+        match self {
+            Self::Add => [NIM_ADD, NIM_MODIFY],
+            Self::Modify => [NIM_MODIFY, NIM_ADD],
+        }
+    }
+}
+
+/// Shows the icon and tooltip that `warnings` call for. Every icon write goes
+/// through here, and the fallback absorbs a shell whose view has drifted from
+/// ours (`architecture.md`, "Surviving an Explorer Restart").
 ///
 /// # Errors
 ///
 /// Returns `BrightnessError::TrayIconCreation` if the icons are not loaded
 /// yet, or `BrightnessError::WindowsApi` if both operations fail.
-fn push_icon_state(hwnd: HWND, warnings: HealthWarnings, first: NOTIFY_ICON_MESSAGE) -> Result<()> {
+fn push_icon_state(hwnd: HWND, warnings: HealthWarnings, write: IconWrite) -> Result<()> {
     let icons = STATUS_ICONS
         .with(|s| *s.borrow())
         .ok_or_else(|| BrightnessError::tray_icon_creation("tray icons not loaded"))?;
@@ -788,27 +793,15 @@ fn push_icon_state(hwnd: HWND, warnings: HealthWarnings, first: NOTIFY_ICON_MESS
     } else {
         icons.normal
     };
-    let tooltip = compose_tooltip(tray_strings(), warnings);
-    // NIF_MESSAGE on a modify rewrites the callback id with the same value; an
-    // add cannot do without it, and one struct serves both operations.
-    let nid = create_notify_icon_data(
-        hwnd,
-        icon,
-        &tooltip,
-        NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
-    );
-    let second = if first == NIM_ADD {
-        NIM_MODIFY
-    } else {
-        NIM_ADD
-    };
+    let nid = create_notify_icon_data(hwnd, icon, &compose_tooltip(tray_strings(), warnings));
+    let [first, fallback] = write.order();
 
     unsafe {
         if Shell_NotifyIconW(first, &raw const nid).as_bool() {
             return Ok(());
         }
-        if Shell_NotifyIconW(second, &raw const nid).as_bool() {
-            log::debug!(first = first.0, second = second.0; "Tray icon written by the fallback operation");
+        if Shell_NotifyIconW(fallback, &raw const nid).as_bool() {
+            log::debug!(operation = fallback.0; "Tray icon written by the fallback operation");
             return Ok(());
         }
     }
@@ -1225,15 +1218,15 @@ fn ensure_tray_class_registered() -> Result<PCWSTR> {
     Ok(w!("BrightnessControlTrayWindow"))
 }
 
-/// The id of the shell's registered `"TaskbarCreated"` message, or 0 if
+/// The id of the shell's registered `"TaskbarCreated"` message; `None` if
 /// registration failed.
-static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
+static TASKBAR_CREATED: OnceLock<Option<NonZeroU32>> = OnceLock::new();
 
-/// Registers `"TaskbarCreated"` once and returns its id (0 on failure).
-fn taskbar_created_message() -> u32 {
+/// Registers `"TaskbarCreated"` once and returns its id.
+fn taskbar_created_message() -> Option<NonZeroU32> {
     *TASKBAR_CREATED.get_or_init(|| {
-        let id = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
-        if id == 0 {
+        let id = NonZeroU32::new(unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) });
+        if id.is_none() {
             log::warn!(
                 error_code = super::get_last_error_code();
                 "Could not register TaskbarCreated; the tray icon will not survive an Explorer restart"
@@ -1241,12 +1234,6 @@ fn taskbar_created_message() -> u32 {
         }
         id
     })
-}
-
-/// Whether `msg` is the registered message `id`. A failed registration (0)
-/// matches nothing — 0 is also `WM_NULL`, which this module posts itself.
-fn is_registered_message(msg: u32, id: u32) -> bool {
-    id != 0 && msg == id
 }
 
 /// Creates the hidden window the tray icon reports to.
@@ -1344,16 +1331,14 @@ unsafe extern "system" fn tray_wnd_proc(
                 handle_shutdown(hwnd);
                 LRESULT(0)
             }
-            // Destroying this window would end the tray thread while the
-            // rest of the app ran on — no icon, no menu, no way to quit.
             WM_CLOSE => super::handle_close_request("tray"),
             WM_DESTROY => {
                 log::debug!("Tray window WM_DESTROY received");
                 PostQuitMessage(0);
                 LRESULT(0)
             }
-            _ if is_registered_message(msg, taskbar_created_message()) => {
-                restore_after_taskbar_created(hwnd);
+            _ if taskbar_created_message().is_some_and(|id| id.get() == msg) => {
+                handle_taskbar_created(hwnd);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -1401,7 +1386,7 @@ fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
 /// Deliberately has no `Drop`: the tray thread spends its life blocked in
 /// `run_message_loop`, so a destructor would only run after the window it
 /// cleans up is already gone. Teardown is a message instead —
-/// [`TrayStatusHandle::shut_down`] has this thread remove the icon and destroy
+/// [`TrayStatusHandle::shutdown`] has this thread remove the icon and destroy
 /// the window while the main thread waits.
 pub struct TrayIcon {
     /// Hidden window that receives tray notifications.
@@ -1436,10 +1421,9 @@ impl TrayIcon {
         // UIPI drops the broadcast from below unless this window lets it in.
         // Unelevated the filter changes nothing, so a failure costs at most
         // the elevated case.
-        let taskbar_created = taskbar_created_message();
-        if taskbar_created != 0
+        if let Some(id) = taskbar_created_message()
             && let Err(e) =
-                unsafe { ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None) }
+                unsafe { ChangeWindowMessageFilterEx(hwnd, id.get(), MSGFLT_ALLOW, None) }
         {
             log::debug!(error:% = e; "Could not allow TaskbarCreated through the UIPI filter");
         }
@@ -1474,7 +1458,7 @@ impl TrayIcon {
         // Not fatal: at logon the notification area can still be coming up.
         // The window stays, and the shell's `TaskbarCreated` once it is ready
         // adds the icon through the same path an Explorer restart uses.
-        match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), NIM_ADD) {
+        match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), IconWrite::Add) {
             Ok(()) => log::debug!("Tray icon added to notification area"),
             Err(e) => log::warn!(error:% = e; "Tray icon not added yet; waiting for the taskbar"),
         }
@@ -1570,7 +1554,7 @@ impl TrayStatusHandle {
     /// Has the tray thread remove its icon and destroy its window, and waits
     /// for it — bounded by [`TRAY_SHUTDOWN_TIMEOUT_MS`] — so the icon is gone
     /// before the process exits instead of lingering until the next hover.
-    pub fn shut_down(self) {
+    pub fn shutdown(self) {
         // SAFETY: a cross-thread send to a handle carried as `isize`, like
         // `notify`'s post; `SendMessageTimeoutW` reports a destroyed window or
         // a hung thread as a zero return instead of misbehaving, and the
@@ -1841,10 +1825,6 @@ mod tests {
         );
     }
 
-    // `TaskbarCreated` is broadcast, and broadcasts never reach message-only
-    // windows — the tray window must stay top-level or an Explorer restart
-    // takes the icon for good. Same pin as the power listener's, because the
-    // two windows are built alike and lost the same property the same way.
     #[test]
     fn tray_window_is_top_level_so_broadcasts_arrive() {
         use windows::Win32::UI::WindowsAndMessaging::{
@@ -1867,28 +1847,8 @@ mod tests {
     }
 
     #[test]
-    fn a_close_request_asks_the_main_thread_to_shut_down() {
-        use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
-
-        let (tx, rx) = mpsc::channel();
-        crate::platform::windows::route_close_requests_to(tx);
-
-        let result = unsafe { tray_wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-
-        assert!(
-            matches!(rx.try_recv(), Ok(BrightnessMessage::Shutdown)),
-            "WM_CLOSE should start the same graceful shutdown as Ctrl+C"
-        );
-        assert_eq!(result, LRESULT(0), "WM_CLOSE must not reach DefWindowProc");
-    }
-
-    #[test]
-    fn a_failed_registration_never_matches_a_real_message() {
-        // RegisterWindowMessageW reports failure as 0, which is also WM_NULL —
-        // a message this module posts itself after every menu.
-        assert!(!is_registered_message(WM_NULL, 0));
-        assert!(is_registered_message(0xC123, 0xC123));
-        assert!(!is_registered_message(0xC124, 0xC123));
+    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_window() {
+        crate::platform::windows::assert_close_request_shuts_down(tray_wnd_proc);
     }
 
     #[test]

@@ -322,8 +322,8 @@ thread_local! {
 /// main thread (OSD, overlays), the tray thread and the power thread. A polite
 /// close request — `taskkill` without `/f` — reaches only one top-level window
 /// of the process per call, the topmost, which is usually the OSD; whichever
-/// window it lands on has to treat it as the quit it is (`architecture.md`
-/// §12, "Close requests").
+/// window it lands on has to treat it as the quit it is (`architecture.md`,
+/// "Close requests").
 pub fn route_close_requests_to(sender: Sender<BrightnessMessage>) {
     CLOSE_REQUEST_SENDER.with(|cell| *cell.borrow_mut() = Some(sender));
 }
@@ -345,6 +345,32 @@ pub(crate) fn handle_close_request(window: &'static str) -> LRESULT {
     LRESULT(0)
 }
 
+/// Asserts that `wnd_proc` answers `WM_CLOSE` with a `Shutdown` request and
+/// keeps its window — the contract every top-level window of the app shares.
+#[cfg(test)]
+pub(crate) fn assert_close_request_shuts_down(
+    wnd_proc: unsafe extern "system" fn(
+        HWND,
+        u32,
+        windows::Win32::Foundation::WPARAM,
+        windows::Win32::Foundation::LPARAM,
+    ) -> LRESULT,
+) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    route_close_requests_to(tx);
+
+    let result = unsafe { wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+
+    assert!(
+        matches!(rx.try_recv(), Ok(BrightnessMessage::Shutdown)),
+        "WM_CLOSE should start the same graceful shutdown as Ctrl+C"
+    );
+    assert_eq!(result, LRESULT(0), "WM_CLOSE must not reach DefWindowProcW");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,17 +378,6 @@ pub(crate) fn handle_close_request(window: &'static str) -> LRESULT {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_close_request_becomes_a_shutdown_and_is_swallowed() {
-        let (tx, rx) = std::sync::mpsc::channel();
-        route_close_requests_to(tx);
-
-        let result = handle_close_request("test");
-
-        assert!(matches!(rx.try_recv(), Ok(BrightnessMessage::Shutdown)));
-        assert_eq!(result, LRESULT(0));
-    }
 
     #[test]
     fn a_close_request_without_a_route_is_ignored_not_fatal() {

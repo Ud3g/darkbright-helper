@@ -438,7 +438,7 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 ///
 /// The tray icon provides a menu for accessing settings and quitting the application.
 /// The thread runs until the application shuts down, when `main` takes the icon
-/// down through `TrayStatusHandle::shut_down`.
+/// down through `TrayStatusHandle::shutdown`.
 ///
 /// # Arguments
 ///
@@ -888,7 +888,7 @@ fn main() {
     // after the DDC worker's last transaction. The handle may still be in
     // flight if the tray came up during the final loop iteration.
     if let Some(handle) = tray_status.or_else(|| tray_status_rx.try_recv().ok()) {
-        handle.shut_down();
+        handle.shutdown();
     }
 
     log::debug!("Sending shutdown command to DDC worker");

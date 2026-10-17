@@ -75,8 +75,6 @@ unsafe extern "system" fn power_wnd_proc(
             // Zero: message processed, per the WM_DISPLAYCHANGE contract
             return LRESULT(0);
         }
-        // Destroying this window would silently end resume and topology
-        // detection while the app ran on.
         WM_CLOSE => return super::handle_close_request("power"),
         _ => {}
     }
@@ -353,17 +351,8 @@ mod tests {
     }
 
     #[test]
-    fn wnd_proc_turns_a_close_request_into_a_shutdown() {
-        let (tx, rx) = mpsc::channel();
-        crate::platform::windows::route_close_requests_to(tx);
-
-        let result = unsafe { power_wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
-
-        assert!(
-            matches!(rx.try_recv(), Ok(BrightnessMessage::Shutdown)),
-            "WM_CLOSE should start a graceful shutdown, not destroy the listener"
-        );
-        assert_eq!(result, LRESULT(0));
+    fn a_close_request_shuts_the_app_down_instead_of_destroying_the_window() {
+        crate::platform::windows::assert_close_request_shuts_down(power_wnd_proc);
     }
 
     // Broadcast messages — WM_DISPLAYCHANGE among them — are never delivered
