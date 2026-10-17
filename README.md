@@ -25,8 +25,8 @@ Rust.
   survives replugging and port changes.
 - **Stays out of the way.** An OSD overlay like the Windows volume indicator, plus a system
   tray icon whose context menu shows live per-monitor status and your hotkeys, and offers
-  Settings, "Share monitor feedback…", Open Log Folder and Quit — with warning entries and
-  an icon badge while degraded (e.g. DDC unavailable).
+  Settings, "Share monitor feedback on GitHub…", Open Log Folder and Quit — with warning
+  entries and an icon badge while degraded (e.g. DDC unavailable).
 - **A real settings window, not just a JSON file.** The tray's Settings item opens a native,
   dark-mode-aware window covering every option — hotkey rebinding included — with changes
   applying instantly. An optional "Start with Windows" toggle lives there too. The config
@@ -88,7 +88,7 @@ past a warning for an unsigned binary.
 3. `Ctrl+Shift+Down` decreases it.
 4. Once brightness reaches 0 %, continuing to decrease activates the dimming overlay.
 5. Click the tray icon for per-monitor status, a reminder of your hotkeys, Settings,
-   "Share monitor feedback…", the log folder, or Quit.
+   "Share monitor feedback on GitHub…", the log folder, or Quit.
 
 Hotkeys:
 
@@ -166,8 +166,8 @@ reporting. It opens no sockets, and nothing in its dependency tree is capable of
 The only files it touches are its own, in `%APPDATA%\BrightnessControl\`: `config.json`
 (plus a `config.json.bak` mirror) and, when enabled, `darkbright.log`.
 
-The tray menu's "Share monitor feedback…" entry is the one place the tool hands something to
-your browser: it opens a GitHub page with a report already filled in. That link holds the
+The tray menu's "Share monitor feedback on GitHub…" entry is the one place the tool hands
+something to your browser: it opens a GitHub page with a report already filled in. That link holds the
 tool's version, your Windows build number, each monitor's manufacturer code and model name,
 whether the tool has read that monitor's brightness, and how many displays it could not
 identify. No serial numbers, no paths, no user name. The tool itself still sends nothing;
@@ -266,10 +266,11 @@ happens at all. I would rather say that plainly than let you infer a promise I c
 Hardware-specific DDC/CI problems are the hardest case: monitors might misbehave in ways I
 cannot reproduce on my own hardware, and some of those I will close without a fix.
 
-If the tool works for you, that is worth knowing too. Tray menu → "Share monitor feedback…"
-opens a prefilled report for the
+If the tool works for you, that is worth knowing too. Tray menu → "Share monitor feedback on
+GitHub…" opens a prefilled report for the
 [Hardware reports](https://github.com/Ud3g/darkbright-helper/discussions/categories/hardware-reports)
-category — reports on working setups are as welcome as reports on broken ones.
+category (posting it needs a GitHub account) — reports on working setups are as welcome as
+reports on broken ones.
 
 ## How this project was built
 

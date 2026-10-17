@@ -104,7 +104,7 @@ const MENU_ID_VERSION: u32 = 1003;
 /// Menu item ID for the "Open Log Folder" option.
 const MENU_ID_OPEN_LOGS: u32 = 1004;
 
-/// Menu item ID for the "Share monitor feedback…" option.
+/// Menu item ID for the "Share monitor feedback on GitHub…" option.
 const MENU_ID_SHARE_FEEDBACK: u32 = 1005;
 
 /// Base ID for monitor info rows (non-clickable).

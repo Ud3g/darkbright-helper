@@ -784,7 +784,7 @@ pub enum BrightnessMessage {
     /// current config values.
     TrayOpenSettings,
 
-    /// User clicked "Share monitor feedback…" in the tray menu.
+    /// User clicked "Share monitor feedback on GitHub…" in the tray menu.
     ///
     /// The controller starts a refresh and builds a hardware report from
     /// its result; the binary's loop then opens it in the browser.

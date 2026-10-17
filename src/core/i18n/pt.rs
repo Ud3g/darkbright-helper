@@ -51,7 +51,7 @@ pub(crate) const PORTUGUESE: Strings = Strings {
     tray_usage_brighter: "Aumentar brilho",
     tray_usage_dimmer: "Diminuir brilho",
     tray_menu_settings: "Configurações",
-    tray_menu_share_feedback: "Dar opinião sobre os monitores…",
+    tray_menu_share_feedback: "Dar opinião sobre os monitores no GitHub…",
     tray_menu_open_log_folder: "Abrir Pasta de Logs",
     tray_menu_quit_fmt: "Sair do {name}",
 

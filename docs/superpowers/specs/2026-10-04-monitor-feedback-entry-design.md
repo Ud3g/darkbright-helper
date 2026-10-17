@@ -412,6 +412,39 @@ The Czech text is given as a Rust string literal: `\u{a0}` is the no-break space
 puts after a one-letter preposition. The reviewer changed only the capitalisation of `id` and `pt`
 to sentence case, following the English source as those tables do for menu commands.
 
+### Naming GitHub (2026-10-17)
+
+Before the first release the entry was renamed to say where it leads. A user without a GitHub
+account lands on GitHub's sign-in page first; the menu text should not leave that as a surprise.
+The account requirement itself is stated in the README and the changelog, not in the menu.
+
+A fifth criterion applies on top of the four above: the text names GitHub, untranslated, with
+the language's own inflection where it has one. Each table's existing text was extended, not
+retranslated. Blind back-translation of the final texts:
+
+| Language | Text | Blind back-translation | Criteria 1–5 |
+|---|---|---|---|
+| English (`en`) | Share monitor feedback on GitHub… | — | source |
+| German (`de`) | Monitor-Rückmeldung auf GitHub geben… | Give monitor feedback on GitHub… | pass |
+| Czech (`cs`) | Napsat zpětnou vazbu k\u{a0}monitorům na GitHubu… | Write feedback on the monitors on GitHub… | pass |
+| Greek (`el`) | Σχόλια για τις οθόνες στο GitHub… | Comments for the monitors on GitHub… | pass |
+| Spanish (`es`) | Opinar sobre los monitores en GitHub… | Give an opinion on the monitors on GitHub… | pass |
+| French (`fr`) | Donner votre avis sur vos écrans via GitHub… | Give your opinion on your screens via GitHub… | pass |
+| Indonesian (`id`) | Beri masukan tentang monitor di GitHub… | Give feedback about monitors on GitHub… | pass |
+| Italian (`it`) | Lascia un parere sui monitor tramite GitHub… | Leave an opinion on the monitors via GitHub… | pass |
+| Dutch (`nl`) | Feedback over uw beeldschermen geven op GitHub… | Give feedback about your monitors on GitHub… | pass |
+| Polish (`pl`) | Napisz opinię o monitorach na GitHubie… | Write an opinion about the monitors on GitHub… | pass |
+| Portuguese (`pt`) | Dar opinião sobre os monitores no GitHub… | Give an opinion about the monitors on GitHub… | pass |
+| Russian (`ru`) | Оставить отзыв о мониторах на GitHub… | Leave a review about the monitors on GitHub… | pass |
+| Turkish (`tr`) | GitHub’da monitörler hakkında geri bildirim ver… | Give feedback about monitors on GitHub… | pass |
+| Ukrainian (`uk`) | Залишити відгук про монітори на GitHub… | Leave a review about the monitors on GitHub… | pass |
+| Vietnamese (`vi`) | Nhận xét về màn hình trên GitHub… | Comment/remark about the monitors on GitHub… | pass |
+
+French and Italian use "via" and "tramite" because "sur … sur" and "su … su" would repeat the
+preposition; Dutch puts "op GitHub" last, as a fronted place phrase reads oddly in a menu.
+Remarks on the earlier wording (register of "votre" and "uw", the review overtone of the Russian
+and Ukrainian noun) concern texts already accepted above and were not reopened.
+
 ## Manual pass
 
 Run on 2026-10-04 on Windows build 26200, with one monitor connected (PHL 346B1C over
