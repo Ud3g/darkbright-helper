@@ -22,19 +22,21 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETFOCUS,
+    NIM_SETVERSION, NIN_SELECT, NINF_KEY, NOTIFY_ICON_MESSAGE, NOTIFYICON_VERSION_4,
+    NOTIFYICONDATAW, NOTIFYICONDATAW_0, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, ChangeWindowMessageFilterEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
     DI_NORMAL, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, DrawIconEx,
-    GetCursorPos, GetMessageW, HICON, HMENU, ICONINFO, IMAGE_ICON, KillTimer, LR_DEFAULTSIZE,
-    LR_LOADFROMFILE, LR_SHARED, LoadImageW, MENU_ITEM_FLAGS, MENUITEMINFOW, MF_GRAYED,
-    MF_SEPARATOR, MF_STRING, MIIM_STRING, MSG, MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
-    RegisterClassExW, RegisterWindowMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
-    SetForegroundWindow, SetMenuItemInfoW, SetTimer, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_NULL, WM_TIMER,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
+    GetForegroundWindow, GetMessageW, GetSystemMetrics, HICON, HMENU, ICONINFO, IMAGE_ICON,
+    KillTimer, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED, LoadImageW, MENU_ITEM_FLAGS,
+    MENUITEMINFOW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MIIM_STRING, MSG, MSGFLT_ALLOW,
+    PostMessageW, PostQuitMessage, RegisterClassExW, RegisterWindowMessageW, SM_MENUDROPALIGNMENT,
+    SMTO_ABORTIFHUNG, SendMessageTimeoutW, SetForegroundWindow, SetMenuItemInfoW, SetTimer,
+    TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WM_CLOSE, WM_CONTEXTMENU, WM_DESTROY, WM_NULL, WM_TIMER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -59,6 +61,11 @@ const TRAY_ICON_ID: u32 = 1;
 /// Custom window message for tray icon callbacks.
 /// Using `WM_APP` + offset to avoid conflicts with system messages.
 const WM_TRAY_CALLBACK: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 100;
+
+/// Callback event for an icon activated from the keyboard (Enter or Space).
+/// `shellapi.h` defines it as this combination; the `windows` crate has no
+/// constant for it.
+const NIN_KEYSELECT: u32 = NIN_SELECT | NINF_KEY;
 
 /// Custom message posted by the main thread when degraded-state warnings
 /// change; the payload is packed by [`warnings_to_bits`].
@@ -726,6 +733,17 @@ fn handle_taskbar_created(hwnd: HWND) {
 // Shell Notification Icon
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// A `NOTIFYICONDATAW` that names this app's icon and nothing else — enough
+/// for the operations that carry no icon state.
+fn notify_icon_identity(hwnd: HWND) -> NOTIFYICONDATAW {
+    NOTIFYICONDATAW {
+        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
+        hWnd: hwnd,
+        uID: TRAY_ICON_ID,
+        ..Default::default()
+    }
+}
+
 /// Creates the `NOTIFYICONDATAW` structure for tray icon operations.
 ///
 /// # Arguments
@@ -735,15 +753,15 @@ fn handle_taskbar_created(hwnd: HWND) {
 /// * `tooltip` - Tooltip text (truncated to the fixed `szTip` capacity).
 fn create_notify_icon_data(hwnd: HWND, icon: HICON, tooltip: &str) -> NOTIFYICONDATAW {
     let mut nid = NOTIFYICONDATAW {
-        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
-        hWnd: hwnd,
-        uID: TRAY_ICON_ID,
         // NIF_MESSAGE on a modify rewrites the callback id with the same
         // value; an add cannot do without it, and one struct serves both.
+        // NIF_SHOWTIP keeps the plain tooltip, which version 4 suppresses
+        // otherwise in favour of an app-drawn popup; a write without it
+        // would turn the tooltip off.
         uFlags: NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
         uCallbackMessage: WM_TRAY_CALLBACK,
         hIcon: icon,
-        ..Default::default()
+        ..notify_icon_identity(hwnd)
     };
 
     // `szTip` is a fixed-size array: the text is truncated to fit, leaving
@@ -778,7 +796,9 @@ impl IconWrite {
 
 /// Shows the icon and tooltip that `warnings` call for. Every icon write goes
 /// through here, and the fallback absorbs a shell whose view has drifted from
-/// ours (`architecture.md`, "Surviving an Explorer Restart").
+/// ours (`architecture.md`, "Surviving an Explorer Restart"). Whichever
+/// operation turns out to be the add, the protocol version follows it here,
+/// so no add can go without one.
 ///
 /// # Errors
 ///
@@ -796,16 +816,60 @@ fn push_icon_state(hwnd: HWND, warnings: HealthWarnings, write: IconWrite) -> Re
     let nid = create_notify_icon_data(hwnd, icon, &compose_tooltip(tray_strings(), warnings));
     let [first, fallback] = write.order();
 
-    unsafe {
+    let written = unsafe {
         if Shell_NotifyIconW(first, &raw const nid).as_bool() {
-            return Ok(());
-        }
-        if Shell_NotifyIconW(fallback, &raw const nid).as_bool() {
+            first
+        } else if Shell_NotifyIconW(fallback, &raw const nid).as_bool() {
             log::debug!(operation = fallback.0; "Tray icon written by the fallback operation");
-            return Ok(());
+            fallback
+        } else {
+            return Err(last_error_as_brightness_error("Shell_NotifyIconW"));
+        }
+    };
+    if written == NIM_ADD {
+        select_icon_version(hwnd);
+    }
+    Ok(())
+}
+
+/// Switches the freshly added icon to the `NOTIFYICON_VERSION_4` callback
+/// protocol, which the menu handling is written against. The shell forgets
+/// the version together with the icon, so it is owed after every add.
+fn select_icon_version(hwnd: HWND) {
+    let nid = NOTIFYICONDATAW {
+        Anonymous: NOTIFYICONDATAW_0 {
+            uVersion: NOTIFYICON_VERSION_4,
+        },
+        ..notify_icon_identity(hwnd)
+    };
+    unsafe {
+        if Shell_NotifyIconW(NIM_SETVERSION, &raw const nid).as_bool() {
+            log::debug!("Tray icon switched to callback version 4");
+        } else {
+            // The shell would keep sending the legacy callbacks, which never
+            // carry a menu request — the icon would show but not open.
+            log::warn!(
+                error_code = super::get_last_error_code();
+                "Shell refused callback version 4; the tray menu will not open"
+            );
         }
     }
-    Err(last_error_as_brightness_error("Shell_NotifyIconW"))
+}
+
+/// Hands the keyboard focus back to the notification area, the shell's
+/// documented courtesy after an icon's own UI is cancelled.
+fn return_focus_to_notification_area(hwnd: HWND) {
+    let nid = notify_icon_identity(hwnd);
+    unsafe {
+        if Shell_NotifyIconW(NIM_SETFOCUS, &raw const nid).as_bool() {
+            log::debug!("Keyboard focus returned to the notification area");
+        } else {
+            log::debug!(
+                error_code = super::get_last_error_code();
+                "Could not return focus to the notification area"
+            );
+        }
+    }
 }
 
 /// Removes the tray icon from the system notification area.
@@ -814,12 +878,7 @@ fn push_icon_state(hwnd: HWND, warnings: HealthWarnings, write: IconWrite) -> Re
 ///
 /// * `hwnd` - Window handle associated with the tray icon.
 fn remove_tray_icon(hwnd: HWND) {
-    let nid = NOTIFYICONDATAW {
-        cbSize: u32::try_from(std::mem::size_of::<NOTIFYICONDATAW>()).unwrap_or(0),
-        hWnd: hwnd,
-        uID: TRAY_ICON_ID,
-        ..Default::default()
-    };
+    let nid = notify_icon_identity(hwnd);
 
     unsafe {
         if Shell_NotifyIconW(NIM_DELETE, &raw const nid).as_bool() {
@@ -950,16 +1009,18 @@ fn append_separator(hmenu: HMENU) {
     }
 }
 
-/// Shows the tray icon context menu at the current cursor position.
+/// Shows the tray icon context menu.
 ///
 /// # Arguments
 ///
 /// * `hwnd` - Window handle for menu ownership and message routing.
+/// * `anchor` - Screen point the shell reported with the request: where the
+///   mouse clicked, or the icon's top-left corner when the keyboard asked.
 // Building the menu is one straight-line sequence of rows in display order;
 // splitting it into helpers would only scatter that order.
 #[expect(clippy::too_many_lines)]
-fn show_context_menu(hwnd: HWND) {
-    // The shell can post a second right-click callback that the modal loop
+fn show_context_menu(hwnd: HWND, anchor: POINT) {
+    // The shell can send a second menu request that the modal loop
     // dispatches; a nested menu would take over the session slot and the
     // shared timer, silently killing the outer menu's refresh.
     if MENU_SESSION.with(|cell| cell.borrow().is_some()) {
@@ -1058,11 +1119,13 @@ fn show_context_menu(hwnd: HWND) {
         let version_text = format!("{APP_NAME} v{}", version_string());
         append_menu_item(hmenu, MF_STRING | MF_GRAYED, MENU_ID_VERSION, &version_text);
 
-        let mut cursor_pos = POINT::default();
-        if GetCursorPos(&raw mut cursor_pos).is_err() {
-            log::warn!(error_code = super::get_last_error_code(); "GetCursorPos failed, using default position");
-            cursor_pos = POINT { x: 0, y: 0 };
-        }
+        // The user's handedness setting decides which side of the anchor the
+        // menu drops to, as for the shell's own menus.
+        let horizontal = if GetSystemMetrics(SM_MENUDROPALIGNMENT) == 0 {
+            TPM_LEFTALIGN
+        } else {
+            TPM_RIGHTALIGN
+        };
 
         // Required: Set foreground window before showing menu
         // This ensures the menu dismisses when clicking outside
@@ -1094,9 +1157,9 @@ fn show_context_menu(hwnd: HWND) {
 
         let cmd = TrackPopupMenu(
             hmenu,
-            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | TPM_LEFTALIGN | TPM_RETURNCMD,
-            cursor_pos.x,
-            cursor_pos.y,
+            TPM_RIGHTBUTTON | TPM_BOTTOMALIGN | horizontal | TPM_RETURNCMD,
+            anchor.x,
+            anchor.y,
             None,
             hwnd,
             None,
@@ -1113,6 +1176,14 @@ fn show_context_menu(hwnd: HWND) {
         // Send a null message to ensure the window processes the menu dismissal
         // This is a Windows quirk required for proper tray menu behavior
         let _ = PostMessageW(Some(hwnd), WM_NULL, WPARAM(0), LPARAM(0));
+
+        // Escape and a click elsewhere both return no command. Only after
+        // Escape is this hidden window still in the foreground, holding a
+        // keyboard focus that reaches nothing; after a click the clicked
+        // window has it, and taking it back would strand the user's typing.
+        if cmd.0 == 0 && GetForegroundWindow() == hwnd {
+            return_focus_to_notification_area(hwnd);
+        }
 
         // Handle selection (menu item IDs are non-negative)
         let menu_cmd = cmd.0.cast_unsigned();
@@ -1310,7 +1381,7 @@ unsafe extern "system" fn tray_wnd_proc(
     unsafe {
         match msg {
             WM_TRAY_CALLBACK => {
-                handle_tray_callback(hwnd, lparam);
+                handle_tray_callback(hwnd, wparam, lparam);
                 LRESULT(0)
             }
             WM_TRAY_STATUS => {
@@ -1346,30 +1417,70 @@ unsafe extern "system" fn tray_wnd_proc(
     }
 }
 
-/// Handles tray icon callback messages (mouse events on the tray icon).
+/// A tray icon callback as far as this app cares, decoded from its
+/// `NOTIFYICON_VERSION_4` parameters.
+#[derive(Debug, PartialEq)]
+enum TrayEvent {
+    /// The menu was asked for: right-click, Shift+F10 or the menu key. Anchored
+    /// at the click, or at the icon's top-left corner for the keyboard.
+    ContextMenu(POINT),
+    /// The keyboard-focused icon was activated with Enter or Space.
+    KeySelect(POINT),
+    /// The icon was left-clicked.
+    Select,
+    /// Anything else: pointer moves and button transitions, the hover popup's
+    /// open and close, and any callback that names a different icon.
+    Other,
+}
+
+/// The `LOWORD`/`HIWORD` pair of a message parameter.
+fn words(value: usize) -> (u16, u16) {
+    let [b0, b1, b2, b3, ..] = value.to_le_bytes();
+    (u16::from_le_bytes([b0, b1]), u16::from_le_bytes([b2, b3]))
+}
+
+/// Decodes a callback: the event sits in the low word of `lparam`, the icon
+/// id in its high word, and `wparam` carries the anchor as two signed words
+/// (`GET_X_LPARAM`/`GET_Y_LPARAM`), negative on a monitor left of or above
+/// the primary.
+fn decode_tray_callback(wparam: WPARAM, lparam: LPARAM) -> TrayEvent {
+    let (event, id) = words(lparam.0.cast_unsigned());
+    if u32::from(id) != TRAY_ICON_ID {
+        return TrayEvent::Other;
+    }
+    let (x, y) = words(wparam.0);
+    let anchor = POINT {
+        x: i32::from(x.cast_signed()),
+        y: i32::from(y.cast_signed()),
+    };
+    match u32::from(event) {
+        WM_CONTEXTMENU => TrayEvent::ContextMenu(anchor),
+        NIN_KEYSELECT => TrayEvent::KeySelect(anchor),
+        NIN_SELECT => TrayEvent::Select,
+        _ => TrayEvent::Other,
+    }
+}
+
+/// Handles tray icon callback messages.
 ///
 /// # Arguments
 ///
 /// * `hwnd` - The window handle, used for menu ownership.
-/// * `lparam` - Contains the mouse message (e.g., `WM_RBUTTONUP`).
-fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
-    use windows::Win32::UI::WindowsAndMessaging::{WM_LBUTTONUP, WM_RBUTTONUP};
-
-    // The low word of lparam contains the mouse message
-    // Masking with 0xFFFF ensures the value fits in u32
-    #[expect(clippy::cast_possible_truncation)]
-    let mouse_msg = (lparam.0 & 0xFFFF).cast_unsigned() as u32;
-
-    match mouse_msg {
-        WM_RBUTTONUP => {
-            log::debug!("Tray icon right-clicked");
-            show_context_menu(hwnd);
+/// * `wparam`, `lparam` - The callback's parameters, see [`decode_tray_callback`].
+fn handle_tray_callback(hwnd: HWND, wparam: WPARAM, lparam: LPARAM) {
+    match decode_tray_callback(wparam, lparam) {
+        TrayEvent::ContextMenu(anchor) => {
+            log::debug!(x = anchor.x, y = anchor.y; "Tray menu requested");
+            show_context_menu(hwnd, anchor);
         }
-        WM_LBUTTONUP => {
-            log::debug!("Tray icon left-clicked (no action)");
-            // Per requirements: left-click does nothing
+        // Enter is the first key a keyboard user tries on the icon, and the
+        // menu is the only thing it could mean.
+        TrayEvent::KeySelect(anchor) => {
+            log::debug!(x = anchor.x, y = anchor.y; "Tray icon activated from the keyboard");
+            show_context_menu(hwnd, anchor);
         }
-        _ => {}
+        TrayEvent::Select => log::debug!("Tray icon left-clicked (no action)"),
+        TrayEvent::Other => {}
     }
 }
 
@@ -1899,5 +2010,77 @@ mod tests {
         // Inside the badge bounding box but outside the circle: untouched.
         let outside = (31 * SIZE + 16) * 4;
         assert_eq!(&pixels[outside..outside + 4], &[0, 0, 0, 0]);
+    }
+
+    /// Packs two 16-bit words the way the shell does: `low` in bits 0–15,
+    /// `high` in bits 16–31.
+    fn pack_words(low: u16, high: u16) -> usize {
+        usize::from(low) | (usize::from(high) << 16)
+    }
+
+    /// A version-4 callback for this app's icon.
+    fn callback(event: u32, anchor_x: i16, anchor_y: i16) -> TrayEvent {
+        let event = u16::try_from(event).expect("callback events fit in 16 bits");
+        let id = u16::try_from(TRAY_ICON_ID).expect("icon ids fit in 16 bits");
+        decode_tray_callback(
+            WPARAM(pack_words(
+                anchor_x.cast_unsigned(),
+                anchor_y.cast_unsigned(),
+            )),
+            LPARAM(pack_words(event, id).cast_signed()),
+        )
+    }
+
+    #[test]
+    fn a_context_menu_request_carries_its_anchor_with_sign() {
+        // A monitor left of and above the primary has negative coordinates;
+        // reading the words unsigned would throw the menu onto the far side
+        // of the desktop.
+        assert_eq!(
+            callback(WM_CONTEXTMENU, -1200, -40),
+            TrayEvent::ContextMenu(POINT { x: -1200, y: -40 })
+        );
+        assert_eq!(
+            callback(WM_CONTEXTMENU, 2500, 1410),
+            TrayEvent::ContextMenu(POINT { x: 2500, y: 1410 })
+        );
+    }
+
+    #[test]
+    fn keyboard_and_mouse_selection_are_told_apart() {
+        assert_eq!(
+            callback(NIN_KEYSELECT, 1800, 1400),
+            TrayEvent::KeySelect(POINT { x: 1800, y: 1400 })
+        );
+        assert_eq!(callback(NIN_SELECT, 1800, 1400), TrayEvent::Select);
+    }
+
+    #[test]
+    fn mouse_buttons_and_hover_popups_are_not_menu_requests() {
+        use windows::Win32::UI::Shell::{NIN_POPUPCLOSE, NIN_POPUPOPEN};
+        use windows::Win32::UI::WindowsAndMessaging::{WM_MOUSEMOVE, WM_RBUTTONUP};
+
+        // Under version 4 a right-click is followed by its own WM_CONTEXTMENU;
+        // opening on the button as well would open the menu twice.
+        for event in [WM_RBUTTONUP, WM_MOUSEMOVE, NIN_POPUPOPEN, NIN_POPUPCLOSE] {
+            assert_eq!(
+                callback(event, 10, 10),
+                TrayEvent::Other,
+                "event {event:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_callback_for_another_icon_id_is_ignored() {
+        let event = u16::try_from(WM_CONTEXTMENU).unwrap();
+        let other_id = u16::try_from(TRAY_ICON_ID + 1).unwrap();
+        assert_eq!(
+            decode_tray_callback(
+                WPARAM(pack_words(10, 10)),
+                LPARAM(pack_words(event, other_id).cast_signed())
+            ),
+            TrayEvent::Other
+        );
     }
 }

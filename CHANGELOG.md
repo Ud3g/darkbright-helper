@@ -22,6 +22,11 @@ history lives in the git log.
   close just one of the app's hidden windows per call — the brightness
   indicator first — and leave the app running without it.
 - The tray menu closes when you click outside it.
+- Opened from the keyboard (Win+B, the arrow keys to the icon, then Shift+F10,
+  the menu key, Enter or Space), the tray menu appears at the icon rather than
+  wherever the mouse pointer happens to be, and Escape hands the focus back to
+  the notification area. The menu also follows Windows' left-/right-handed
+  menu setting.
 
 ## [0.12.0] — 2026-09-22
 

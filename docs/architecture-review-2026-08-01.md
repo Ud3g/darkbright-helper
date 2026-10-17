@@ -278,10 +278,14 @@ not.
 - **✅ RESOLVED (TRAY-2, TRAY-3)** — 2026-10-17, with C1. TRAY-2: the AND mask is no longer
   zero-filled but derived from the colour bitmap's alpha (`and_mask_from_alpha`, set bit = fully
   transparent, rows word-padded), so a non-alpha render path keeps the icon's outline instead of a
-  black square. TRAY-3: the window is top-level now. **TRAY-1 stays open by decision:** not the
-  one-line flag removal but the real fix — `NIM_SETVERSION(NOTIFYICON_VERSION_4)`, re-sent after
-  every add including the `TaskbarCreated` re-add, with the click handling moved to
-  `WM_CONTEXTMENU` — as a separate change; `NIF_SHOWTIP` stays because it takes effect there.
+  black square. TRAY-3: the window is top-level now.
+- **✅ RESOLVED (TRAY-1)** — 2026-10-17, as its own change rather than the one-line flag removal:
+  the icon now selects `NOTIFYICON_VERSION_4` with `NIM_SETVERSION`, sent from `push_icon_state`
+  after whichever operation turned out to be the add — startup, the `TaskbarCreated` re-add and a
+  modify that fell back to an add alike. The menu opens on `WM_CONTEXTMENU` (mouse and keyboard)
+  and on `NIN_KEYSELECT`, anchored at the callback's signed `wParam` coordinates; a left click stays
+  a no-op. `NIF_SHOWTIP` stays and is now what keeps the plain tooltip, and a menu cancelled with
+  Escape returns the focus with `NIM_SETFOCUS`. Details in `architecture.md`, "Callback Protocol".
 
 **Hotkeys** _(HK-1)_
 - `impl Display for ParsedHotkey` (`hotkey.rs:439-465`) resolves key names from `VK_TO_NAME`
@@ -330,7 +334,7 @@ should be one pass over that module even though they are separate defects.
 | 5  | I1     | `TrayIcon`/`PowerEventListener` `Drop` unreachable on every exit (`tray.rs:1033`) | Important | S    | Needs decision | Shutdown handshake vs. explicit teardown + delete the `Drop`s — ✅ tray half resolved 2026-10-17 (explicit teardown); power/hotkey halves open |
 | 6  | HYG-1  | `cargo fmt --check` fails on a stray blank line (`config.rs:1099`)             | Cosmetic  | XS   | Clear          | — |
 | 7  | DOC-6  | Mark rows 18/19 resolved in the 2026-07-26 review                             | Cosmetic  | XS   | Clear          | — |
-| 8  | TRAY-1 | `NIM_SETVERSION` missing, so `NIF_SHOWTIP` is inert (`tray.rs:556`)            | Cosmetic  | XS   | Clear          | Open by decision — real `NOTIFYICON_VERSION_4` fix as a separate change |
+| 8  | TRAY-1 | `NIM_SETVERSION` missing, so `NIF_SHOWTIP` is inert (`tray.rs:556`)            | Cosmetic  | XS   | Clear          | ✅ resolved 2026-10-17 — `NOTIFYICON_VERSION_4`, re-selected after every add |
 | 9  | TRAY-2 | Icon AND mask built from undefined `CreateBitmap` bits (`tray.rs:454`)         | Cosmetic  | XS   | Clear          | ✅ resolved 2026-10-17 — mask derived from alpha |
 | 10 | TRAY-3 | `SetForegroundWindow` on a message-only window (`tray.rs:679`)                 | Cosmetic  | XS   | Clear          | Subsumed by row 1 — ✅ resolved with it |
 | 11 | HK-1   | `Display for ParsedHotkey` renders letters/digits as "Unknown" (`hotkey.rs:457`) | Cosmetic  | XS   | Clear          | — |

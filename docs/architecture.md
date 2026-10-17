@@ -1340,7 +1340,47 @@ The application runs as a background process with a system tray icon for user in
 | Action | Result |
 |--------|--------|
 | Right-click | Opens context menu |
+| Keyboard: Shift+F10 or the menu key on the focused icon (Win+B, arrow keys) | Opens context menu |
+| Keyboard: Enter or Space on the focused icon | Opens context menu |
 | Left-click | No action (intentional) |
+
+**Callback Protocol:**
+
+The icon speaks `NOTIFYICON_VERSION_4`, selected with `NIM_SETVERSION`. Without
+that call the shell falls back to the Windows 95 protocol, in which a keyboard
+request arrives disguised as a right-button click and `NIF_SHOWTIP` means
+nothing. Under version 4 every request names itself: the menu comes as
+`WM_CONTEXTMENU` — from the mouse and the keyboard alike — and Enter or Space
+as `NIN_KEYSELECT`; a left click is `NIN_SELECT`, and the button messages that
+still arrive alongside are ignored, so a right-click opens the menu exactly
+once. The callback's `wparam` carries the anchor as two *signed* words (the
+click point, or the icon's top-left corner for the keyboard); a monitor left
+of or above the primary has negative coordinates, which an unsigned read —
+the one Microsoft's own sample uses — would throw across the desktop. The
+reference leaves `wparam` undefined for `WM_CONTEXTMENU`, but Microsoft's
+sample, Windows Terminal and Qt all position the menu from it. The menu drops
+upward from the anchor (`TPM_BOTTOMALIGN`), and to the left or right of it as
+the user's handedness setting (`SM_MENUDROPALIGNMENT`) says.
+
+Three details are easy to break:
+
+- **The version is owed after every add.** The shell forgets it together with
+  the icon, and `NIM_MODIFY` neither needs nor restores it. `push_icon_state`
+  therefore sends it after whichever of its two operations turned out to be
+  the add — the startup add, the re-add after `"TaskbarCreated"`, and a status
+  update whose modify fell back to an add ("Surviving an Explorer Restart"
+  below). Should the shell refuse it, the icon still shows but would never
+  receive a menu request; that is logged as a warning.
+- **`NIF_SHOWTIP` is load-bearing.** Version 4 suppresses the plain tooltip
+  unless the flag is set, expecting an app-drawn popup instead. Every write
+  carries it; the `NIN_POPUPOPEN`/`NIN_POPUPCLOSE` hover notifications are
+  ignored.
+- **Focus after Escape.** A menu cancelled with Escape leaves the keyboard
+  focus on the hidden tray window, where it reaches nothing, so the tray hands
+  it back to the notification area with `NIM_SETFOCUS`, as Microsoft asks.
+  `TrackPopupMenu` reports Escape and a click elsewhere identically, so the
+  call is made only while the tray window is still the foreground window —
+  after a click elsewhere the clicked window has the focus and keeps it.
 
 **Context Menu Structure:**
 
@@ -1428,8 +1468,8 @@ nothing across half an hour of theme switching. The window has since become
 top-level so that `"TaskbarCreated"` reaches it ("Surviving an Explorer
 Restart" below), and the broadcast now arrives — but it is still left to
 `DefWindowProcW`. Instead, `show_context_menu` refreshes the theme itself
-immediately before it builds the popup. The menu is rebuilt on every
-right-click anyway, so it always reflects the setting as it stands at that
+immediately before it builds the popup. The menu is rebuilt every time it
+opens anyway, so it always reflects the setting as it stands at that
 moment, and no delivery path is left that could silently fail.
 
 That refresh is `RefreshImmersiveColorPolicyState` **followed by**
@@ -1515,7 +1555,9 @@ folder, the monitor rows and every health warning hang off it.
   taskbar all go through `push_icon_state`, which builds icon and tooltip from
   the tray thread's own record of the last warnings and language. A standing
   warning therefore comes back with its badge and in the current language, and
-  nothing has to be asked of the main thread.
+  nothing has to be asked of the main thread. The same function re-selects
+  the callback protocol after every add ("Callback Protocol" above), so the
+  re-added icon answers the keyboard and the right mouse button as before.
 - **Add, then modify — and the reverse.** Microsoft documents that Windows 10
   also broadcasts `"TaskbarCreated"` when the primary display's DPI changes,
   while the icon still exists; an add then fails and a modify succeeds.
@@ -2317,10 +2359,26 @@ release history, not in a table here.
 4. Press a brightness hotkey
 5. **Expected**: after the *backoff* state, the log shows "Recovering from degraded DDC state" and the icon, tooltip and menu revert. After the *unresponsive* state, the warning deliberately stays — a keypress cannot unstick a blocked call. It clears on its own once the worker answers again ("DDC worker answered again"), on system resume, or if the stuck thread exits ("Unresponsive DDC worker has exited")
 
+#### Tray Icon Interaction Test
+1. Start the application with `RUST_LOG=debug`
+2. **Expected**: the log shows "Tray icon switched to callback version 4" right after startup
+3. Hover the icon
+4. **Expected**: the plain tooltip appears ("darkbright-helper", plus any active warnings)
+5. Right-click the icon
+6. **Expected**: the menu opens once at the pointer, above it; the log shows exactly one "Tray menu requested" for the click, with the pointer's screen coordinates. If a monitor sits left of the primary and the taskbar is extended onto it, repeat there: the coordinates are negative and the menu still opens at the pointer
+7. Left-click the icon
+8. **Expected**: nothing opens; the log shows "Tray icon left-clicked (no action)"
+9. Press Win+B, move to the icon with the arrow keys (it may sit behind the overflow chevron: Enter on the chevron, then the arrows), press Shift+F10
+10. **Expected**: the menu opens just above the icon, not at wherever the mouse pointer happens to be, and the arrow keys move through its items. Repeat with the menu key, and with Enter, then Space, on the focused icon: each opens the menu exactly once
+11. With a keyboard-opened menu, press Escape
+12. **Expected**: the menu closes, the log shows "Keyboard focus returned to the notification area", and the arrow keys move between notification-area icons again
+13. Open the menu by right-click and dismiss it by clicking into another application's window
+14. **Expected**: the menu closes and the clicked window keeps the keyboard focus — typing goes there; the log shows no "Keyboard focus returned to the notification area"
+
 #### Explorer Restart Test
 1. Start the application with `RUST_LOG=debug`
 2. Restart Explorer: Task Manager → "Windows Explorer" → Restart
-3. **Expected**: within a few seconds the tray icon is back, and the log shows "Taskbar recreated; tray icon restored". Right-click: the menu opens and every entry works
+3. **Expected**: within a few seconds the tray icon is back, and the log shows "Tray icon switched to callback version 4" followed by "Taskbar recreated; tray icon restored". Right-click: the menu opens and every entry works. Then Win+B, arrow keys to the icon, Shift+F10: the menu opens there too. Both prove the re-added icon got its protocol version back — without it neither request would arrive
 4. Bring a warning about: a badged one as in the Degraded-State Tray Indicator Test, step 2, or a tooltip-only one as in the File Logging Test, step 8. Then restart Explorer again
 5. **Expected**: the icon comes back as it was — badged if it was badged — with the same tooltip text, in the UI language currently set
 6. Restart Explorer on a delay — Win+R, `cmd /c "timeout /t 8 >nul & taskkill /f /im explorer.exe & start explorer.exe"` — and open the tray menu while the countdown runs. (Task Manager's Restart does not work here: clicking it closes the menu, step 11.)
