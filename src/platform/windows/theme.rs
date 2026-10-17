@@ -236,10 +236,10 @@ pub(crate) fn allow_dark_mode_for_window(hwnd: HWND) {
 /// Picks up a system light/dark setting that changed since the last menu.
 ///
 /// Call immediately before building a popup menu. Windows announces such a
-/// change with a `WM_SETTINGCHANGE` broadcast, but the tray's window is
-/// message-only and message-only windows are excluded from broadcasts — so the
-/// menu is refreshed where it is built rather than where the news would have
-/// arrived: on the tray thread, which is the thread that owns the menu. At one
+/// change with a `WM_SETTINGCHANGE` broadcast, which the tray window — now
+/// top-level, so it hears broadcasts — deliberately ignores: refreshing where
+/// the menu is built leaves no delivery path that could silently fail, and it
+/// runs on the tray thread, which is the thread that owns the menu. At one
 /// call per right-click the cost is irrelevant.
 ///
 /// Both calls are needed: `FlushMenuThemes` on its own leaves the menu in the

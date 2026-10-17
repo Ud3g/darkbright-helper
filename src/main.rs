@@ -437,7 +437,8 @@ fn spawn_power_listener(tx: mpsc::Sender<BrightnessMessage>) {
 /// Spawns the system tray icon thread.
 ///
 /// The tray icon provides a menu for accessing settings and quitting the application.
-/// The thread runs until the application shuts down (tray icon is cleaned up via RAII).
+/// The thread runs until the application shuts down, when `main` takes the icon
+/// down through `TrayStatusHandle::shut_down`.
 ///
 /// # Arguments
 ///
@@ -878,6 +879,13 @@ fn main() {
 
     unsafe {
         let _ = SetConsoleCtrlHandler(Some(ctrl_handler), false);
+    }
+
+    // First, so the icon disappears the moment Quit is clicked rather than
+    // after the DDC worker's last transaction. The handle may still be in
+    // flight if the tray came up during the final loop iteration.
+    if let Some(handle) = tray_status.or_else(|| tray_status_rx.try_recv().ok()) {
+        handle.shut_down();
     }
 
     log::debug!("Sending shutdown command to DDC worker");

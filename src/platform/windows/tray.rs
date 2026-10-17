@@ -22,16 +22,18 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFY_ICON_DATA_FLAGS, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NOTIFY_ICON_DATA_FLAGS, NOTIFY_ICON_MESSAGE, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DI_NORMAL, DefWindowProcW,
-    DestroyMenu, DispatchMessageW, DrawIconEx, GetCursorPos, GetMessageW, HICON, HMENU,
-    HWND_MESSAGE, ICONINFO, IMAGE_ICON, KillTimer, LR_DEFAULTSIZE, LR_LOADFROMFILE, LR_SHARED,
-    LoadImageW, MENU_ITEM_FLAGS, MENUITEMINFOW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MIIM_STRING,
-    MSG, PostMessageW, PostQuitMessage, RegisterClassExW, SetForegroundWindow, SetMenuItemInfoW,
-    SetTimer, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WINDOW_EX_STYLE, WM_DESTROY, WM_NULL, WM_TIMER, WNDCLASSEXW, WS_OVERLAPPED,
+    AppendMenuW, ChangeWindowMessageFilterEx, CreateIconIndirect, CreatePopupMenu, CreateWindowExW,
+    DI_NORMAL, DefWindowProcW, DestroyMenu, DestroyWindow, DispatchMessageW, DrawIconEx,
+    GetCursorPos, GetMessageW, HICON, HMENU, ICONINFO, IMAGE_ICON, KillTimer, LR_DEFAULTSIZE,
+    LR_LOADFROMFILE, LR_SHARED, LoadImageW, MENU_ITEM_FLAGS, MENUITEMINFOW, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MIIM_STRING, MSG, MSGFLT_ALLOW, PostMessageW, PostQuitMessage,
+    RegisterClassExW, RegisterWindowMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW,
+    SetForegroundWindow, SetMenuItemInfoW, SetTimer, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_CLOSE, WM_DESTROY, WM_NULL, WM_TIMER,
+    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_POPUP,
 };
 use windows::core::{PCWSTR, PWSTR, w};
 
@@ -44,7 +46,7 @@ use crate::error::{BrightnessError, Result};
 
 use super::hotkey::parse_hotkey;
 use super::theme;
-use super::{SafeHwnd, hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
+use super::{hwnd_from_isize, hwnd_to_isize, last_error_as_brightness_error};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -64,6 +66,18 @@ const WM_TRAY_STATUS: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 10
 /// Custom message posted by the main thread when the UI language changes;
 /// `wparam` is the language's index in [`Lang::ALL`].
 const WM_TRAY_LANG: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 102;
+
+/// Custom message sent by the main thread on its way out: remove the icon and
+/// destroy the window, which ends the tray thread's message loop.
+const WM_TRAY_SHUTDOWN: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 103;
+
+/// How long the main thread waits for the tray to take its icon down at exit.
+///
+/// The tray thread can be inside a menu-data wait of up to
+/// [`MENU_DATA_TIMEOUT`] that the exiting main thread will never answer, so
+/// the bound has to outlast that; beyond it the process exits with the icon
+/// left for the shell to clear on the next hover.
+const TRAY_SHUTDOWN_TIMEOUT_MS: u32 = 1000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu Item IDs
@@ -288,6 +302,26 @@ fn paint_warning_badge(pixels: &mut [u8], size: usize) {
             }
         }
     }
+}
+
+/// Builds the monochrome AND mask for a top-down 32-bit BGRA image of
+/// `size`×`size` pixels: a set bit marks a fully transparent pixel.
+///
+/// Alpha-aware rendering ignores the mask, but a path that does not use alpha
+/// shows the screen where the bit is set and the colour where it is clear —
+/// so a mask derived from alpha keeps the icon's outline there too. Rows are
+/// padded to whole 16-bit words, the layout `CreateBitmap` reads.
+fn and_mask_from_alpha(pixels: &[u8], size: usize) -> Vec<u8> {
+    let stride = size.div_ceil(16) * 2;
+    let mut mask = vec![0u8; stride * size];
+    for y in 0..size {
+        for x in 0..size {
+            if pixels[(y * size + x) * 4 + 3] == 0 {
+                mask[y * stride + x / 8] |= 0x80 >> (x % 8);
+            }
+        }
+    }
+    mask
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -609,9 +643,15 @@ fn create_warning_icon(base: HICON) -> Result<HICON> {
             std::slice::from_raw_parts_mut(canvas.bits, WARNING_ICON_SIZE * WARNING_ICON_SIZE * 4);
         paint_warning_badge(pixels, WARNING_ICON_SIZE);
 
-        // A monochrome mask is required by ICONINFO even though the 32-bit
-        // color bitmap's alpha channel is what actually shapes the icon.
-        let mask = CreateBitmap(size, size, 1, 1, None);
+        // ICONINFO requires a monochrome mask even though the 32-bit colour
+        // bitmap's alpha is what shapes the icon wherever alpha is honoured.
+        // Without initial bits its contents would be undefined.
+        let mask_bits = and_mask_from_alpha(pixels, WARNING_ICON_SIZE);
+        // SAFETY: `and_mask_from_alpha` sizes the buffer for exactly this
+        // width and height at one bit per pixel with word-padded rows, which
+        // is what `CreateBitmap` reads for a 1-plane, 1-bpp bitmap; the buffer
+        // outlives the call, and `CreateBitmap` copies it.
+        let mask = CreateBitmap(size, size, 1, 1, Some(mask_bits.as_ptr().cast()));
         if mask.is_invalid() {
             return Err(BrightnessError::tray_icon_creation("mask bitmap failed"));
         }
@@ -659,28 +699,32 @@ fn handle_language_update(hwnd: HWND, wparam: WPARAM) {
 
 /// Swaps the tray icon and tooltip to match the given warnings.
 fn apply_status(hwnd: HWND, warnings: HealthWarnings) {
-    let Some(icons) = STATUS_ICONS.with(|s| *s.borrow()) else {
+    // A modify that fails means the shell no longer knows the icon, so
+    // `push_icon_state` falls back to adding it — a second chance should the
+    // `TaskbarCreated` broadcast ever be missed.
+    if let Err(e) = push_icon_state(hwnd, warnings, NIM_MODIFY) {
+        log::warn!(error:% = e; "Failed to update tray status");
         return;
-    };
-    let icon = if wants_warning_badge(warnings) {
-        icons.warning
-    } else {
-        icons.normal
-    };
-
-    let tooltip = compose_tooltip(tray_strings(), warnings);
-    let nid = create_notify_icon_data(hwnd, icon, &tooltip, NIF_ICON | NIF_TIP | NIF_SHOWTIP);
-    unsafe {
-        if !Shell_NotifyIconW(NIM_MODIFY, &raw const nid).as_bool() {
-            log::warn!(error_code = super::get_last_error_code(); "Failed to update tray status");
-            return;
-        }
     }
     log::debug!(
         ddc:? = warnings.ddc,
         hotkeys_lost = warnings.hotkeys_lost;
         "Tray status updated"
     );
+}
+
+/// Puts the icon back after the shell announced a new taskbar.
+///
+/// The icon and tooltip are rebuilt from this thread's own record of the
+/// warnings and language, so a standing warning comes back with its badge
+/// instead of a healthy-looking icon.
+fn restore_after_taskbar_created(hwnd: HWND) {
+    match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), NIM_ADD) {
+        Ok(()) => log::info!("Taskbar recreated; tray icon restored"),
+        Err(e) => {
+            log::warn!(error:% = e; "Taskbar recreated, but the tray icon could not be restored")
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -721,32 +765,54 @@ fn create_notify_icon_data(
     nid
 }
 
-/// Adds the tray icon to the system notification area.
+/// Shows the icon and tooltip that `warnings` call for, trying `first`
+/// (`NIM_ADD` or `NIM_MODIFY`) and falling back to the other.
 ///
-/// # Arguments
-///
-/// * `hwnd` - Window handle for receiving tray messages.
-/// * `icon` - Icon handle to display.
+/// The one path every icon write goes through — startup, a status or language
+/// change, and a recreated taskbar — so none of them can show a state the
+/// others would not. The fallback covers both directions the shell's view can
+/// drift from ours: `TaskbarCreated` also follows a DPI change of the primary
+/// display, when the icon still exists and an add fails, and a missed
+/// broadcast leaves no icon for a modify to find.
 ///
 /// # Errors
 ///
-/// Returns `BrightnessError::TrayIconCreation` if `Shell_NotifyIconW` fails.
-fn add_tray_icon(hwnd: HWND, icon: HICON) -> Result<()> {
+/// Returns `BrightnessError::TrayIconCreation` if the icons are not loaded
+/// yet, or `BrightnessError::WindowsApi` if both operations fail.
+fn push_icon_state(hwnd: HWND, warnings: HealthWarnings, first: NOTIFY_ICON_MESSAGE) -> Result<()> {
+    let icons = STATUS_ICONS
+        .with(|s| *s.borrow())
+        .ok_or_else(|| BrightnessError::tray_icon_creation("tray icons not loaded"))?;
+    let icon = if wants_warning_badge(warnings) {
+        icons.warning
+    } else {
+        icons.normal
+    };
+    let tooltip = compose_tooltip(tray_strings(), warnings);
+    // NIF_MESSAGE on a modify rewrites the callback id with the same value; an
+    // add cannot do without it, and one struct serves both operations.
     let nid = create_notify_icon_data(
         hwnd,
         icon,
-        TRAY_TOOLTIP,
+        &tooltip,
         NIF_ICON | NIF_MESSAGE | NIF_TIP | NIF_SHOWTIP,
     );
+    let second = if first == NIM_ADD {
+        NIM_MODIFY
+    } else {
+        NIM_ADD
+    };
 
     unsafe {
-        if !Shell_NotifyIconW(NIM_ADD, &raw const nid).as_bool() {
-            return Err(last_error_as_brightness_error("Shell_NotifyIconW(NIM_ADD)"));
+        if Shell_NotifyIconW(first, &raw const nid).as_bool() {
+            return Ok(());
+        }
+        if Shell_NotifyIconW(second, &raw const nid).as_bool() {
+            log::debug!(first = first.0, second = second.0; "Tray icon written by the fallback operation");
+            return Ok(());
         }
     }
-
-    log::debug!("Tray icon added to notification area");
-    Ok(())
+    Err(last_error_as_brightness_error("Shell_NotifyIconW"))
 }
 
 /// Removes the tray icon from the system notification area.
@@ -1117,7 +1183,7 @@ fn handle_menu_selection(cmd: u32) {
 /// Ensures the tray window class is registered exactly once.
 static REGISTER_CLASS_ONCE: OnceLock<Result<()>> = OnceLock::new();
 
-/// Registers the window class for the tray message-only window if not already registered.
+/// Registers the window class for the hidden tray window if not already registered.
 ///
 /// # Errors
 ///
@@ -1159,13 +1225,101 @@ fn ensure_tray_class_registered() -> Result<PCWSTR> {
     Ok(w!("BrightnessControlTrayWindow"))
 }
 
+/// The id of the shell's registered `"TaskbarCreated"` message, or 0 if
+/// registration failed.
+static TASKBAR_CREATED: OnceLock<u32> = OnceLock::new();
+
+/// Registers `"TaskbarCreated"` once and returns its id (0 on failure).
+fn taskbar_created_message() -> u32 {
+    *TASKBAR_CREATED.get_or_init(|| {
+        let id = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
+        if id == 0 {
+            log::warn!(
+                error_code = super::get_last_error_code();
+                "Could not register TaskbarCreated; the tray icon will not survive an Explorer restart"
+            );
+        }
+        id
+    })
+}
+
+/// Whether `msg` is the registered message `id`. A failed registration (0)
+/// matches nothing — 0 is also `WM_NULL`, which this module posts itself.
+fn is_registered_message(msg: u32, id: u32) -> bool {
+    id != 0 && msg == id
+}
+
+/// Creates the hidden window the tray icon reports to.
+///
+/// Deliberately top-level rather than message-only (`HWND_MESSAGE`): the shell
+/// announces a restarted taskbar by *broadcasting* `"TaskbarCreated"`, and
+/// broadcasts skip message-only windows — the icon would vanish with Explorer
+/// and never come back. Never shown; `WS_EX_TOOLWINDOW` keeps it out of the
+/// taskbar and Alt-Tab.
+///
+/// # Errors
+///
+/// Returns `BrightnessError::TrayIconCreation` if `GetModuleHandleW` fails,
+/// or `BrightnessError::WindowsApi` if `CreateWindowExW` does.
+fn create_tray_window(class_name: PCWSTR) -> Result<HWND> {
+    unsafe {
+        let hinstance = GetModuleHandleW(None).map_err(|e| {
+            BrightnessError::tray_icon_creation(format!("GetModuleHandleW failed: {}", e.code().0))
+        })?;
+
+        CreateWindowExW(
+            WS_EX_TOOLWINDOW,
+            class_name,
+            w!("BrightnessControlTray"),
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            Some(hinstance.into()),
+            None,
+        )
+        .map_err(|e| BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned()))
+    }
+}
+
+/// Handles a polite close request (`WM_CLOSE`), e.g. from `taskkill` without
+/// `/f`: shut down exactly as Ctrl+C or the menu's Quit would.
+///
+/// Leaving it to `DefWindowProcW` would destroy this window and end the tray
+/// thread while the rest of the app kept running — hotkeys still working, but
+/// no icon, no menu and no way to quit short of Task Manager.
+fn handle_close_request() {
+    log::info!("Close request received by the tray window; shutting down");
+    with_tray_sender(|sender| {
+        if let Err(e) = sender.send(BrightnessMessage::Shutdown) {
+            log::error!(error:% = e; "Failed to send Shutdown");
+        }
+    });
+}
+
+/// Takes the icon down and destroys the window, on the main thread's request
+/// at exit. Destroying the window posts `WM_QUIT`, which ends the loop.
+fn handle_shutdown(hwnd: HWND) {
+    remove_tray_icon(hwnd);
+    unsafe {
+        if let Err(e) = DestroyWindow(hwnd) {
+            log::warn!(error:% = e; "Failed to destroy the tray window");
+        }
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Window Procedure
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Window procedure for the tray message-only window.
+/// Window procedure for the hidden tray window.
 ///
-/// Handles tray icon callback messages and cleanup.
+/// Handles tray icon callbacks, the main thread's status, language and
+/// shutdown messages, the shell's `"TaskbarCreated"` broadcast and close
+/// requests.
 ///
 /// # Safety
 ///
@@ -1201,9 +1355,21 @@ unsafe extern "system" fn tray_wnd_proc(
                 }
                 LRESULT(0)
             }
+            WM_TRAY_SHUTDOWN => {
+                handle_shutdown(hwnd);
+                LRESULT(0)
+            }
+            WM_CLOSE => {
+                handle_close_request();
+                LRESULT(0)
+            }
             WM_DESTROY => {
                 log::debug!("Tray window WM_DESTROY received");
                 PostQuitMessage(0);
+                LRESULT(0)
+            }
+            _ if is_registered_message(msg, taskbar_created_message()) => {
+                restore_after_taskbar_created(hwnd);
                 LRESULT(0)
             }
             _ => DefWindowProcW(hwnd, msg, wparam, lparam),
@@ -1244,16 +1410,18 @@ fn handle_tray_callback(hwnd: HWND, lparam: LPARAM) {
 
 /// Manages the system tray icon and its context menu.
 ///
-/// The `TrayIcon` creates an invisible message-only window to receive
-/// tray icon notifications and handles the popup menu when the user
-/// right-clicks the icon.
+/// The `TrayIcon` creates a hidden top-level window to receive tray icon
+/// notifications and handles the popup menu when the user right-clicks the
+/// icon.
+///
+/// Deliberately has no `Drop`: the tray thread spends its life blocked in
+/// `run_message_loop`, so a destructor would only run after the window it
+/// cleans up is already gone. Teardown is a message instead —
+/// [`TrayStatusHandle::shut_down`] has this thread remove the icon and destroy
+/// the window while the main thread waits.
 pub struct TrayIcon {
-    /// Message-only window that receives tray notifications.
-    hwnd: SafeHwnd,
-    /// Handle to the loaded icon resource.
-    /// Kept alive to prevent Windows from releasing the icon while the tray is active.
-    #[expect(dead_code)]
-    icon_handle: HICON,
+    /// Hidden window that receives tray notifications.
+    hwnd: HWND,
 }
 
 impl TrayIcon {
@@ -1266,10 +1434,10 @@ impl TrayIcon {
     ///
     /// # Errors
     ///
-    /// Returns `BrightnessError::TrayIconCreation` if:
-    /// - The message window cannot be created
-    /// - The icon resource cannot be loaded
-    /// - The tray icon cannot be registered with the shell
+    /// Returns `BrightnessError::TrayIconCreation` or
+    /// `BrightnessError::WindowsApi` if the window class or window cannot be
+    /// created or the icon resource cannot be loaded. A shell that refuses
+    /// the icon is not an error: the icon follows on its `TaskbarCreated`.
     pub fn new(sender: Sender<BrightnessMessage>, lang: Lang) -> Result<Self> {
         let class_name = ensure_tray_class_registered()?;
 
@@ -1277,35 +1445,20 @@ impl TrayIcon {
         // light even when the system asks for dark.
         theme::init_dark_menus();
 
-        // Create message-only window (HWND_MESSAGE parent = no visible window)
-        let hwnd = unsafe {
-            let hinstance = GetModuleHandleW(None).map_err(|e| {
-                BrightnessError::tray_icon_creation(format!(
-                    "GetModuleHandleW failed: {}",
-                    e.code().0
-                ))
-            })?;
+        let hwnd = create_tray_window(class_name)?;
+        log::debug!("Tray window created");
 
-            CreateWindowExW(
-                WINDOW_EX_STYLE::default(), // No extended styles needed
-                class_name,
-                w!("BrightnessControlTray"),
-                WS_OVERLAPPED, // Minimal style for message-only window
-                0,
-                0,
-                0,
-                0,
-                Some(HWND_MESSAGE), // Message-only window
-                None,
-                Some(hinstance.into()),
-                None,
-            )
-            .map_err(|e| {
-                BrightnessError::windows_api("CreateWindowExW", e.code().0.cast_unsigned())
-            })?
-        };
-
-        log::debug!("Tray message window created");
+        // Run elevated, this process sits above Explorer's integrity level and
+        // UIPI drops the broadcast from below unless this window lets it in.
+        // Unelevated the filter changes nothing, so a failure costs at most
+        // the elevated case.
+        let taskbar_created = taskbar_created_message();
+        if taskbar_created != 0
+            && let Err(e) =
+                unsafe { ChangeWindowMessageFilterEx(hwnd, taskbar_created, MSGFLT_ALLOW, None) }
+        {
+            log::debug!(error:% = e; "Could not allow TaskbarCreated through the UIPI filter");
+        }
 
         // The menu belongs to this window, so the window has to be dark-mode
         // aware as well for the popup to pick the dark theme up.
@@ -1333,12 +1486,15 @@ impl TrayIcon {
             });
         });
 
-        add_tray_icon(hwnd, icon_handle)?;
+        // Not fatal: at logon the notification area can still be coming up.
+        // The window stays, and the shell's `TaskbarCreated` once it is ready
+        // adds the icon through the same path an Explorer restart uses.
+        match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), NIM_ADD) {
+            Ok(()) => log::debug!("Tray icon added to notification area"),
+            Err(e) => log::warn!(error:% = e; "Tray icon not added yet; waiting for the taskbar"),
+        }
 
-        Ok(Self {
-            hwnd: unsafe { SafeHwnd::new_owned(hwnd) },
-            icon_handle,
-        })
+        Ok(Self { hwnd })
     }
 
     /// Runs the message loop for the tray icon.
@@ -1379,7 +1535,7 @@ impl TrayIcon {
     /// Returns a cross-thread handle for posting status updates.
     #[must_use]
     pub fn status_handle(&self) -> TrayStatusHandle {
-        TrayStatusHandle(hwnd_to_isize(self.hwnd.as_raw()))
+        TrayStatusHandle(hwnd_to_isize(self.hwnd))
     }
 }
 
@@ -1425,12 +1581,32 @@ impl TrayStatusHandle {
             }
         }
     }
-}
 
-impl Drop for TrayIcon {
-    fn drop(&mut self) {
-        remove_tray_icon(self.hwnd.as_raw());
-        log::debug!("TrayIcon dropped");
+    /// Has the tray thread remove its icon and destroy its window, and waits
+    /// for it — bounded by [`TRAY_SHUTDOWN_TIMEOUT_MS`] — so the icon is gone
+    /// before the process exits instead of lingering until the next hover.
+    pub fn shut_down(self) {
+        // SAFETY: a cross-thread send to a handle carried as `isize`, like
+        // `notify`'s post; `SendMessageTimeoutW` reports a destroyed window or
+        // a hung thread as a zero return instead of misbehaving, and the
+        // message carries no payload.
+        let delivered = unsafe {
+            SendMessageTimeoutW(
+                hwnd_from_isize(self.0),
+                WM_TRAY_SHUTDOWN,
+                WPARAM(0),
+                LPARAM(0),
+                SMTO_ABORTIFHUNG,
+                TRAY_SHUTDOWN_TIMEOUT_MS,
+                None,
+            )
+        };
+        if delivered.0 == 0 {
+            log::debug!(
+                error_code = super::get_last_error_code();
+                "Tray shutdown not acknowledged; the icon may linger until hovered"
+            );
+        }
     }
 }
 
@@ -1678,6 +1854,88 @@ mod tests {
             lang_from_wparam(WPARAM(Lang::German.index())),
             Some(Lang::German)
         );
+    }
+
+    // `TaskbarCreated` is broadcast, and broadcasts never reach message-only
+    // windows — the tray window must stay top-level or an Explorer restart
+    // takes the icon for good. Same pin as the power listener's, because the
+    // two windows are built alike and lost the same property the same way.
+    #[test]
+    fn tray_window_is_top_level_so_broadcasts_arrive() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DestroyWindow, GA_PARENT, GetAncestor, GetDesktopWindow,
+        };
+
+        let class_name = ensure_tray_class_registered().expect("class registration");
+        let hwnd = create_tray_window(class_name).expect("window creation");
+
+        let parent = unsafe { GetAncestor(hwnd, GA_PARENT) };
+        let desktop = unsafe { GetDesktopWindow() };
+        unsafe {
+            let _ = DestroyWindow(hwnd);
+        }
+        assert_eq!(
+            parent, desktop,
+            "tray window must be parented to the desktop; a message-only \
+             window is excluded from broadcast messages"
+        );
+    }
+
+    #[test]
+    fn a_close_request_asks_the_main_thread_to_shut_down() {
+        use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
+
+        let (tx, rx) = mpsc::channel();
+        set_tray_sender(tx);
+
+        let result = unsafe { tray_wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+
+        assert!(
+            matches!(rx.try_recv(), Ok(BrightnessMessage::Shutdown)),
+            "WM_CLOSE should start the same graceful shutdown as Ctrl+C"
+        );
+        assert_eq!(result, LRESULT(0), "WM_CLOSE must not reach DefWindowProc");
+    }
+
+    #[test]
+    fn a_failed_registration_never_matches_a_real_message() {
+        // RegisterWindowMessageW reports failure as 0, which is also WM_NULL —
+        // a message this module posts itself after every menu.
+        assert!(!is_registered_message(WM_NULL, 0));
+        assert!(is_registered_message(0xC123, 0xC123));
+        assert!(!is_registered_message(0xC124, 0xC123));
+    }
+
+    #[test]
+    fn and_mask_marks_exactly_the_transparent_pixels() {
+        const SIZE: usize = 32;
+        let mut pixels = vec![0u8; SIZE * SIZE * 4];
+        // Opaque pixel at (x=0, y=0) and at (x=9, y=1).
+        pixels[3] = 0xFF;
+        pixels[(SIZE + 9) * 4 + 3] = 0xFF;
+        // Partly transparent still counts as drawn.
+        pixels[(2 * SIZE + 31) * 4 + 3] = 0x40;
+
+        let mask = and_mask_from_alpha(&pixels, SIZE);
+
+        // 32 pixels per row at one bit each, already a multiple of 16 bits.
+        let stride = 4;
+        assert_eq!(mask.len(), stride * SIZE);
+        assert_eq!(mask[0], 0b0111_1111, "row 0: only x=0 is drawn");
+        assert_eq!(mask[stride + 1], 0b1011_1111, "row 1: only x=9 is drawn");
+        assert_eq!(
+            mask[2 * stride + 3],
+            0b1111_1110,
+            "row 2: only x=31 is drawn"
+        );
+        assert_eq!(mask[3 * stride], 0xFF, "an empty row is all transparent");
+    }
+
+    #[test]
+    fn and_mask_rows_are_padded_to_whole_words() {
+        // CreateBitmap reads each scan line as a whole number of 16-bit words.
+        let pixels = vec![0u8; 20 * 20 * 4];
+        assert_eq!(and_mask_from_alpha(&pixels, 20).len(), 4 * 20);
     }
 
     #[test]

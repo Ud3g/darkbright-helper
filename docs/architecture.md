@@ -324,8 +324,10 @@ invariant, that one gets its own documented policy rather than changing this one
 
 **Worker threads are never joined.** There is no `.join()` in `src/`, deliberately: process
 exit is the join. Only the DDC worker is asked to stop (`Controller::shutdown_worker`, so a
-DDC transaction in flight is not cut mid-write); the tray, hotkey, power and settings threads
-are simply left to die with the process. A thread blocked in `GetMessageW` would make a join
+DDC transaction in flight is not cut mid-write), and the tray thread is asked to take its icon
+down first (`TrayStatusHandle::shut_down`, a bounded synchronous send — §13, "Removing the Icon
+at Exit"); the hotkey, power and settings threads are simply left to die with the process, and
+the tray thread too once its window is gone. A thread blocked in `GetMessageW` would make a join
 a deadlock, and one hotkey spawn is already abandoned on purpose when it fails to report in
 time — see `start_hotkey_thread` in `main.rs` for that case. That abandoned spawn is a live
 writer, not a dead one: the hotkey thread id and command queue are shared cells (the id is
@@ -359,6 +361,11 @@ messages, and the values live in three files today:
 | `WM_APP_HOTKEY_WAKE` | `WM_APP + 10` | hotkey | none — see below | **`PostThreadMessageW` to the thread** |
 | `WM_TRAY_CALLBACK` / `WM_TRAY_STATUS` | `WM_APP + 100` / `+ 101` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
 | `WM_TRAY_LANG` | `WM_APP + 102` | tray | `BrightnessControlTrayWindow` | `PostMessageW` to the window |
+| `WM_TRAY_SHUTDOWN` | `WM_APP + 103` | tray | `BrightnessControlTrayWindow` | **`SendMessageTimeoutW`** to the window, at exit (§13) |
+
+The tray window also handles one message outside the `WM_APP` range: the shell's registered
+`"TaskbarCreated"` (`RegisterWindowMessageW`, so its value is assigned at runtime), see §13,
+"Surviving an Explorer Restart".
 
 For a window-addressed message, `WM_APP + n` only has to be unique among the messages that
 one *class* handles; two classes may reuse a value without interfering, which is why the
@@ -1282,10 +1289,14 @@ the same treatment: its message loop logs both exit paths (`WM_QUIT` and a
 A dead hotkey thread is restarted with a fresh message window and hotkeys
 re-registered. The tray and power threads remain unsupervised by design — both are
 non-fatal conveniences. One release-build consequence is worth knowing: with
-the console hidden there is no Ctrl+C, so the tray menu's Quit is the only
-*graceful* shutdown path — if the tray thread dies, ending the process takes
-Task Manager. Accepted: a hard kill loses nothing (settings live in the config
-file, brightness in the hardware, overlay windows die with the process).
+the console hidden there is no Ctrl+C, so the *graceful* shutdown paths are the
+tray menu's Quit and a polite close request (`taskkill` without `/f`, which
+the tray window turns into the same `Shutdown` Ctrl+C sends — §13). Both run
+through the tray thread, so if it dies, ending the process takes Task Manager
+or `taskkill /f`. An Explorer restart is not such a death: the tray thread
+keeps running and re-adds its icon (§13, "Surviving an Explorer Restart").
+Accepted: a hard kill loses nothing (settings live in the config file,
+brightness in the hardware, overlay windows die with the process).
 
 Both degraded states — DDC disabled and hotkeys given up — are surfaced to the
 user through the tray icon, tooltip, and menu (see §13, "Degraded-State
@@ -1391,20 +1402,22 @@ The context menu is a plain `TrackPopupMenu` popup, which Windows draws light
 unless the process has opted into dark mode. `platform/windows/theme.rs` makes
 that opt-in once, before the tray window exists: `SetPreferredAppMode(AllowDark)`,
 `RefreshImmersiveColorPolicyState`, `FlushMenuThemes`, plus
-`AllowDarkModeForWindow` for the message-only window that owns the menu.
+`AllowDarkModeForWindow` for the hidden tray window that owns the menu.
 `AllowDark` rather than `ForceDark` is the point — the system light/dark
 setting decides the colour, the app never overrides it.
 
 Keeping up with a *changed* setting deliberately ignores the notification
-Windows sends for it. The `WM_SETTINGCHANGE` broadcast carrying
-`"ImmersiveColorSet"` never reaches this app: the tray's window is
-message-only, and message-only windows are excluded from broadcasts — measured,
-not assumed, after a first attempt to handle that message logged nothing across
-half an hour of theme switching. Rather than acquire a top-level window to hear
-the news, `show_context_menu` refreshes the theme itself immediately before it
-builds the popup. The menu is rebuilt on every right-click anyway, so it always
-reflects the setting as it stands at that moment, and no delivery path is left
-that could silently fail.
+Windows sends for it. The decision dates from when the tray's window was
+message-only: the `WM_SETTINGCHANGE` broadcast carrying `"ImmersiveColorSet"`
+never reached it, because message-only windows are excluded from broadcasts —
+measured, not assumed, after a first attempt to handle that message logged
+nothing across half an hour of theme switching. The window has since become
+top-level so that `"TaskbarCreated"` reaches it ("Surviving an Explorer
+Restart" below), and the broadcast now arrives — but it is still left to
+`DefWindowProcW`. Instead, `show_context_menu` refreshes the theme itself
+immediately before it builds the popup. The menu is rebuilt on every
+right-click anyway, so it always reflects the setting as it stands at that
+moment, and no delivery path is left that could silently fail.
 
 That refresh is `RefreshImmersiveColorPolicyState` **followed by**
 `FlushMenuThemes`, and the order matters: `FlushMenuThemes` alone leaves the
@@ -1467,6 +1480,70 @@ Recovery follows §12 and differs per cause: a dead worker's warning clears on
 user activity or resume, an unresponsive worker's clears when the worker answers
 again or on resume (the icon reverts automatically in both cases); the hotkey
 warning is latched until the app restarts.
+
+**Surviving an Explorer Restart:**
+
+When Explorer restarts — after a crash, some Windows updates, or a restart from
+Task Manager — the notification area forgets every icon, then broadcasts the
+registered message `"TaskbarCreated"` to all top-level windows so that each
+application can add its icon again. For this app that is not cosmetic: apart
+from the two hotkeys, the icon *is* the interface — settings, Quit, the log
+folder, the monitor rows and every health warning hang off it.
+
+- **The window must be top-level.** The tray window is a hidden `WS_POPUP`
+  with `WS_EX_TOOLWINDOW` (never shown, kept out of the taskbar and Alt-Tab),
+  not a message-only window: broadcasts skip message-only windows, and an
+  earlier message-only version lost its icon for good on the first Explorer
+  restart. A unit test pins the window's `GA_PARENT` to the desktop, the same
+  pin the power listener carries (§9) — the property, not the module, is what
+  needs protecting. The hotkey thread's window, by contrast, is message-only on
+  purpose: nothing it needs is broadcast.
+- **One write path.** Startup, a status or language change and a recreated
+  taskbar all go through `push_icon_state`, which builds icon and tooltip from
+  the tray thread's own record of the last warnings and language. A standing
+  warning therefore comes back with its badge and in the current language, and
+  nothing has to be asked of the main thread.
+- **Add, then modify — and the reverse.** Windows 10 and later also broadcast
+  `"TaskbarCreated"` when the primary display's DPI changes, while the icon
+  still exists; an add then fails and a modify succeeds. Conversely a status
+  update whose modify fails (the shell no longer knows the icon) falls back to
+  an add, a second chance should the broadcast ever be missed. The same
+  add-then-modify order is what wxWidgets settled on for the same message.
+- **Elevated runs.** Started "as administrator", the process sits above
+  Explorer's integrity level and UIPI would drop the broadcast; the window lets
+  it through with `ChangeWindowMessageFilterEx(MSGFLT_ALLOW)`. Unelevated the
+  call changes nothing, and its failure is only logged at `debug`.
+- **Not ready at startup.** If the shell refuses the very first add — at logon
+  the notification area can still be coming up — the tray logs a warning and
+  keeps its window; the icon follows with the shell's `"TaskbarCreated"`.
+- **An open menu** is unaffected: `TrackPopupMenu`'s modal loop dispatches the
+  broadcast like any other message, the icon is re-added underneath, and the
+  popup, owned by the tray window rather than by Explorer, stays usable.
+- **Side effects of being top-level.** The window now also receives other
+  broadcasts (`WM_SETTINGCHANGE`, `WM_DISPLAYCHANGE`, session-end queries);
+  all of them go to `DefWindowProcW`. It also becomes a target for `WM_CLOSE`
+  — `taskkill` without `/f` and similar tools post it to every top-level
+  window of a process. Left to `DefWindowProcW`, that would destroy the window
+  and end the tray thread while the rest of the app ran on without an icon, so
+  the tray turns it into the same `Shutdown` request Ctrl+C sends (§12). And
+  the `SetForegroundWindow` call before `TrackPopupMenu`, which is what makes
+  the menu close on a click outside it, is documented not to work for a
+  message-only window — it now takes effect.
+
+**Removing the Icon at Exit:**
+
+The tray thread spends its life blocked in `GetMessageW`, and process exit does
+not unwind it, so no destructor of the tray's could ever remove the icon — it
+lingered as a dead entry until the mouse next passed over it. Instead, on every
+exit path through the main loop (Quit, Ctrl+C, `WM_CLOSE`) `main` calls
+`TrayStatusHandle::shut_down` first, before stopping the DDC worker: a
+`SendMessageTimeoutW(WM_TRAY_SHUTDOWN)` on which the tray thread deletes the
+icon (`NIM_DELETE`) and destroys its window, which ends its loop. The send is
+synchronous, so the icon is gone before the process exits. It is bounded by one
+second because the tray thread can be inside a menu-data wait of up to 500 ms
+that the exiting main thread will never answer; past the bound the process
+exits anyway and the shell clears the icon on the next hover, which is exactly
+the earlier behaviour.
 
 **Usage Rows:**
 
@@ -2223,6 +2300,23 @@ release history, not in a table here.
    - unresponsive worker (`DDC worker unresponsive`): tooltip "darkbright-helper – monitor not responding", menu line "⚠ Monitor not responding — restart the app if this persists"
 4. Press a brightness hotkey
 5. **Expected**: after the *backoff* state, the log shows "Recovering from degraded DDC state" and the icon, tooltip and menu revert. After the *unresponsive* state, the warning deliberately stays — a keypress cannot unstick a blocked call. It clears on its own once the worker answers again ("DDC worker answered again"), on system resume, or if the stuck thread exits ("Unresponsive DDC worker has exited")
+
+#### Explorer Restart Test
+1. Start the application with `RUST_LOG=debug`
+2. Restart Explorer: Task Manager → "Windows Explorer" → Restart
+3. **Expected**: within a few seconds the tray icon is back, and the log shows "Taskbar recreated; tray icon restored". Right-click: the menu opens and every entry works
+4. Bring a warning about: a badged one as in the Degraded-State Tray Indicator Test, step 2, or a tooltip-only one as in the File Logging Test, step 8. Then restart Explorer again
+5. **Expected**: the icon comes back as it was — badged if it was badged — with the same tooltip text, in the UI language currently set
+6. Open the tray menu and, with it still open, restart Explorer from Task Manager (open Task Manager first, then the menu, and pick Restart without closing the menu; or use `taskkill /f /im explorer.exe && start explorer` from a console)
+7. **Expected**: the menu stays usable, the icon reappears underneath it, and Quit from that menu still ends the app
+8. Change the primary display's scale (Settings → Display → Scale) and back
+9. **Expected**: the icon is still there afterwards — at most one icon, never two. The log may show "Tray icon written by the fallback operation", the case where the icon survived the broadcast
+10. Open the tray menu and click on the desktop beside it
+11. **Expected**: the menu closes
+12. Quit from the tray menu
+13. **Expected**: the icon disappears at once — not only when the mouse next passes over the notification area
+14. Start the app again, then run `taskkill /im darkbright-helper.exe` (without `/f`) from a console
+15. **Expected**: the log shows "Close request received by the tray window; shutting down" and the app exits like a Quit, icon gone at once. If `taskkill` reports that the process could not be terminated or nothing is logged, the request did not reach the tray window — note it, as §13 assumes it does
 
 #### Settings Window Test
 
