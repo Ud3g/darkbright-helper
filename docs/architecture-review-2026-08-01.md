@@ -118,6 +118,9 @@ warnings and language. Beyond the direction: (1) Windows 10 is documented to reb
 26200 was observed not to), so an add falls back to a modify and vice versa; (2) `ChangeWindowMessageFilterEx` lets the broadcast past UIPI in an elevated run; (3) a
 top-level window receives `WM_CLOSE` from `taskkill` without `/f`, which `DefWindowProcW` would have
 turned into exactly this finding's half-dead state — it is now the same `Shutdown` Ctrl+C sends. The
+manual pass showed `taskkill` picks only the topmost window per call (the OSD), so the same handling
+went into the OSD, overlay and power windows too; before, each polite `taskkill` silently destroyed
+one window and the process never exited. The
 `hotkey.rs` window carries the one-line comment saying why it is message-only on purpose. Row 10 is
 resolved with it. Recorded in `architecture.md` §13, "Surviving an Explorer Restart", with a manual
 "Explorer Restart Test".

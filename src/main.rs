@@ -46,7 +46,7 @@ use darkbright_helper::platform::windows::{
     WindowsConfigStore, WindowsLanguageSource,
 };
 use darkbright_helper::platform::windows::{
-    show_error_message_box, show_info_message_box, windows_build_number,
+    route_close_requests_to, show_error_message_box, show_info_message_box, windows_build_number,
 };
 use darkbright_helper::{BrightnessError, Result};
 
@@ -627,6 +627,9 @@ fn main() {
 
     // Main channel for BrightnessMessage (hotkey thread -> main, DDC worker -> main)
     let (tx, rx) = mpsc::channel();
+    // The OSD and overlay windows live on this thread; a polite close request
+    // landing on one of them must end the app, not just that window.
+    route_close_requests_to(tx.clone());
 
     // Spawn the supervised DDC worker. It is the only path to the hardware, so
     // a refusal here ends startup — but it ends it with an explanation, the way

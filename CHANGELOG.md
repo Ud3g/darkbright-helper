@@ -18,7 +18,9 @@ history lives in the git log.
   warning comes back with its badge.
 - Quitting removes the tray icon at once instead of leaving it behind until
   the mouse passes over it.
-- `taskkill` without `/f` now ends the app cleanly, like Quit.
+- `taskkill` without `/f` now ends the app cleanly, like Quit. It used to
+  close just one of the app's hidden windows per call — the brightness
+  indicator first — and leave the app running without it.
 - The tray menu closes when you click outside it.
 
 ## [0.12.0] — 2026-09-22

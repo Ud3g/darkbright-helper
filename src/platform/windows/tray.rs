@@ -722,7 +722,7 @@ fn restore_after_taskbar_created(hwnd: HWND) {
     match push_icon_state(hwnd, LAST_WARNINGS.with(Cell::get), NIM_ADD) {
         Ok(()) => log::info!("Taskbar recreated; tray icon restored"),
         Err(e) => {
-            log::warn!(error:% = e; "Taskbar recreated, but the tray icon could not be restored")
+            log::warn!(error:% = e; "Taskbar recreated, but the tray icon could not be restored");
         }
     }
 }
@@ -1285,21 +1285,6 @@ fn create_tray_window(class_name: PCWSTR) -> Result<HWND> {
     }
 }
 
-/// Handles a polite close request (`WM_CLOSE`), e.g. from `taskkill` without
-/// `/f`: shut down exactly as Ctrl+C or the menu's Quit would.
-///
-/// Leaving it to `DefWindowProcW` would destroy this window and end the tray
-/// thread while the rest of the app kept running — hotkeys still working, but
-/// no icon, no menu and no way to quit short of Task Manager.
-fn handle_close_request() {
-    log::info!("Close request received by the tray window; shutting down");
-    with_tray_sender(|sender| {
-        if let Err(e) = sender.send(BrightnessMessage::Shutdown) {
-            log::error!(error:% = e; "Failed to send Shutdown");
-        }
-    });
-}
-
 /// Takes the icon down and destroys the window, on the main thread's request
 /// at exit. Destroying the window posts `WM_QUIT`, which ends the loop.
 fn handle_shutdown(hwnd: HWND) {
@@ -1359,10 +1344,9 @@ unsafe extern "system" fn tray_wnd_proc(
                 handle_shutdown(hwnd);
                 LRESULT(0)
             }
-            WM_CLOSE => {
-                handle_close_request();
-                LRESULT(0)
-            }
+            // Destroying this window would end the tray thread while the
+            // rest of the app ran on — no icon, no menu, no way to quit.
+            WM_CLOSE => super::handle_close_request("tray"),
             WM_DESTROY => {
                 log::debug!("Tray window WM_DESTROY received");
                 PostQuitMessage(0);
@@ -1465,6 +1449,7 @@ impl TrayIcon {
         theme::allow_dark_mode_for_window(hwnd);
 
         // Store sender in thread-local storage for window procedure access
+        super::route_close_requests_to(sender.clone());
         set_tray_sender(sender);
         set_tray_lang(lang);
 
@@ -1886,7 +1871,7 @@ mod tests {
         use windows::Win32::UI::WindowsAndMessaging::WM_CLOSE;
 
         let (tx, rx) = mpsc::channel();
-        set_tray_sender(tx);
+        crate::platform::windows::route_close_requests_to(tx);
 
         let result = unsafe { tray_wnd_proc(HWND::default(), WM_CLOSE, WPARAM(0), LPARAM(0)) };
 

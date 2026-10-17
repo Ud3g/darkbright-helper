@@ -119,7 +119,7 @@ src/
 └── platform/
     ├── mod.rs            # Gates the platform submodule (Windows-only today)
     └── windows/          # #[cfg(windows)]
-        ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes, Windows build number
+        ├── mod.rs        # RAII handle wrappers, cursor locator, error helpers, message boxes, Windows build number, close-request routing
         ├── autostart.rs  # "Start with Windows" via HKCU\Run
         ├── config_store.rs # ConfigStore seam: atomic save with merge-on-external-edit
         ├── ddc.rs        # DDC/CI communication (monitor handles)
@@ -1290,13 +1290,26 @@ A dead hotkey thread is restarted with a fresh message window and hotkeys
 re-registered. The tray and power threads remain unsupervised by design — both are
 non-fatal conveniences. One release-build consequence is worth knowing: with
 the console hidden there is no Ctrl+C, so the *graceful* shutdown paths are the
-tray menu's Quit and a polite close request (`taskkill` without `/f`, which
-the tray window turns into the same `Shutdown` Ctrl+C sends — §13). Both run
-through the tray thread, so if it dies, ending the process takes Task Manager
-or `taskkill /f`. An Explorer restart is not such a death: the tray thread
-keeps running and re-adds its icon (§13, "Surviving an Explorer Restart").
-Accepted: a hard kill loses nothing (settings live in the config file,
-brightness in the hardware, overlay windows die with the process).
+tray menu's Quit and a polite close request (`taskkill` without `/f`). If the
+tray thread dies, Quit goes with it; an Explorer restart is not such a death —
+the tray thread keeps running and re-adds its icon (§13, "Surviving an Explorer
+Restart"). Accepted: a hard kill loses nothing (settings live in the config
+file, brightness in the hardware, overlay windows die with the process).
+
+**Close requests.** `taskkill` without `/f` posts `WM_CLOSE` to **one** top-level
+window of the process per call — observed: the topmost, which here is the OSD
+(`WS_EX_TOPMOST`); a second call reached the next window, the tray's. (Wine's
+and ReactOS's reimplementations post to every window; the real one does not.)
+`DefWindowProcW` answers `WM_CLOSE` by destroying the window, so before this was
+handled each call silently destroyed one window and the process ran on without
+it — no OSD, or no icon, or no resume detection. Every top-level window the app
+owns — OSD, overlays, tray, power listener — therefore handles `WM_CLOSE` the
+same way, through `handle_close_request` in `platform/windows/mod.rs`: it sends
+the `Shutdown` Ctrl+C sends and keeps the window. Each owning thread installs
+its route with `route_close_requests_to` (the main thread for OSD and overlays,
+the tray and power threads for their own). The settings window keeps its own
+`WM_CLOSE` — there it is the title bar's ✕ — and the hotkey window is
+message-only, which `taskkill` cannot see.
 
 Both degraded states — DDC disabled and hotkeys given up — are surfaced to the
 user through the tray icon, tooltip, and menu (see §13, "Degraded-State
@@ -1525,10 +1538,10 @@ folder, the monitor rows and every health warning hang off it.
 - **Side effects of being top-level.** The window now also receives other
   broadcasts (`WM_SETTINGCHANGE`, `WM_DISPLAYCHANGE`, session-end queries);
   all of them go to `DefWindowProcW`. It also becomes a target for `WM_CLOSE`
-  — `taskkill` without `/f` and similar tools post it to every top-level
-  window of a process. Left to `DefWindowProcW`, that would destroy the window
-  and end the tray thread while the rest of the app ran on without an icon, so
-  the tray turns it into the same `Shutdown` request Ctrl+C sends (§12). And
+  from `taskkill` without `/f`. Left to `DefWindowProcW`, that would destroy
+  the window and end the tray thread while the rest of the app ran on without
+  an icon, so the tray — like every other top-level window of the app — turns
+  it into the same `Shutdown` request Ctrl+C sends (§12, "Close requests"). And
   the `SetForegroundWindow` call before `TrackPopupMenu`, which is what makes
   the menu close on a click outside it, is documented not to work for a
   message-only window — it now takes effect.
@@ -2319,7 +2332,7 @@ release history, not in a table here.
 12. Quit from the tray menu
 13. **Expected**: the icon disappears at once — not only when the mouse next passes over the notification area
 14. Start the app again, then run `taskkill /im darkbright-helper.exe` (without `/f`) from a console
-15. **Expected**: the log shows "Close request received by the tray window; shutting down", then "Tray icon removed from notification area" before "Sending shutdown command to DDC worker", and the app exits like a Quit, icon gone at once
+15. **Expected**: one call is enough. `taskkill` reports that a termination signal was sent; the log shows "Close request received; shutting down" with `window=osd` (the topmost window, so the one `taskkill` picks), then "Tray icon removed from notification area" before "Sending shutdown command to DDC worker", and the app exits like a Quit, icon gone at once
 
 #### Settings Window Test
 
