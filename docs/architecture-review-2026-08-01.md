@@ -279,7 +279,7 @@ not.
   zero-filled but derived from the colour bitmap's alpha (`and_mask_from_alpha`, set bit = fully
   transparent, rows word-padded), so a non-alpha render path keeps the icon's outline instead of a
   black square. TRAY-3: the window is top-level now.
-- **✅ RESOLVED (TRAY-1)** — 2026-10-17, as its own change rather than the one-line flag removal:
+- **✅ RESOLVED (TRAY-1)** — 2026-10-17, PR #61, as its own change rather than the one-line flag removal:
   the icon now selects `NOTIFYICON_VERSION_4` with `NIM_SETVERSION`, sent from `push_icon_state`
   after whichever operation turned out to be the add — startup, the `TaskbarCreated` re-add and a
   modify that fell back to an add alike. The menu opens on `WM_CONTEXTMENU` (mouse and keyboard)
