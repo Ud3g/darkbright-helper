@@ -771,9 +771,9 @@ fn create_notify_icon_data(
 /// The one path every icon write goes through — startup, a status or language
 /// change, and a recreated taskbar — so none of them can show a state the
 /// others would not. The fallback covers both directions the shell's view can
-/// drift from ours: `TaskbarCreated` also follows a DPI change of the primary
-/// display, when the icon still exists and an add fails, and a missed
-/// broadcast leaves no icon for a modify to find.
+/// drift from ours: Windows 10 documents a `TaskbarCreated` after a DPI change
+/// of the primary display, when the icon still exists and an add fails, and a
+/// missed broadcast leaves no icon for a modify to find.
 ///
 /// # Errors
 ///

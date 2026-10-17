@@ -113,9 +113,9 @@ plus three things the review did not name. The tray window is a hidden top-level
 `GA_PARENT` assertion, verified to fail against an `HWND_MESSAGE` parent); `"TaskbarCreated"` is
 registered once and every icon write — startup, status, language, recreated taskbar — goes through
 one `push_icon_state`, which rebuilds icon and tooltip from the tray thread's own record of the
-warnings and language. Beyond the direction: (1) Windows 10+ rebroadcasts `"TaskbarCreated"` on a
-primary-display DPI change with the icon still present, so an add falls back to a modify and vice
-versa; (2) `ChangeWindowMessageFilterEx` lets the broadcast past UIPI in an elevated run; (3) a
+warnings and language. Beyond the direction: (1) Windows 10 is documented to rebroadcast
+`"TaskbarCreated"` on a primary-display DPI change with the icon still present (Windows 11 build
+26200 was observed not to), so an add falls back to a modify and vice versa; (2) `ChangeWindowMessageFilterEx` lets the broadcast past UIPI in an elevated run; (3) a
 top-level window receives `WM_CLOSE` from `taskkill` without `/f`, which `DefWindowProcW` would have
 turned into exactly this finding's half-dead state — it is now the same `Shutdown` Ctrl+C sends. The
 `hotkey.rs` window carries the one-line comment saying why it is message-only on purpose. Row 10 is

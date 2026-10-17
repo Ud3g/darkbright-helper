@@ -1503,9 +1503,12 @@ folder, the monitor rows and every health warning hang off it.
   the tray thread's own record of the last warnings and language. A standing
   warning therefore comes back with its badge and in the current language, and
   nothing has to be asked of the main thread.
-- **Add, then modify — and the reverse.** Windows 10 and later also broadcast
-  `"TaskbarCreated"` when the primary display's DPI changes, while the icon
-  still exists; an add then fails and a modify succeeds. Conversely a status
+- **Add, then modify — and the reverse.** Microsoft documents that Windows 10
+  also broadcasts `"TaskbarCreated"` when the primary display's DPI changes,
+  while the icon still exists; an add then fails and a modify succeeds.
+  (Windows 11 build 26200 was observed *not* to send it on a scale change —
+  the taskbar is not rebuilt, the icon is untouched, and this fallback simply
+  does not run there.) Conversely a status
   update whose modify fails (the shell no longer knows the icon) falls back to
   an add, a second chance should the broadcast ever be missed. The same
   add-then-modify order is what wxWidgets settled on for the same message.
@@ -2307,16 +2310,16 @@ release history, not in a table here.
 3. **Expected**: within a few seconds the tray icon is back, and the log shows "Taskbar recreated; tray icon restored". Right-click: the menu opens and every entry works
 4. Bring a warning about: a badged one as in the Degraded-State Tray Indicator Test, step 2, or a tooltip-only one as in the File Logging Test, step 8. Then restart Explorer again
 5. **Expected**: the icon comes back as it was — badged if it was badged — with the same tooltip text, in the UI language currently set
-6. Open the tray menu and, with it still open, restart Explorer from Task Manager (open Task Manager first, then the menu, and pick Restart without closing the menu; or use `taskkill /f /im explorer.exe && start explorer` from a console)
-7. **Expected**: the menu stays usable, the icon reappears underneath it, and Quit from that menu still ends the app
+6. Restart Explorer on a delay — Win+R, `cmd /c "timeout /t 8 >nul & taskkill /f /im explorer.exe & start explorer.exe"` — and open the tray menu while the countdown runs. (Task Manager's Restart does not work here: clicking it closes the menu, step 11.)
+7. **Expected**: the menu stays open through the restart and stays usable — "Settings" from that same menu opens the window, and the log shows "Taskbar recreated; tray icon restored" between the right-click and the menu item, with no "Tray menu dismissed" in between
 8. Change the primary display's scale (Settings → Display → Scale) and back
-9. **Expected**: the icon is still there afterwards — at most one icon, never two. The log may show "Tray icon written by the fallback operation", the case where the icon survived the broadcast
+9. **Expected**: the icon is still there afterwards — exactly one icon, never two. The log shows "Triggering refresh reason=display_change"; on Windows 10 it may also show "Taskbar recreated; tray icon restored" and "Tray icon written by the fallback operation", the case where the icon survived the broadcast. Windows 11 (build 26200) sends no `"TaskbarCreated"` here at all
 10. Open the tray menu and click on the desktop beside it
 11. **Expected**: the menu closes
 12. Quit from the tray menu
 13. **Expected**: the icon disappears at once — not only when the mouse next passes over the notification area
 14. Start the app again, then run `taskkill /im darkbright-helper.exe` (without `/f`) from a console
-15. **Expected**: the log shows "Close request received by the tray window; shutting down" and the app exits like a Quit, icon gone at once. If `taskkill` reports that the process could not be terminated or nothing is logged, the request did not reach the tray window — note it, as §13 assumes it does
+15. **Expected**: the log shows "Close request received by the tray window; shutting down", then "Tray icon removed from notification area" before "Sending shutdown command to DDC worker", and the app exits like a Quit, icon gone at once
 
 #### Settings Window Test
 
