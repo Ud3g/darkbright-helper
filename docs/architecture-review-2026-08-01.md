@@ -107,7 +107,7 @@ one-line comment saying so, because the two cases now look identical in the sour
 
 Fixing this also subsumes row 10 (`SetForegroundWindow` on a message-only window).
 
-**✅ RESOLVED** — 2026-10-17, branch `tray-survives-explorer-restart`. Direction taken as written,
+**✅ RESOLVED** — 2026-10-17, PR #60. Direction taken as written,
 plus three things the review did not name. The tray window is a hidden top-level `WS_POPUP` +
 `WS_EX_TOOLWINDOW`, pinned by `tray_window_is_top_level_so_broadcasts_arrive` (the `power.rs`
 `GA_PARENT` assertion, verified to fail against an `HWND_MESSAGE` parent); `"TaskbarCreated"` is
@@ -153,7 +153,7 @@ power and hotkey threads, whose handles the OS reclaims anyway), then say so at 
 replace the tray one with an explicit `remove_tray_icon` call on the shutdown path, so the icon still
 goes away. What should not survive is three RAII impls that only look like they run.
 
-**✅ RESOLVED (tray half)** — 2026-10-17, branch `tray-survives-explorer-restart`. **Open decision
+**✅ RESOLVED (tray half)** — 2026-10-17, PR #60. **Open decision
 settled for the tray: explicit teardown, `Drop` deleted.** `main`'s cleanup calls
 `TrayStatusHandle::shut_down` before stopping the DDC worker — a `SendMessageTimeoutW` (1 s bound,
 above the tray's 500 ms menu-data wait) on which the tray thread runs `NIM_DELETE` and destroys its
