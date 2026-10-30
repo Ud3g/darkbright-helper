@@ -35,7 +35,7 @@
 | Serialization | `serde` + `serde_json` | De facto standard, config file handling |
 | Logging | `log` + `env_logger` | Standard facade pattern, runtime-configurable |
 
-Two mechanisms keep this set current, because they fail differently. CI's weekly
+Two mechanisms keep this set current, because they fail differently. CI's daily
 `cargo audit` job answers "is anything here *known bad*"; Dependabot
 (`.github/dependabot.yml`, weekly) answers "is anything here *quietly stale*",
 which is this repo's actual failure mode — every drift so far was found by human

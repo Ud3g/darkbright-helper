@@ -20,7 +20,7 @@ cargo check --release --locked   # the only config where the hidden-console cfg 
 ```
 
 CI additionally checks all targets against the MSRV pinned in `Cargo.toml`, runs `cargo audit`
-against the RustSec advisory database (also weekly on a schedule, so a quiet repo still hears
+against the RustSec advisory database (also daily on a schedule, so a quiet repo still hears
 about new advisories), and — on release only — fails if `cargo about generate` finds a
 dependency licence outside the accepted list.
 

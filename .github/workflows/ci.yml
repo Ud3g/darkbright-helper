@@ -4,14 +4,16 @@ on:
   push:
     branches: [main]
   pull_request:
-  # Weekly advisory sweep: a quiet repo would otherwise learn about new
-  # RustSec advisories only on its next push.
+  # Daily advisory sweep: a quiet repo would otherwise learn about new
+  # RustSec advisories only on its next push. Off the hour, because GitHub
+  # delays or even drops scheduled runs queued at the top of the hour.
   schedule:
-    - cron: '0 6 * * 1'
+    - cron: '17 6 * * *'
 
-# Cancel superseded runs on the same ref to save runner minutes.
+# Cancel superseded runs on the same ref to save runner minutes. The event name
+# keeps the daily sweep from cancelling a push build still running on main.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 # Least privilege: CI only needs to read the repo.
