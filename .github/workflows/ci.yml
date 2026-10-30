@@ -16,7 +16,8 @@ concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Least privilege: CI only needs to read the repo.
+# Least privilege: CI only needs to read the repo, and nothing after a checkout
+# talks to the remote, so no checkout leaves its credentials behind either.
 permissions:
   contents: read
 
@@ -31,6 +32,8 @@ jobs:
     if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -66,6 +69,8 @@ jobs:
     if: github.event_name != 'schedule'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install MSRV Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -86,6 +91,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
@@ -99,3 +106,32 @@ jobs:
 
       - name: Audit dependencies for known advisories
         run: cargo audit
+
+  # The release aborts on a licence outside about.toml's accepted list, but by
+  # then the tag exists and its version number is spent, so a dependency change
+  # has to fail here instead. about.toml pins the graph to the release target,
+  # which is why this needs no Windows runner.
+  licenses:
+    name: cargo about
+    runs-on: ubuntu-latest
+    # Only Cargo.lock and about.toml decide this, so a schedule adds nothing.
+    if: github.event_name != 'schedule'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
+        with:
+          toolchain: stable
+
+      - name: Install cargo-about
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          # Keep in sync with the release workflow.
+          tool: cargo-about@0.9.1
+
+      # Only the exit code matters; the notices stay behind on the runner.
+      - name: Check dependency licences
+        run: cargo about generate --locked --fail -o THIRD-PARTY-NOTICES.html about.hbs

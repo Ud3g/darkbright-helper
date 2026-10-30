@@ -44,9 +44,9 @@ tag (`0.8.0`, no `v` prefix — matches all existing tags), which triggers
   moved — not even by the owner. If the release workflow fails partway, that
   version number is spent: fix the cause and release the next patch version
   rather than retrying the same one. Anything cheap to verify beforehand is
-  worth verifying, in particular that `cargo about generate --fail` succeeds,
-  since a dependency licence outside the accepted list aborts the run after the
-  tag already exists.
+  worth verifying, in particular that CI's `cargo about` job is green on the
+  commit being tagged, since a dependency licence outside the accepted list
+  aborts the run after the tag already exists.
 - **The tag is what makes a binary look released.** The version shown in the
   tray menu and the settings window is derived from `git describe`, so a build
   made anywhere other than a clean checkout of the tag appends a `(dev)` marker

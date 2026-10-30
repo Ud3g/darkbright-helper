@@ -21,8 +21,8 @@ cargo check --release --locked   # the only config where the hidden-console cfg 
 
 CI additionally checks all targets against the MSRV pinned in `Cargo.toml`, runs `cargo audit`
 against the RustSec advisory database (also daily on a schedule, so a quiet repo still hears
-about new advisories), and — on release only — fails if `cargo about generate` finds a
-dependency licence outside the accepted list.
+about new advisories), and fails if `cargo about generate` finds a dependency licence outside
+the accepted list, ahead of the release workflow, where the same failure would spend the tag.
 
 Lint levels and formatter settings live in `Cargo.toml` (`[lints.clippy]`, currently `all` and
 `pedantic` at `warn`, promoted to errors by CI's `-D warnings`) and `rustfmt.toml`. Both are
