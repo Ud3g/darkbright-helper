@@ -1,6 +1,6 @@
 version: 2
 
-# Freshness, not advisories. CI's weekly `cargo audit` job already covers known
+# Freshness, not advisories. CI's daily `cargo audit` job already covers known
 # vulnerabilities; what it cannot see is a dependency quietly falling years
 # behind while nothing is wrong with it. Both of this repo's real drifts —
 # `windows` sitting on a Nov-2023 release until 2026, `thiserror` on 1.0 for
