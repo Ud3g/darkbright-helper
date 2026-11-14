@@ -45,13 +45,13 @@ darkbright-helper` updates it (quit from the tray first — Windows cannot repla
 exe); `winget uninstall darkbright-helper` removes it.
 
 *Portable* package: no Start menu entry — winget only adds a `darkbright-helper` command.
-Start it with Win+R → `darkbright-helper`, then turn on "Start with Windows" in Settings so
-you never have to again.
+Start it by typing `darkbright-helper` in a new terminal window, then turn on "Start with
+Windows" in Settings so you never have to again.
 
 ### From GitHub Releases
 
 Prebuilt Windows binaries are on
-[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases) (0.8.0 and later):
+[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases) (releases after 0.8.0):
 unzip and run `darkbright-helper.exe`; license files and third-party notices are included.
 
 The binaries are not code-signed, so expect warnings on download and first run — see
