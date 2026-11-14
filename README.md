@@ -1,79 +1,61 @@
 # darkbright-helper
 
-Brightness hotkeys for Windows monitors. Adjusts the hardware backlight over DDC/CI — and
-when 0 % is still too bright, keeps dimming with a black overlay. Multi-monitor aware: the
-hotkey hits the monitor your mouse is on. One executable, no network access, written in
-Rust.
+Brightness hotkeys for Windows monitors. Drives the hardware backlight over DDC/CI, and when
+0 % is still too bright a black overlay keeps dimming. Multi-monitor aware: hotkeys hit the
+monitor your mouse is on. One executable, no network access, written in Rust.
 
 <p align="center">
   <img src="docs/media/demo.gif"
        alt="Filmed off-screen: the monitor's backlight dims to 0 %, then the overlay keeps dimming past it">
   <br>
-  <em>Filmed off-screen with the camera's exposure locked — a screen recording cannot show
-  the first half, because DDC/CI dims the monitor's backlight rather than the image.</em>
+  <em>Filmed off-screen with the exposure locked — a screen recording cannot show
+  the first half, since DDC/CI dims the backlight, not the image.</em>
 </p>
 
 ## What it does
 
-- **Dims below the hardware minimum.** When DDC/CI brightness reaches 0 % and the screen is
-  still too bright, a black fullscreen overlay with variable opacity takes over. *It does not
-  cover exclusive-fullscreen games or certain Windows system UI (taskbar, Start menu).*
-- **Drives the real backlight, not a filter.** For 1–100 % it talks to the monitor over
-  DDC/CI and sets VCP code `0x10` directly, so the panel actually gets darker.
-- **Multi-monitor, cursor-aware.** Per-monitor control; a hotkey affects the monitor the
-  mouse pointer is currently on. Monitors are identified by EDID, so the configuration
-  survives replugging and port changes.
-- **Stays out of the way.** An OSD overlay like the Windows volume indicator, plus a system
-  tray icon whose context menu shows live per-monitor status and your hotkeys, and offers
-  Settings, "Share monitor feedback on GitHub…", Open Log Folder and Quit — with warning
-  entries and an icon badge while degraded (e.g. DDC unavailable).
-- **A real settings window, not just a JSON file.** The tray's Settings item opens a native,
-  dark-mode-aware window covering every option — hotkey rebinding included — with changes
-  applying instantly. An optional "Start with Windows" toggle lives there too. The config
-  file stays a fully supported escape hatch, one click away from the window's footer.
+- **Hardware dimming first.** For 1–100 % the brightness goes straight to the monitor over
+  DDC/CI, so the panel itself gets darker.
+- **Dims below the hardware minimum.** At 0 % DDC/CI brightness a black fullscreen overlay
+  with variable opacity takes over. *Caveats:* not shown over exclusive-fullscreen games or
+  some Windows system UI (taskbar, Start menu).
+- **Multi-monitor, cursor-aware.** A hotkey affects the monitor under the mouse pointer.
+  Monitors are identified by EDID, so configuration survives replugging and port changes.
+- **Stays out of the way.** A volume-style OSD while you adjust; everything else — status,
+  hotkeys, Settings — in the tray menu, which also warns with entries and an icon badge
+  when DDC is unavailable.
 
-![The tray context menu: live per-monitor status, the current hotkeys, and Settings, Share monitor feedback on GitHub, Open Log Folder and Quit](docs/media/tray-menu.png)
+![Tray menu: per-monitor status, hotkeys, Settings, GitHub feedback, log folder, Quit](docs/media/tray-menu.png)
 
-![The settings window: language, Start with Windows, brightness step, hotkey rebinding, OSD timing, refresh intervals and logging](docs/media/settings-window.png)
+![Settings: language, Start with Windows, brightness step, hotkeys, OSD timing, refresh, logging](docs/media/settings-window.png)
 
 ## Install
 
 ### With winget
 
 [winget](https://learn.microsoft.com/windows/package-manager/winget/) is the Windows package
-manager; it comes with the App Installer that ships with Windows 11 and current versions of
-Windows 10. In a terminal:
+manager, preinstalled on Windows 11 and current Windows 10. In a terminal:
 
 ```powershell
 winget install darkbright-helper
 ```
 
-winget downloads the release from GitHub, checks it against the SHA-256 recorded in the
-package manifest, and unpacks it. Later, `winget upgrade darkbright-helper` fetches a new
-version — quit the program from its tray menu first, since Windows cannot replace a running
-executable — and `winget uninstall darkbright-helper` removes it.
+winget verifies the download against the SHA-256 in the package manifest. `winget upgrade
+darkbright-helper` updates it (quit from the tray first — Windows cannot replace a running
+exe); `winget uninstall darkbright-helper` removes it.
 
-The package is a *portable* one: winget adds a `darkbright-helper` command but no Start menu
-entry. Start the program by typing `darkbright-helper` in a new terminal window, and turn on
-"Start with Windows" in its Settings window if you want it running after every sign-in.
+*Portable* package: no Start menu entry — winget only adds a `darkbright-helper` command.
+Start it with Win+R → `darkbright-helper`, then turn on "Start with Windows" in Settings so
+you never have to again.
 
 ### From GitHub Releases
 
-Prebuilt Windows binaries are published on
-[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases)
-(releases after 0.8.0), as a zip bundling the executable with its license files and
-third-party notices. Unpack it anywhere and run `darkbright-helper.exe`.
+Prebuilt Windows binaries are on
+[GitHub Releases](https://github.com/Ud3g/darkbright-helper/releases) (0.8.0 and later):
+unzip and run `darkbright-helper.exe`; license files and third-party notices are included.
 
-The binaries are not code-signed, so your browser warns on download and Windows warns the
-first time you run one. This is expected — see
-[Running an unsigned binary](#running-an-unsigned-binary) for what to expect, why it happens,
-and what you can verify.
-
-Releases up to 0.11.0 need the Microsoft Visual C++ Redistributable: if Windows reports that
-`VCRUNTIME140.dll` is missing, install the x64 package from
-[Microsoft's download page](https://learn.microsoft.com/cpp/windows/latest-supported-vc-redist).
-Later releases have the runtime built in, and winget installs it automatically wherever it
-is still needed.
+The binaries are not code-signed, so expect warnings on download and first run — see
+[Running an unsigned binary](#running-an-unsigned-binary).
 
 ### From source
 
