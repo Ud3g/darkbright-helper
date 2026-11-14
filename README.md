@@ -45,8 +45,8 @@ darkbright-helper` updates it (quit from the tray first — Windows cannot repla
 exe); `winget uninstall darkbright-helper` removes it.
 
 *Portable* package: no Start menu entry — winget only adds a `darkbright-helper` command.
-Start it by typing `darkbright-helper` in a new terminal window, then turn on "Start with
-Windows" in Settings so you never have to again.
+Start it with Win+R → `darkbright-helper`, then turn on "Start with Windows" in Settings so
+you never have to again.
 
 ### From GitHub Releases
 
@@ -64,7 +64,7 @@ past a warning for an unsigned binary.
 
 ## Quick start
 
-1. Start the program: `darkbright-helper` in a terminal after a winget install, otherwise
+1. Start the program: Win+R → `darkbright-helper` after a winget install, otherwise
    `darkbright-helper.exe` from wherever you unpacked it.
 2. `Ctrl+Shift+Up` increases the brightness of the monitor under your mouse pointer.
 3. `Ctrl+Shift+Down` decreases it.
