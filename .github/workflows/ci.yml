@@ -58,8 +58,12 @@ jobs:
 
       # The release profile is what ships, and it is the only configuration
       # in which the hidden-console `windows_subsystem` cfg compiles at all.
-      - name: Check release profile
-        run: cargo check --release --locked
+      # A build, not a check: a check never generates optimised code or links,
+      # so a codegen, LTO or linker failure in the release profile would
+      # otherwise surface first in the release workflow, after the tag has
+      # spent the version number.
+      - name: Build release binary
+        run: cargo build --release --locked
 
   # The manifest's rust-version is only a claim; compile all targets against
   # exactly that toolchain so MSRV rot is caught here instead of by users.
