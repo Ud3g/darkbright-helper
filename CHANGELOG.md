@@ -7,11 +7,13 @@ history lives in the git log.
 
 ### Changed
 
-- The executable is about 0.4 MB smaller. Nothing was removed: the interface
-  texts had been stored in it several times over.
-- The executable is about another 1 MB smaller. The optional message filter
-  after the slash in `RUST_LOG=<level>/<filter>` is now matched as plain text
-  and no longer takes a regular expression.
+- The executable is a third of its former size: 1.0 MB, down from 3.0 MB. The
+  interface texts had been stored in it several times over, it carried a
+  regular-expression engine for a single logging option, and it is now built
+  for small size rather than raw speed — startup, hotkeys and the settings
+  window measured no slower for it. One thing changes in use: the optional
+  message filter after the slash in `RUST_LOG=<level>/<filter>` is now matched
+  as plain text and no longer takes a regular expression.
 
 ## [0.13.0] — 2026-10-17
 
