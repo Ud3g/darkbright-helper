@@ -2229,6 +2229,99 @@ What works instead is a plain custom popup: a `STATIC`-class window with
 with `SetWindowPos`. More reliable, and it gives full control over appearance — which a
 themed tooltip would not.
 
+### Release profile: size over speed
+
+`[profile.release]` in `Cargo.toml` sets `opt-level = "z"`, `lto = "fat"` and
+`codegen-units = 1`. Cargo's defaults — `opt-level = 3`, 16 codegen units, no
+LTO — favour raw speed and compile time. The app has almost no CPU-bound code
+of its own: GDI draws the OSD, and a DDC write blocks for 40–120 ms in the
+hardware. The defaults therefore spent executable size on speed nobody could
+observe.
+
+**Size** (rustc 1.99.1, `x86_64-pc-windows-msvc`, C runtime static, the tree
+at `12d0197`):
+
+| Profile | Executable | Zipped |
+|---------|-----------:|-------:|
+| Cargo's defaults | 1,513,984 B | 646,726 B |
+| `opt-level = "s"`, fat LTO, 1 codegen unit | 1,110,528 B | 513,640 B |
+| `opt-level = "z"`, fat LTO, 1 codegen unit | 1,008,640 B | 477,882 B |
+
+That takes 33 % off, and no single key gets there: on an earlier tree, thin
+LTO at `opt-level = 3` saved nothing, fat LTO with one codegen unit about
+10 %, and `"s"` without LTO 14 % (the full table is in issue #80). A clean
+release build stays near 30 s either way. For scale: the 0.13.0 release
+shipped at 2,994,688 B. The step from there to the first row is not the
+profile's — it came from storing the interface texts once instead of seven
+times and from dropping `env_logger`'s `regex` feature.
+
+**Latency.** `"z"` gets its last 100 KB by switching off loop vectorisation
+and inlining far more reluctantly, so it was adopted only after measuring that
+it costs nothing a user can feel. Three builds were compared — Cargo's
+defaults, `"s"` and `"z"` — over 12 rounds with the build order rotated
+(2026-11-28, Windows 11 build 26300, one DDC monitor), timed from the
+millisecond timestamps of the file log at `debug` level:
+
+| Measured span | Defaults | `"s"` | `"z"` |
+|---------------|---------:|------:|------:|
+| Process start → tray icon added (median of 36) | 27.5 ms | 27.6 ms | 27.7 ms |
+| Hotkey → OSD updated, first press of a run (mean of 12) | 15.2 ms | 14.6 ms | 14.2 ms |
+| Hotkey → OSD updated, later presses (mean of 84) | 2.4 ms | 2.4 ms | 2.4 ms |
+| "Settings…" clicked → window shown, first open of a run (mean of 12) | 40.2 ms | 39.9 ms | 40.2 ms |
+| "Settings…" clicked → window shown, later opens (mean of 24) | 39.4 ms | 39.2 ms | 39.4 ms |
+
+No difference between two builds exceeds the standard error of that difference
+(about 1.0 ms for the first press, 0.1 ms for later presses, 0.3–0.5 ms for
+the settings window), and the largest one — 1.0 ms on the first press — has
+`"z"` ahead of the defaults.
+
+The start-up row is a median because a few launches of every build stalled,
+taking 87–233 ms: two of the default build's 36, one of `"s"`, three of `"z"`.
+The time went either before the first line of the file log or into a gap of
+105–135 ms right after the first refresh is requested, in which every thread
+of the process is silent at once. Computation in the app's own code would hold
+up one thread, not all of them, so both point at the loader or the system
+rather than at the optimisation level — and three stalls against one or two is
+no difference at these counts. Without those launches the means are 27.7, 27.7
+and 27.9 ms; with them 33.8, 32.0 and 38.2 ms, each with a standard error of
+4–7 ms.
+
+What the spans cover, so the numbers are not read for more than they are:
+
+- *Process start*: a timestamp taken immediately before the process is
+  created, until "Tray icon added to notification area".
+- *Hotkey*: "Received WM_HOTKEY" on the hotkey thread until the controller has
+  finished the adjustment on the main thread, with the OSD's state updated and
+  its window shown. The GDI paint that follows is not included. The monitor
+  stood at 0 % hardware brightness, so every press took the overlay branch —
+  the one with more work on the main thread; the other branch only hands the
+  write to the DDC worker.
+- *Settings*: "Settings menu item clicked" on the tray thread until "Settings
+  window created", which is logged after the window is shown.
+
+**What stays at its default, and why.**
+
+- `panic` stays `unwind`. `panic = "abort"` would take off another 200 KB
+  (805,888 B measured), but the panic policy under
+  [Worker Supervision & State Watchdog](#12-worker-supervision--state-watchdog)
+  depends on a panicking worker thread unwinding: that is how its death is
+  noticed and the thread respawned. With `abort`, any panic anywhere would end
+  the process.
+- `strip` is not set. An MSVC release executable carries no symbol table to
+  strip — the debug information lives in the `.pdb` beside it — and setting it
+  saved 512 bytes.
+
+**Changing it.** A different optimisation level changes all generated code,
+including the FFI paths CI cannot exercise. Like a breaking `windows` release,
+a profile change therefore takes the full manual pass under
+[Integration Testing (Manual)](#integration-testing-manual) on the release
+build, plus the import check from [C Runtime](#c-runtime): link-time
+optimisation must not change which DLLs the executable imports.
+
+Revisit when the app gains CPU-bound code of its own, such as rendering it does
+itself instead of leaving to GDI. Repeat the latency comparison then; `"s"` is
+the fallback if `"z"` shows up in it.
+
 ---
 
 ## Testing
