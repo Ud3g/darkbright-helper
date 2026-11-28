@@ -2081,8 +2081,10 @@ Implementation: `src/platform/windows/single_instance.rs` (RAII `SingleInstance`
 ### 16. User-Visible Strings
 
 Every string a user can read lives in one table per language: a `Strings` struct in
-`src/core/i18n.rs` with one `&'static str` field per string, one `const` per language in
-`src/core/i18n/<tag>.rs` that fills it in, and `strings(Lang)` to pick a table. It sits in
+`src/core/i18n.rs` with one `&'static str` field per string, one `static` per language in
+`src/core/i18n/<tag>.rs` that fills it in, and `strings(Lang)` to pick a table. (A `static`
+rather than a `const` so that the executable holds each table once: a `const` is copied into
+every codegen unit that references it.) It sits in
 `core/` because the OSD, the tray, the settings window, the controller and
 `BrightnessError::user_message` all draw from it, and none of them should own it.
 

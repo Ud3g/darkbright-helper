@@ -32,7 +32,7 @@
 use super::Strings;
 
 /// The Brazilian Portuguese strings.
-pub(crate) const PORTUGUESE: Strings = Strings {
+pub(crate) static PORTUGUESE: Strings = Strings {
     osd_ddc_error: "Erro de DDC - Falha no ajuste",
 
     tray_tip_ddc_unavailable: "DDC não disponível",

@@ -31,7 +31,7 @@
 use super::Strings;
 
 /// The Czech strings.
-pub(crate) const CZECH: Strings = Strings {
+pub(crate) static CZECH: Strings = Strings {
     osd_ddc_error: "Chyba DDC: jas se nezměnil",
 
     tray_tip_ddc_unavailable: "DDC není k\u{a0}dispozici",

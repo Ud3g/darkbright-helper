@@ -30,7 +30,7 @@
 use super::Strings;
 
 /// The Turkish strings.
-pub(crate) const TURKISH: Strings = Strings {
+pub(crate) static TURKISH: Strings = Strings {
     osd_ddc_error: "DDC hatası - Ayar yapılamadı",
 
     tray_tip_ddc_unavailable: "DDC kullanılamıyor",

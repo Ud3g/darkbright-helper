@@ -27,7 +27,7 @@
 use super::Strings;
 
 /// The Indonesian strings.
-pub(crate) const INDONESIAN: Strings = Strings {
+pub(crate) static INDONESIAN: Strings = Strings {
     osd_ddc_error: "Kesalahan DDC - Penyesuaian gagal",
 
     tray_tip_ddc_unavailable: "DDC tidak tersedia",

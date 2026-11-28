@@ -28,7 +28,7 @@
 use super::Strings;
 
 /// The Vietnamese strings.
-pub(crate) const VIETNAMESE: Strings = Strings {
+pub(crate) static VIETNAMESE: Strings = Strings {
     osd_ddc_error: "Lỗi DDC - Không điều chỉnh được",
 
     tray_tip_ddc_unavailable: "DDC không khả dụng",

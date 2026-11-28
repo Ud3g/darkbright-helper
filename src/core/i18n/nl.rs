@@ -34,7 +34,7 @@
 use super::Strings;
 
 /// The Dutch strings.
-pub(crate) const DUTCH: Strings = Strings {
+pub(crate) static DUTCH: Strings = Strings {
     osd_ddc_error: "DDC-fout - Aanpassing mislukt",
 
     tray_tip_ddc_unavailable: "DDC niet beschikbaar",

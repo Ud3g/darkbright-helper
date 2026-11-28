@@ -5,6 +5,11 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- The executable is about 0.4 MB smaller: each language's texts are now
+  stored in it once instead of seven times.
+
 ## [0.13.0] — 2026-10-17
 
 ### Added

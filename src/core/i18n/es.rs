@@ -29,7 +29,7 @@
 use super::Strings;
 
 /// The Spanish strings.
-pub(crate) const SPANISH: Strings = Strings {
+pub(crate) static SPANISH: Strings = Strings {
     osd_ddc_error: "Error de DDC - No se pudo ajustar",
 
     tray_tip_ddc_unavailable: "DDC no disponible",
