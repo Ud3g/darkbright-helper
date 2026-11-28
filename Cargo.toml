@@ -74,16 +74,17 @@ winres = "0.1"
 # Size over speed. The app has almost no CPU-bound code of its own — GDI draws
 # the OSD, a DDC write blocks for 40–120 ms in the hardware — so Cargo's
 # speed-oriented defaults spend executable size on speed nobody can observe.
-# The measurements are in docs/architecture.md, "Release profile".
+# The measurements are in docs/architecture.md, "Release profile: size over
+# speed".
 [profile.release]
-# "z" rather than "s": it gives up loop vectorisation and most inlining for
-# another 100 KB, and neither that nor "s" was measurably slower than Cargo's
+# "z" rather than "s": it gives up loop vectorisation and most inlining for a
+# still smaller executable, and neither was measurably slower than Cargo's
 # default on any latency a user can feel. Re-measure before adding CPU-bound
 # code of the app's own; "s" is the fallback.
 opt-level = "z"
 # Whole-program optimisation in a single unit: unused and duplicated code is
 # dropped across crate boundaries, which thin LTO and the default 16 units
-# leave in. Costs nothing here — a clean release build stays near 30 s.
+# leave in.
 lto = "fat"
 codegen-units = 1
 # `panic` deliberately stays at its default, "unwind". "abort" would shrink the

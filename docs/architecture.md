@@ -2247,10 +2247,13 @@ at `12d0197`):
 | `opt-level = "s"`, fat LTO, 1 codegen unit | 1,110,528 B | 513,640 B |
 | `opt-level = "z"`, fat LTO, 1 codegen unit | 1,008,640 B | 477,882 B |
 
-That is a third off, and no single key gets there: on an earlier tree, thin
+That takes 33 % off, and no single key gets there: on an earlier tree, thin
 LTO at `opt-level = 3` saved nothing, fat LTO with one codegen unit about
 10 %, and `"s"` without LTO 14 % (the full table is in issue #80). A clean
-release build stays near 30 s either way.
+release build stays near 30 s either way. For scale: the 0.13.0 release
+shipped at 2,994,688 B. The step from there to the first row is not the
+profile's — it came from storing the interface texts once instead of seven
+times and from dropping `env_logger`'s `regex` feature.
 
 **Latency.** `"z"` gets its last 100 KB by switching off loop vectorisation
 and inlining far more reluctantly, so it was adopted only after measuring that
@@ -2267,13 +2270,21 @@ millisecond timestamps of the file log at `debug` level:
 | "Settings…" clicked → window shown, first open of a run (mean of 12) | 40.2 ms | 39.9 ms | 40.2 ms |
 | "Settings…" clicked → window shown, later opens (mean of 24) | 39.4 ms | 39.2 ms | 39.4 ms |
 
-Every difference lies within one standard error of the mean (0.6–0.8 ms for
-the first press, 0.1 ms for later presses, 0.2–0.4 ms for the settings
-window). The start-up row is a median because a few launches of every build
-stalled for 87–233 ms — two of the default build's 36, one of `"s"`, three of
-`"z"` — mostly inside `Shell_NotifyIcon` or before the first log line, that is,
-waiting on Explorer or the loader rather than running the app's code. Without
-those launches the means are 27.7, 27.7 and 27.9 ms.
+No difference between two builds exceeds the standard error of that difference
+(about 1.0 ms for the first press, 0.1 ms for later presses, 0.3–0.5 ms for
+the settings window), and the largest one — 1.0 ms on the first press — has
+`"z"` ahead of the defaults.
+
+The start-up row is a median because a few launches of every build stalled,
+taking 87–233 ms: two of the default build's 36, one of `"s"`, three of `"z"`.
+The time went either before the first line of the file log or into a gap of
+105–135 ms right after the first refresh is requested, in which every thread
+of the process is silent at once. Computation in the app's own code would hold
+up one thread, not all of them, so both point at the loader or the system
+rather than at the optimisation level — and three stalls against one or two is
+no difference at these counts. Without those launches the means are 27.7, 27.7
+and 27.9 ms; with them 33.8, 32.0 and 38.2 ms, each with a standard error of
+4–7 ms.
 
 What the spans cover, so the numbers are not read for more than they are:
 

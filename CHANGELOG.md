@@ -7,7 +7,7 @@ history lives in the git log.
 
 ### Changed
 
-- The executable is a third of its former size: 1.0 MB, down from 3.0 MB. The
+- The executable is about a third the size it was: 1.0 MB, down from 3.0 MB. The
   interface texts had been stored in it several times over, it carried a
   regular-expression engine for a single logging option, and it is now built
   for small size rather than raw speed — startup, hotkeys and the settings
