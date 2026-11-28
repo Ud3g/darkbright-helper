@@ -33,7 +33,7 @@
 | Windows API | `windows` | Official Microsoft crate, modern API, better ergonomics than `winapi` |
 | Error handling | `thiserror` | Derive macros for custom error types, zero runtime cost |
 | Serialization | `serde` + `serde_json` | De facto standard, config file handling |
-| Logging | `log` + `env_logger` | Standard facade pattern, runtime-configurable |
+| Logging | `log` + `env_logger` | Standard facade pattern, runtime-configurable. `env_logger` runs with a reduced feature set — colour, timestamps, structured fields; its default `regex` feature is off, which keeps four crates and about 1 MB out of the executable (reasons in `Cargo.toml`) |
 
 Two mechanisms keep this set current, because they fail differently. CI's daily
 `cargo audit` job answers "is anything here *known bad*"; Dependabot
@@ -81,7 +81,7 @@ Redistributable rather than with Windows. On a machine without it the program
 does not start: the loader fails before `main`, so no log line and no message
 box of the app's own can report it. Releases up to 0.11.0 were built that way.
 
-Static linking adds about 97 KiB (3.7 %) to a 2.6 MB binary. The hybrid
+Static linking adds about 98 KiB (7 %) to a 1.4 MB binary. The hybrid
 variant — `vcruntime` static, the UCRT that Windows 10 ships left dynamic —
 adds about 21 KiB, but gets there by dropping a default library from the link
 and substituting another. That saving did not justify a mechanism a toolchain
@@ -901,7 +901,7 @@ The application uses conditional compilation to control console visibility:
 
 This means log output in release builds won't be visible in a console; for release diagnostics there is an opt-in rolling log file (below). Panics are recorded through the same logger: a process-wide hook installed at startup (`core/panic_hook.rs`) logs payload, source location, and thread at error level and flushes the sinks before the default handler continues — so even a crash that aborts the process (e.g. a panic unwinding into an `extern "system"` callback) leaves a trace in the file log.
 
-**Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior; console only)
+**Level:** Configurable via `RUST_LOG` environment variable (standard `env_logger` behavior; console only). A message filter after a slash (`RUST_LOG=debug/DDC`) is a plain substring match, not a regular expression: `env_logger`'s `regex` feature is off.
 
 > **Note:** For guidelines on *how* to write log statements (level selection heuristics, structured fields, avoiding PII), see `code-conventions.md` section 7.
 

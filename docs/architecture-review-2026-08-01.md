@@ -340,7 +340,7 @@ should be one pass over that module even though they are separate defects.
 | 9  | TRAY-2 | Icon AND mask built from undefined `CreateBitmap` bits (`tray.rs:454`)         | Cosmetic  | XS   | Clear          | ✅ resolved 2026-10-17 — mask derived from alpha |
 | 10 | TRAY-3 | `SetForegroundWindow` on a message-only window (`tray.rs:679`)                 | Cosmetic  | XS   | Clear          | Subsumed by row 1 — ✅ resolved with it |
 | 11 | HK-1   | `Display for ParsedHotkey` renders letters/digits as "Unknown" (`hotkey.rs:457`) | Cosmetic  | XS   | Clear          | — |
-| 12 | DEP-4  | Trim `env_logger` default features; drops the regex chain (`Cargo.toml:46`)    | Cosmetic  | S    | Mostly clear   | Accept the `RUST_LOG` regex-filter loss |
+| 12 | DEP-4  | Trim `env_logger` default features; drops the regex chain (`Cargo.toml:46`)    | Cosmetic  | S    | Mostly clear   | Accept the `RUST_LOG` regex-filter loss — ✅ resolved 2026-11-28 — `regex` feature off, executable about 1 MB smaller; `jiff` stays, the timestamps need it |
 | 13 | DOC-2  | _(carried)_ Reconcile the `monitors` round-trip claim with `MonitorConfig`     | Cosmetic  | S    | Mostly clear   | Loosen the type vs. soften the doc |
 | 14 | DEP-2  | _(carried)_ Confirm `winres` upstream; swap to `winresource` or pin-note       | Cosmetic  | S    | Needs decision | Requires a crates.io check first |
 

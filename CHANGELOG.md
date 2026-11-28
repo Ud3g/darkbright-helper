@@ -9,6 +9,9 @@ history lives in the git log.
 
 - The executable is about 0.4 MB smaller. Nothing was removed: the interface
   texts had been stored in it several times over.
+- The executable is about another 1 MB smaller. The optional message filter
+  after the slash in `RUST_LOG=<level>/<filter>` is now matched as plain text
+  and no longer takes a regular expression.
 
 ## [0.13.0] — 2026-10-17
 
