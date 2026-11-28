@@ -168,8 +168,6 @@ pub(crate) struct RefreshTracker {
     /// readable or not — the weaker of the two outcomes, since every monitor
     /// counted by `last_successful` is also counted here. Read together with
     /// it to tell "nothing plugged in" from "present but answering nothing".
-    /// Stored as the periodic gate, which also remembers whether a closed
-    /// gate has been reported.
     periodic_gate: PeriodicGate,
 }
 
@@ -273,7 +271,9 @@ impl RefreshTracker {
         self.last_successful
     }
 
-    /// Whether the last completed refresh enumerated any monitor (readable or not).
+    /// Whether the last completed refresh enumerated any monitor (readable or
+    /// not). An abort since then reads as nothing enumerated, which is what
+    /// freezes the periodic cadence after a failed or timed-out refresh.
     #[must_use]
     pub(crate) fn last_enumerated(&self) -> bool {
         self.periodic_gate == PeriodicGate::Open
@@ -281,11 +281,9 @@ impl RefreshTracker {
 
     /// Returns `true` the first time it is called after the periodic gate
     /// closed (an empty enumerated set or an abort), `false` while the gate is
-    /// open and on every later call until it has reopened and closed again.
-    ///
-    /// The main loop checks the gate on every pass; this is what keeps the
-    /// "skipping periodic refresh" line to one per stretch of nothing being
-    /// enumerable.
+    /// open and on every later call until it has reopened and closed again —
+    /// the main loop asks on every pass, and this keeps its skip line to one
+    /// per freeze (see "Refresh Strategy" in `docs/architecture.md`).
     pub(crate) fn take_frozen_notice(&mut self) -> bool {
         if self.periodic_gate != PeriodicGate::Frozen {
             return false;
