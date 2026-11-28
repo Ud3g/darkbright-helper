@@ -45,17 +45,16 @@ serde_json = "1.0"
 # Logging. The kv feature (structured key-value fields) is stable in the
 # log crate since 0.4.21.
 log = { version = "0.4", features = ["kv"] }
-# The feature list is deliberate; default features are off to leave out `regex`.
-# - auto-color: the debug console's coloured output.
-# - humantime: the timestamps, including the file log's millisecond ones.
-# - unstable-kv: renders the structured key-value pairs (console and file);
-#   without it env_logger silently drops them. Still marked unstable upstream —
-#   no stable alternative exists yet; watch for a rename on a future major bump.
-# Dropped: regex. It only turns the message filter after the slash in
-# `RUST_LOG=<level>/<filter>` from a substring match into a regular expression,
-# and for that linked regex, regex-automata, regex-syntax and aho-corasick —
-# about 1 MB, over a third of the release executable. Cargo.lock still lists
-# the four: Cargo locks optional dependencies whether or not they are enabled.
+# Default features are off to leave out `regex`: it only turns the message
+# filter in `RUST_LOG=<level>/<filter>` from a substring match into a regular
+# expression, and links four crates (about 1 MB) for it. Cargo.lock still lists
+# them — Cargo locks optional dependencies whether enabled or not — so
+# `cargo audit` and Dependabot keep reporting on them.
+# The remaining features are opt-in as a result, and none of them fails the
+# build when removed; its output just disappears: auto-color (console colours),
+# humantime (every timestamp, console and file), unstable-kv (the structured
+# key-value fields; still marked unstable upstream — no stable alternative
+# exists yet, watch for a rename on a future major bump).
 env_logger = { version = "0.11", default-features = false, features = ["auto-color", "humantime", "unstable-kv"] }
 
 # Linter Configuration (from code-conventions.md)
