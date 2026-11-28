@@ -81,7 +81,8 @@ Redistributable rather than with Windows. On a machine without it the program
 does not start: the loader fails before `main`, so no log line and no message
 box of the app's own can report it. Releases up to 0.11.0 were built that way.
 
-Static linking adds about 98 KiB (7 %) to a 1.4 MB binary. The hybrid
+Static linking adds about 98 KiB (7 %) to a binary that is 1.4 MB with the
+runtime linked dynamically. The hybrid
 variant — `vcruntime` static, the UCRT that Windows 10 ships left dynamic —
 adds about 21 KiB, but gets there by dropping a default library from the link
 and substituting another. That saving did not justify a mechanism a toolchain
