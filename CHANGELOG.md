@@ -7,8 +7,8 @@ history lives in the git log.
 
 ### Changed
 
-- The executable is about 0.4 MB smaller: each language's texts are now
-  stored in it once instead of seven times.
+- The executable is about 0.4 MB smaller. Nothing was removed: the interface
+  texts had been stored in it several times over.
 
 ## [0.13.0] — 2026-10-17
 
