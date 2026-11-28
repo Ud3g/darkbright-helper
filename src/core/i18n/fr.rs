@@ -28,7 +28,7 @@
 use super::Strings;
 
 /// The French strings.
-pub(crate) const FRENCH: Strings = Strings {
+pub(crate) static FRENCH: Strings = Strings {
     osd_ddc_error: "Erreur DDC - Échec du réglage",
 
     tray_tip_ddc_unavailable: "DDC non disponible",

@@ -30,7 +30,7 @@
 use super::Strings;
 
 /// The Polish strings.
-pub(crate) const POLISH: Strings = Strings {
+pub(crate) static POLISH: Strings = Strings {
     osd_ddc_error: "Błąd DDC — nie można zmienić jasności",
 
     tray_tip_ddc_unavailable: "DDC niedostępny",

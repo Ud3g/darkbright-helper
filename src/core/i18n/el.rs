@@ -36,7 +36,7 @@
 use super::Strings;
 
 /// The Greek strings.
-pub(crate) const GREEK: Strings = Strings {
+pub(crate) static GREEK: Strings = Strings {
     osd_ddc_error: "Σφάλμα DDC — η αλλαγή απέτυχε",
 
     tray_tip_ddc_unavailable: "DDC μη διαθέσιμο",

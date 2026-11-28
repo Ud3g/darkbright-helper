@@ -691,6 +691,10 @@ pub(crate) fn hotkey_status_text(key: Option<HotkeyStatusKey>, s: &Strings) -> &
 /// The string table for `lang`.
 #[must_use]
 pub fn strings(lang: Lang) -> &'static Strings {
+    // `static`, not `const`, on purpose. A `static` has one address, while
+    // `&SOME_CONST` is promoted separately in every codegen unit this function
+    // is inlined into, each copy with the whole table and all its strings. As
+    // `const`s the tables cost the release executable about 0.4 MB.
     match lang {
         Lang::English => &ENGLISH,
         Lang::German => &GERMAN,

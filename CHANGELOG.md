@@ -5,6 +5,11 @@ history lives in the git log.
 
 ## [Unreleased]
 
+### Changed
+
+- The executable is about 0.4 MB smaller. Nothing was removed: the interface
+  texts had been stored in it several times over.
+
 ## [0.13.0] — 2026-10-17
 
 ### Added

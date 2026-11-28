@@ -6,7 +6,7 @@
 use super::Strings;
 
 /// The English strings. Every other language is a translation of this table.
-pub(crate) const ENGLISH: Strings = Strings {
+pub(crate) static ENGLISH: Strings = Strings {
     osd_ddc_error: "DDC Error - Adjustment failed",
 
     tray_tip_ddc_unavailable: "DDC unavailable",

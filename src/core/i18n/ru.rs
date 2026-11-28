@@ -29,7 +29,7 @@
 use super::Strings;
 
 /// The Russian strings.
-pub(crate) const RUSSIAN: Strings = Strings {
+pub(crate) static RUSSIAN: Strings = Strings {
     osd_ddc_error: "Ошибка DDC — яркость не изменена",
 
     tray_tip_ddc_unavailable: "DDC недоступен",

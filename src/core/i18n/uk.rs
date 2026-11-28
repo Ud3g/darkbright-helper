@@ -32,7 +32,7 @@
 use super::Strings;
 
 /// The Ukrainian strings.
-pub(crate) const UKRAINIAN: Strings = Strings {
+pub(crate) static UKRAINIAN: Strings = Strings {
     osd_ddc_error: "Помилка DDC – яскравість не змінено",
 
     tray_tip_ddc_unavailable: "DDC недоступний",

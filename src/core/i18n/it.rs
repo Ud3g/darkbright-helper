@@ -32,7 +32,7 @@
 use super::Strings;
 
 /// The Italian strings.
-pub(crate) const ITALIAN: Strings = Strings {
+pub(crate) static ITALIAN: Strings = Strings {
     osd_ddc_error: "Errore DDC - Regolazione non riuscita",
 
     tray_tip_ddc_unavailable: "DDC non disponibile",

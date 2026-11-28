@@ -7,7 +7,7 @@
 use super::Strings;
 
 /// The German strings.
-pub(crate) const GERMAN: Strings = Strings {
+pub(crate) static GERMAN: Strings = Strings {
     osd_ddc_error: "DDC-Fehler - Anpassung fehlgeschlagen",
 
     tray_tip_ddc_unavailable: "DDC nicht verfügbar",
