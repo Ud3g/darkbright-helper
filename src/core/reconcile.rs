@@ -159,16 +159,30 @@ pub(crate) struct RefreshTracker {
     /// none is in flight, which is what makes a timeout unaskable then.
     started_at: Option<Instant>,
     /// When the last refresh *completed*, which is what the periodic
-    /// interval is measured from. Unlike the two flags below, an abort
+    /// interval is measured from. Unlike the two fields below, an abort
     /// leaves it alone: nothing completed, so nothing restarts the clock.
     last_refresh: Instant,
     /// Whether the last completed refresh found any monitors.
     last_successful: bool,
     /// Whether the last completed refresh enumerated any monitor at all,
-    /// readable or not — the weaker of the two flags, since every monitor
+    /// readable or not — the weaker of the two outcomes, since every monitor
     /// counted by `last_successful` is also counted here. Read together with
     /// it to tell "nothing plugged in" from "present but answering nothing".
-    last_enumerated: bool,
+    /// Stored as the periodic gate, which also remembers whether a closed
+    /// gate has been reported.
+    periodic_gate: PeriodicGate,
+}
+
+/// Whether the periodic cadence may run and, while it may not, whether that
+/// has been reported yet through [`RefreshTracker::take_frozen_notice`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PeriodicGate {
+    /// The last completed refresh enumerated at least one monitor.
+    Open,
+    /// Nothing was enumerated, or the refresh aborted; not reported yet.
+    Frozen,
+    /// Frozen, and already reported.
+    FrozenNoticed,
 }
 
 impl RefreshTracker {
@@ -181,7 +195,7 @@ impl RefreshTracker {
             started_at: None,
             last_refresh: now,
             last_successful: true,
-            last_enumerated: true,
+            periodic_gate: PeriodicGate::Open,
         }
     }
 
@@ -213,7 +227,11 @@ impl RefreshTracker {
         self.started_at = None;
         self.last_refresh = now;
         self.last_successful = found;
-        self.last_enumerated = enumerated_any;
+        if enumerated_any {
+            self.periodic_gate = PeriodicGate::Open;
+        } else {
+            self.freeze_periodic_gate();
+        }
         true
     }
 
@@ -223,7 +241,15 @@ impl RefreshTracker {
         self.in_progress = false;
         self.started_at = None;
         self.last_successful = false;
-        self.last_enumerated = false;
+        self.freeze_periodic_gate();
+    }
+
+    /// Closes the periodic gate; a closure already reported stays reported,
+    /// since staying frozen is not a new entry into the frozen state.
+    fn freeze_periodic_gate(&mut self) {
+        if self.periodic_gate == PeriodicGate::Open {
+            self.periodic_gate = PeriodicGate::Frozen;
+        }
     }
 
     /// Returns whether an in-flight refresh has exceeded `timeout` since it began.
@@ -250,7 +276,22 @@ impl RefreshTracker {
     /// Whether the last completed refresh enumerated any monitor (readable or not).
     #[must_use]
     pub(crate) fn last_enumerated(&self) -> bool {
-        self.last_enumerated
+        self.periodic_gate == PeriodicGate::Open
+    }
+
+    /// Returns `true` the first time it is called after the periodic gate
+    /// closed (an empty enumerated set or an abort), `false` while the gate is
+    /// open and on every later call until it has reopened and closed again.
+    ///
+    /// The main loop checks the gate on every pass; this is what keeps the
+    /// "skipping periodic refresh" line to one per stretch of nothing being
+    /// enumerable.
+    pub(crate) fn take_frozen_notice(&mut self) -> bool {
+        if self.periodic_gate != PeriodicGate::Frozen {
+            return false;
+        }
+        self.periodic_gate = PeriodicGate::FrozenNoticed;
+        true
     }
 
     /// Time elapsed since the last completed refresh.
@@ -484,5 +525,32 @@ mod tests {
 
         t.abort();
         assert!(!t.last_enumerated(), "abort freezes the periodic path");
+    }
+
+    #[test]
+    fn frozen_notice_fires_once_per_entry_into_the_frozen_state() {
+        let base = Instant::now();
+        let mut t = RefreshTracker::new(base);
+        assert!(!t.take_frozen_notice(), "no notice while the gate is open");
+
+        let g = t.begin(base);
+        assert!(t.complete(g, base, false, false));
+        assert!(t.take_frozen_notice(), "first ask after freezing");
+        assert!(!t.take_frozen_notice(), "later asks stay silent");
+
+        let g = t.begin(base);
+        assert!(t.complete(g, base, false, false));
+        assert!(
+            !t.take_frozen_notice(),
+            "another empty refresh is not a new entry"
+        );
+
+        let g = t.begin(base);
+        assert!(t.complete(g, base, false, true));
+        assert!(!t.take_frozen_notice(), "gate open again");
+
+        t.abort();
+        assert!(t.take_frozen_notice(), "an abort is a new entry");
+        assert!(!t.take_frozen_notice());
     }
 }

@@ -454,6 +454,20 @@ fn periodic_refresh_frozen_when_nothing_enumerated() {
 }
 
 #[test]
+fn a_frozen_periodic_pass_spends_the_one_skip_notice() {
+    let base = Instant::now();
+    let mut c = test_controller(base);
+    c.config.refresh.periodic_seconds = 60;
+
+    deliver_refresh(&mut c, vec![], vec![], base);
+    c.check_periodic_refresh(base + Duration::from_secs(1));
+    assert!(
+        !c.refresh.take_frozen_notice(),
+        "the main-loop pass already logged the skip, so later passes stay silent"
+    );
+}
+
+#[test]
 fn periodic_refresh_frozen_after_abort() {
     let base = Instant::now();
     let mut c = test_controller(base);

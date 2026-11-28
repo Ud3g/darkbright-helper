@@ -472,7 +472,9 @@ where
         }
 
         if !self.refresh.last_enumerated() {
-            log::debug!("Skipping periodic refresh (no monitors enumerated by last refresh)");
+            if self.refresh.take_frozen_notice() {
+                log::debug!("Skipping periodic refresh (no monitors enumerated by last refresh)");
+            }
             return;
         }
 
