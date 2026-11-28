@@ -16,7 +16,7 @@ tests at all and could pass locally while CI failed. Run what CI runs:
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
-cargo check --release --locked   # the only config where the hidden-console cfg compiles
+cargo build --release --locked   # the only config where the hidden-console cfg compiles; links too
 ```
 
 CI additionally checks all targets against the MSRV pinned in `Cargo.toml`, runs `cargo audit`

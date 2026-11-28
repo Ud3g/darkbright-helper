@@ -34,7 +34,7 @@ Every PR must pass what CI enforces:
 cargo fmt --all -- --check
 cargo clippy --all-targets --locked -- -D warnings   # clippy all + pedantic are warn-by-default
 cargo test --locked
-cargo check --release --locked
+cargo build --release --locked
 ```
 
 CI also checks all targets on the MSRV and audits dependencies for advisories.

@@ -20,12 +20,11 @@ The platform-agnostic `src/core/` and `src/error.rs` do compile on any host, so 
 
 ```bash
 cargo build                  # debug: console window VISIBLE, log output shown
-cargo build --release        # release: console HIDDEN (windows_subsystem="windows")
+cargo build --release --locked  # release: console HIDDEN (windows_subsystem="windows", release-only cfg); CI runs this exact build
 cargo fmt --all -- --check   # must pass before commit
 cargo clippy --all-targets --locked -- -D warnings  # matches the CI gate exactly; `all` + `pedantic` are warn-by-default in Cargo.toml
 cargo test --locked          # unit + integration + doc tests
 cargo test read_is_scaled_by_the_monitors_reported_maximum   # single test by name (or a module: cargo test brightness)
-cargo check --release --locked     # only configuration in which the hidden-console cfg compiles
 RUST_LOG=debug cargo run     # run with debug logging (env_logger)
 ```
 
